@@ -169,7 +169,7 @@ class TiltFloorMapper {
 class ARFloorPointCalculator {
   final double floorToFloorHeight; // e.g. 4.5m - 15.0m vertical offset per floor
 
-  ARFloorPointCalculator({this.floorToFloorHeight = 15.0});
+  ARFloorPointCalculator({this.floorToFloorHeight = 5.0});
 
   /// Computes floor plane vertical offset for floorIndex
   double getFloorPlaneY(int floorIndex) => floorIndex * floorToFloorHeight;

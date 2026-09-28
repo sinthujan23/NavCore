@@ -105,7 +105,7 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
       thetaDeadzone: 4.0,
       hysteresisMargin: 2.5,
     );
-    _floorPointCalculator = ARFloorPointCalculator(floorToFloorHeight: 15.0);
+    _floorPointCalculator = ARFloorPointCalculator(floorToFloorHeight: 5.0);
     _shopMarkerManager = ARShopMarkerManager();
     _shopMarkerManager.loadShops(widget.destinations);
     final activeAnchor = widget.destinations.isNotEmpty
@@ -319,16 +319,23 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
           .where((poi) => poi.floorNumber == widget.currentFloor.floorNumber)
           .toList();
     } else if (_floorFilterMode == ARFloorFilterMode.autoTilt) {
-      // Resolve single active target floor number from camera pitch tilt position
+      // Resolve active target floor number from camera pitch tilt position
       final int targetFloorNumber = (resolvedFloorIndex == 0)
           ? (cameraPose.pitchDegrees < -6.0 || widget.currentFloor.floorNumber < 0
               ? -1
               : 1)
           : resolvedFloorIndex;
 
-      // Mount ONLY shops belonging to the camera-targeted floor
+      // Include places from current floor, target floor, and adjacent tilt floors so places stay visible when pointing camera up/down
+      final Set<int> allowedFloors = {
+        widget.currentFloor.floorNumber,
+        targetFloorNumber,
+        targetFloorNumber + 1,
+        targetFloorNumber - 1,
+      };
+
       candidatePOIs = widget.destinations
-          .where((poi) => poi.floorNumber == targetFloorNumber)
+          .where((poi) => allowedFloors.contains(poi.floorNumber))
           .toList();
 
       if (_selectedPOI != null &&
@@ -474,9 +481,10 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
       // Real 3D Geometric Vertical Projection incorporating floor elevation delta Δh & distance d_2D:
       final double floorDelta =
           (poi.floorNumber - widget.currentFloor.floorNumber).toDouble();
-      final double elevationDeltaMeters =
-          floorDelta *
-          15.0; // 15.0m height per floor level (increased vertical separation)
+      final double floorHeightGap = widget.currentFloor.ceilingHeightMeters > 0
+          ? widget.currentFloor.ceilingHeightMeters
+          : 4.8;
+      final double elevationDeltaMeters = floorDelta * floorHeightGap;
       final double horizontalDistMeters = math.max(distM.toDouble(), 4.0);
 
       // Elevation pitch angle: theta = atan(Δh / d_2D)
@@ -560,17 +568,13 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
     final List<Map<String, dynamic>> positionedCards = [];
 
     for (final item in rawPositioned) {
-      final poi = item['poi'] as DestinationPOI;
       double curX = item['posX'] as double;
       double curY = item['posY'] as double;
       final double cardScale = (item['distanceScale'] as double? ?? 1.0);
       final double effectiveW = baseCardW * cardScale;
       final double effectiveH = baseCardH * cardScale;
 
-      // Vertical Floor Banding: Apply explicit vertical lane offset based on floor level difference
-      // Higher floors place HIGHER on screen (-Y), lower floors place LOWER on screen (+Y)
-      final int floorDiff = poi.floorNumber - widget.currentFloor.floorNumber;
-      curY = (curY - (floorDiff * 45.0)).clamp(topSafeLimit, bottomSafeLimit);
+      curY = curY.clamp(topSafeLimit, bottomSafeLimit);
 
       bool hasCollision = true;
       int iterations = 0;
@@ -650,9 +654,8 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
       return (b['distM'] as int).compareTo(a['distM'] as int);
     });
 
-    // Strict Camera Optical FOV Directional Visibility Filtering (~35° angle cone)
-    // A shop is visible ONLY when the camera is pointing directly towards its location.
-    const double fovLimit = 35.0;
+    // Camera Optical FOV Directional Visibility Filtering (~42° angle cone)
+    const double fovLimit = 42.0;
 
     List<Map<String, dynamic>> visibleCardsInFOV = positionedCards
         .where((data) {
@@ -666,11 +669,11 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
           final double rawPosX = data['rawPosX'] as double? ?? 0.0;
           final bool isInCameraFOV = relAngle.abs() <= fovLimit;
           final bool isOnScreenHorizontally =
-              rawPosX >= -40.0 && rawPosX <= (screenWidth - 140.0);
+              rawPosX >= -150.0 && rawPosX <= (screenWidth + 20.0);
 
           return isInCameraFOV && isOnScreenHorizontally && distM <= maxViewDistanceMeters;
         })
-        .take(12)
+        .take(15)
         .toList();
 
     // Evaluate off-route compliance if active route is available

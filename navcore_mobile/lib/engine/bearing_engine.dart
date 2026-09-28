@@ -85,7 +85,7 @@ double calculateAccurate3DDistance(
   GeodeticCoords targetLocation, {
   int userFloorNumber = 1,
   int targetFloorNumber = 1,
-  double heightPerFloorMeters = 15.0,
+  double heightPerFloorMeters = 5.0,
 }) {
   final userEffectiveHeight =
       userCoords.height + (userFloorNumber - 1) * heightPerFloorMeters;
