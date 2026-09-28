@@ -318,6 +318,31 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
       candidatePOIs = widget.destinations
           .where((poi) => poi.floorNumber == widget.currentFloor.floorNumber)
           .toList();
+    } else if (_floorFilterMode == ARFloorFilterMode.autoTilt) {
+      // Resolve active target floor number from camera pitch tilt position
+      final int targetFloorNumber = (resolvedFloorIndex == 0)
+          ? (cameraPose.pitchDegrees < -6.0 ||
+                    widget.currentFloor.floorNumber < 0
+                ? -1
+                : 1)
+          : resolvedFloorIndex;
+
+      // Include places from current floor, target floor, and adjacent tilt floors so places stay visible when pointing camera up/down
+      final Set<int> allowedFloors = {
+        widget.currentFloor.floorNumber,
+        targetFloorNumber,
+        targetFloorNumber + 1,
+        targetFloorNumber - 1,
+      };
+
+      candidatePOIs = widget.destinations
+          .where((poi) => allowedFloors.contains(poi.floorNumber))
+          .toList();
+
+      if (_selectedPOI != null &&
+          !candidatePOIs.any((p) => p.id == _selectedPOI!.id)) {
+        candidatePOIs.add(_selectedPOI!);
+      }
     } else {
       candidatePOIs = widget.destinations;
     }
@@ -647,7 +672,9 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
           final bool isOnScreenHorizontally =
               rawPosX >= -150.0 && rawPosX <= (screenWidth + 20.0);
 
-          return isInCameraFOV && isOnScreenHorizontally && distM <= maxViewDistanceMeters;
+          return isInCameraFOV &&
+              isOnScreenHorizontally &&
+              distM <= maxViewDistanceMeters;
         })
         .take(15)
         .toList();
@@ -1236,8 +1263,6 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
               ),
             ),
 
-
-
           // 5. Top Controls & Navigation Guidance HUD Banner
           Positioned(
             top: 0,
@@ -1477,7 +1502,7 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
                             children: [
                               _buildCategoryPill(
                                 'All',
-                                '${filteredPOIs.length}',
+                                '${widget.destinations.length}',
                                 LucideIcons.globe,
                               ),
                               const SizedBox(width: 6),
