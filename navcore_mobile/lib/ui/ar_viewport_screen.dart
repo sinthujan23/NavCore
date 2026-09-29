@@ -101,9 +101,9 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
         : widget.currentFloor.floorNumber;
     _tiltFloorMapper = TiltFloorMapper(
       initialFloorIndex: initialFloorIdx,
-      thetaStepPerFloor: 6.0,
-      thetaDeadzone: 2.5,
-      hysteresisMargin: 1.0,
+      thetaStepPerFloor: 10.0,
+      thetaDeadzone: 4.0,
+      hysteresisMargin: 2.5,
     );
     _floorPointCalculator = ARFloorPointCalculator(floorToFloorHeight: 5.0);
     _shopMarkerManager = ARShopMarkerManager();
@@ -135,17 +135,6 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
   @override
   void didUpdateWidget(covariant ARViewportScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.currentFloor != oldWidget.currentFloor) {
-      final initialFloorIdx = widget.currentFloor.floorNumber < 0
-          ? 0
-          : widget.currentFloor.floorNumber;
-      _tiltFloorMapper = TiltFloorMapper(
-        initialFloorIndex: initialFloorIdx,
-        thetaStepPerFloor: 6.0,
-        thetaDeadzone: 2.5,
-        hysteresisMargin: 1.0,
-      );
-    }
     if (widget.targetDestination != oldWidget.targetDestination) {
       final activeAnchor = widget.destinations.isNotEmpty
           ? widget.destinations.first.location
@@ -300,28 +289,27 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
         ? rayWorldPoint.length
         : 15.0;
 
-    // Resolves camera view distance dynamically based on camera pitch tilt angle:
+    // Resolves camera view distance dynamically based on camera pitch tilt angle and motion:
     final double pitch = cameraPose.pitchDegrees;
     final double absPitch = pitch.abs();
-    int maxVisibleFloorOffset = 1;
-    double maxViewDistanceMeters = 100.0;
+    int maxVisibleFloorOffset = 2;
+    double maxViewDistanceMeters = 250.0;
 
-    if (absPitch > 22.0) {
+    if (absPitch > 20.0) {
       maxVisibleFloorOffset = 10;
-      maxViewDistanceMeters = math.max(350.0, rayDistanceMeters * 4.0);
-    } else if (absPitch > 12.0) {
+      maxViewDistanceMeters = math.max(600.0, rayDistanceMeters * 5.0);
+    } else if (absPitch > 10.0) {
+      maxVisibleFloorOffset = 5;
+      maxViewDistanceMeters = math.max(450.0, rayDistanceMeters * 4.0);
+    } else if (absPitch > 4.0) {
       maxVisibleFloorOffset = 3;
-      maxViewDistanceMeters = math.max(220.0, rayDistanceMeters * 3.0);
-    } else if (absPitch > 5.0) {
-      maxVisibleFloorOffset = 2;
-      maxViewDistanceMeters = math.max(150.0, rayDistanceMeters * 2.0);
+      maxViewDistanceMeters = math.max(350.0, rayDistanceMeters * 3.0);
     } else {
-      maxVisibleFloorOffset = 1;
-      maxViewDistanceMeters = math.max(100.0, rayDistanceMeters);
+      maxVisibleFloorOffset = 2;
+      maxViewDistanceMeters = math.max(250.0, rayDistanceMeters * 2.0);
     }
 
     // 4. Shop marker filtering (Fixes overlap bug)
-    // On floorIndex change, previous-floor markers are removed from scene graph entirely & mount ONLY shopsByFloor[resolvedFloorIndex]
     _shopMarkerManager.loadShops(widget.destinations);
 
     List<DestinationPOI> candidatePOIs;
@@ -338,10 +326,11 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
                 : 1)
           : resolvedFloorIndex;
 
-      // Filter shops so ONLY the shops on the targeted floor are visible as camera view reach reaches that floor
-      candidatePOIs = widget.destinations
-          .where((poi) => poi.floorNumber == targetFloorNumber)
-          .toList();
+      // Include target floor and adjacent floors based on camera motion reach
+      candidatePOIs = widget.destinations.where((poi) {
+        final fDelta = (poi.floorNumber - targetFloorNumber).abs();
+        return fDelta <= maxVisibleFloorOffset;
+      }).toList();
 
       if (_selectedPOI != null &&
           !candidatePOIs.any((p) => p.id == _selectedPOI!.id)) {
