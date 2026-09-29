@@ -49,9 +49,13 @@ void main() {
       final fLevel = mapper.updateFloorIndex(pitchDegrees: 0.0, baseFloorIndex: 1, maxFloorIndex: 4);
       expect(fLevel, equals(1));
 
-      // Upward tilt past deadzone (18°) -> floor index 2
-      final fUp = mapper.updateFloorIndex(pitchDegrees: 18.0, baseFloorIndex: 1, maxFloorIndex: 4);
+      // Upward tilt past deadzone (8.0°) -> floor index 2
+      final fUp = mapper.updateFloorIndex(pitchDegrees: 8.0, baseFloorIndex: 1, maxFloorIndex: 4);
       expect(fUp, equals(2));
+
+      // Upward tilt to floor 3 (18.0°) -> floor index 3
+      final fFloor3 = mapper.updateFloorIndex(pitchDegrees: 18.0, baseFloorIndex: 1, maxFloorIndex: 4);
+      expect(fFloor3, equals(3));
 
       // Extreme upward tilt (45°) -> clamped to maxFloorIndex 4
       final fMax = mapper.updateFloorIndex(pitchDegrees: 45.0, baseFloorIndex: 1, maxFloorIndex: 4);

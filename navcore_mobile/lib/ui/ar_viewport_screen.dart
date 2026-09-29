@@ -319,24 +319,17 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
           .where((poi) => poi.floorNumber == widget.currentFloor.floorNumber)
           .toList();
     } else if (_floorFilterMode == ARFloorFilterMode.autoTilt) {
-      // Resolve active target floor number from camera pitch tilt position
+      // Resolve active target floor number from camera pitch tilt position / view reach
       final int targetFloorNumber = (resolvedFloorIndex == 0)
-          ? (cameraPose.pitchDegrees < -6.0 ||
+          ? (cameraPose.pitchDegrees < -4.0 ||
                     widget.currentFloor.floorNumber < 0
                 ? -1
                 : 1)
           : resolvedFloorIndex;
 
-      // Include places from current floor, target floor, and adjacent tilt floors so places stay visible when pointing camera up/down
-      final Set<int> allowedFloors = {
-        widget.currentFloor.floorNumber,
-        targetFloorNumber,
-        targetFloorNumber + 1,
-        targetFloorNumber - 1,
-      };
-
+      // Filter shops so ONLY the shops on the targeted floor are visible as camera view reach reaches that floor
       candidatePOIs = widget.destinations
-          .where((poi) => allowedFloors.contains(poi.floorNumber))
+          .where((poi) => poi.floorNumber == targetFloorNumber)
           .toList();
 
       if (_selectedPOI != null &&

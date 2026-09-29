@@ -132,9 +132,9 @@ class TiltFloorMapper {
     int targetFloorStep = 0;
 
     if (theta > thetaDeadzone) {
-      targetFloorStep = ((theta - thetaDeadzone) / thetaStepPerFloor).floor();
+      targetFloorStep = ((theta - thetaDeadzone) / thetaStepPerFloor).floor() + 1;
     } else if (theta < -thetaDeadzone) {
-      targetFloorStep = ((theta + thetaDeadzone) / thetaStepPerFloor).ceil();
+      targetFloorStep = ((theta + thetaDeadzone) / thetaStepPerFloor).ceil() - 1;
     } else {
       targetFloorStep = 0;
     }
@@ -158,6 +158,8 @@ class TiltFloorMapper {
       if (theta <= requiredMaxAngle) {
         _resolvedFloorIndex = rawCalculatedFloor;
       }
+    } else {
+      _resolvedFloorIndex = rawCalculatedFloor;
     }
 
     _resolvedFloorIndex = _resolvedFloorIndex.clamp(0, maxFloorIndex);
