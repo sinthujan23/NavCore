@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../engine/floor_tracker.dart';
 import '../engine/ecef_engine.dart';
+import '../engine/bearing_engine.dart';
 import '../data/destinations.dart';
 import '../data/parking_service.dart';
 import 'shop_details_screen.dart';
@@ -589,15 +590,23 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
 
                         // User Location Position Pin with Motion Pulsing Radar & Badge
                         () {
-                          const double centerLat = 6.927079;
-                          const double centerLon = 79.845612;
+                          final activeMallAnchor = widget.destinations.isNotEmpty
+                              ? widget.destinations.first.location
+                              : entranceAnchor;
+                          final effectiveUser = getEffectiveUserCoords(
+                            widget.userCoords,
+                            activeMallAnchor,
+                          );
+
+                          final double centerLat = activeMallAnchor.latitude;
+                          final double centerLon = activeMallAnchor.longitude;
                           const double pixelsPerDegLat = 800000.0;
                           const double pixelsPerDegLon = 800000.0;
 
                           final double deltaLat =
-                              widget.userCoords.latitude - centerLat;
+                              effectiveUser.latitude - centerLat;
                           final double deltaLon =
-                              widget.userCoords.longitude - centerLon;
+                              effectiveUser.longitude - centerLon;
 
                           final double rawUserX =
                               (width / 2) + (deltaLon * pixelsPerDegLon);
@@ -2619,13 +2628,21 @@ class ArchitecturalFloorPainter extends CustomPainter {
     Offset targetDoor,
     bool isDark,
   ) {
-    const double centerLat = 6.927079;
-    const double centerLon = 79.845612;
+    final activeMallAnchor = currentFloorPOIs.isNotEmpty
+        ? currentFloorPOIs.first.location
+        : entranceAnchor;
+    final effectiveUser = getEffectiveUserCoords(
+      userCoords,
+      activeMallAnchor,
+    );
+
+    final double centerLat = activeMallAnchor.latitude;
+    final double centerLon = activeMallAnchor.longitude;
     const double pixelsPerDegLat = 800000.0;
     const double pixelsPerDegLon = 800000.0;
 
-    final double deltaLat = userCoords.latitude - centerLat;
-    final double deltaLon = userCoords.longitude - centerLon;
+    final double deltaLat = effectiveUser.latitude - centerLat;
+    final double deltaLon = effectiveUser.longitude - centerLon;
 
     final double rawUserX = (size.width / 2) + (deltaLon * pixelsPerDegLon);
     final double rawUserY = (size.height / 2) - (deltaLat * pixelsPerDegLat);

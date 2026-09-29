@@ -64,10 +64,25 @@ class SensorFusionService {
     GeodeticCoords? gpsCoords,
     PnPResult? latestPnPResult,
   }) {
+    // Sanitize raw inputs against NaN and Infinite values
+    final safeRawHeading = (rawHeading.isNaN || rawHeading.isInfinite) ? 0.0 : rawHeading;
+    final safeRawPitch = (rawPitch.isNaN || rawPitch.isInfinite) ? 0.0 : rawPitch;
+    final safeRawRoll = (rawRoll.isNaN || rawRoll.isInfinite) ? 0.0 : rawRoll;
+
     // 1. Filter orientation angles using shortest-path angular Kalman filter
-    _smoothHeading = _headingFilter.filterAngle(rawHeading);
-    _smoothPitch = _pitchFilter.filter(rawPitch);
-    _smoothRoll = _rollFilter.filter(rawRoll);
+    _smoothHeading = _headingFilter.filterAngle(safeRawHeading);
+    _smoothPitch = _pitchFilter.filter(safeRawPitch);
+    _smoothRoll = _rollFilter.filter(safeRawRoll);
+
+    if (_smoothHeading.isNaN || _smoothHeading.isInfinite) {
+      _smoothHeading = safeRawHeading;
+    }
+    if (_smoothPitch.isNaN || _smoothPitch.isInfinite) {
+      _smoothPitch = safeRawPitch;
+    }
+    if (_smoothRoll.isNaN || _smoothRoll.isInfinite) {
+      _smoothRoll = safeRawRoll;
+    }
 
     // Normalize heading to [0, 360)
     while (_smoothHeading < 0) {
@@ -91,9 +106,9 @@ class SensorFusionService {
     GeodeticCoords effectivePosition =
         gpsCoords ??
         const GeodeticCoords(
-          latitude: 25.197197,
-          longitude: 55.274376,
-          height: 0.0,
+          latitude: 6.927079,
+          longitude: 79.845612,
+          height: 45.0,
         );
     if (_lastPnPPosition != null && _lastPnPTime != null) {
       final secondsSincePnP = DateTime.now()
@@ -108,14 +123,17 @@ class SensorFusionService {
     double confidenceScore = 0.95;
     TrackingConfidence confidenceLevel = TrackingConfidence.high;
 
-    final motionJitter =
-        math.sqrt(accelX * accelX + accelY * accelY + accelZ * accelZ) - 9.81;
-    if (motionJitter.abs() > 4.0) {
-      confidenceScore -= 0.20;
+    double magAccel = math.sqrt(accelX * accelX + accelY * accelY + accelZ * accelZ);
+    if (magAccel > 0 && magAccel < 3.0) {
+      magAccel *= 9.80665;
+    }
+    final motionJitter = (magAccel - 9.81).abs();
+    if (motionJitter > 6.0) {
+      confidenceScore -= 0.15;
     }
 
     if (_lastPnPPosition == null) {
-      confidenceScore -= 0.25;
+      confidenceScore -= 0.15;
     }
 
     if (confidenceScore >= 0.75) {

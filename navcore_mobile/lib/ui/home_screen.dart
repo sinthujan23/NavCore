@@ -613,7 +613,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       activeMallAnchor,
     );
     final currentFloor = resolveFloorByHeight(
-      widget.userCoords.height,
+      effectiveCoords.height,
       widget.buildingProfile,
     );
 

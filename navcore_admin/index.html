@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NavCore | Enterprise Spatial Navigation & Venue Operations Admin</title>
+  <meta name="description" content="Enterprise Web Admin Panel for NavCore Spatial AR Navigation, Smart Mall Management, Smart Parking, and Emergency Evacuation Rerouting.">
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- FontAwesome Icons CDN -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  
+  <!-- QRCode.js for generating physical spatial anchors -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+  <!-- Stylesheets -->
+  <link rel="stylesheet" href="styles/main.css">
+  <link rel="stylesheet" href="styles/components.css">
+</head>
+<body class="dark-theme">
+
+  <!-- Emergency Evacuation Global Overlay Banner -->
+  <div id="emergency-banner" class="emergency-banner hidden">
+    <div class="emergency-banner-content">
+      <div class="pulse-indicator"></div>
+      <i class="fa-solid fa-triangle-exclamation"></i>
+      <span id="emergency-banner-text">CRITICAL SYSTEM ALERT: EMERGENCY EVACUATION REROUTING ACTIVE FOR ONE GALLE FACE MALL</span>
+    </div>
+    <button class="btn btn-sm btn-outline-danger" onclick="NavCoreApp.deactivateEmergency()">DEACTIVATE EMERGENCY</button>
+  </div>
+
+  <div class="admin-wrapper">
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="brand-logo">
+          <div class="logo-icon">
+            <i class="fa-solid fa-location-crosshairs"></i>
+          </div>
+          <div class="logo-text">
+            <span class="brand-name">NavCore<span class="brand-badge">PRO</span></span>
+            <span class="brand-sub">SPATIAL OPS HUB</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="building-selector-widget">
+        <label for="global-building-select"><i class="fa-solid fa-building-user"></i> Active Venue</label>
+        <select id="global-building-select" onchange="NavCoreStore.setActiveBuilding(this.value)">
+          <!-- Dynamic options loaded from store -->
+        </select>
+      </div>
+
+      <nav class="sidebar-nav">
+        <div class="nav-section-label">OPERATIONS & TELEMETRY</div>
+        <a href="#dashboard" class="nav-item active" data-view="dashboard">
+          <i class="fa-solid fa-chart-line"></i>
+          <span>Live Dashboard</span>
+          <span class="badge badge-cyan" id="badge-active-sessions">14 Live</span>
+        </a>
+        <a href="#malls" class="nav-item" data-view="malls">
+          <i class="fa-solid fa-building-columns"></i>
+          <span>Venue & Floors</span>
+        </a>
+
+        <div class="nav-section-label">SPATIAL DATA & WAYFINDING</div>
+        <a href="#shops" class="nav-item" data-view="shops">
+          <i class="fa-solid fa-store"></i>
+          <span>Shops & POI Directory</span>
+          <span class="badge badge-slate" id="badge-total-pois">42</span>
+        </a>
+        <a href="#wayfinding" class="nav-item" data-view="wayfinding">
+          <i class="fa-solid fa-route"></i>
+          <span>Wayfinding Node Graph</span>
+        </a>
+        <a href="#anchors" class="nav-item" data-view="anchors">
+          <i class="fa-solid fa-qrcode"></i>
+          <span>AR Anchors & Beacons</span>
+        </a>
+
+        <div class="nav-section-label">FACILITIES & SAFETY</div>
+        <a href="#parking" class="nav-item" data-view="parking">
+          <i class="fa-solid fa-square-parking"></i>
+          <span>Smart Parking Deck</span>
+          <span class="badge badge-amber" id="badge-parking-occ">78%</span>
+        </a>
+        <a href="#emergency" class="nav-item" data-view="emergency">
+          <i class="fa-solid fa-shield-cat"></i>
+          <span>Emergency Evacuation</span>
+          <span class="badge badge-rose" id="badge-emergency-status">SAFE</span>
+        </a>
+
+        <div class="nav-section-label">ANALYTICS & SYSTEM</div>
+        <a href="#telemetry" class="nav-item" data-view="telemetry">
+          <i class="fa-solid fa-tower-broadcast"></i>
+          <span>App Fleet Telemetry</span>
+        </a>
+        <a href="#analytics" class="nav-item" data-view="analytics">
+          <i class="fa-solid fa-chart-pie"></i>
+          <span>Footfall & Analytics</span>
+        </a>
+        <a href="#settings" class="nav-item" data-view="settings">
+          <i class="fa-solid fa-sliders"></i>
+          <span>System & API Keys</span>
+        </a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="system-status">
+          <div class="status-dot online"></div>
+          <div class="status-info">
+            <span class="status-title">AR Engine API v2.4</span>
+            <span class="status-sub">ECEF/PnP Anchor Sync OK</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <!-- Top Navbar Header -->
+      <header class="top-header">
+        <div class="header-left">
+          <button class="mobile-toggle" id="sidebar-toggle"><i class="fa-solid fa-bars"></i></button>
+          <div class="page-title-container">
+            <h1 id="page-title">Live Operational Dashboard</h1>
+            <p id="page-subtitle">Real-time AR navigation sessions, building occupancy, and spatial sensor health.</p>
+          </div>
+        </div>
+
+        <div class="header-right">
+          <!-- Global Search -->
+          <div class="header-search">
+            <i class="fa-solid fa-magnifying-glass"></i>
+            <input type="text" id="global-search-input" placeholder="Search POIs, Parking Spots, AR Anchors..." onkeyup="NavCoreApp.handleGlobalSearch(event)">
+            <div id="search-dropdown" class="search-dropdown hidden"></div>
+          </div>
+
+          <!-- Quick Actions Button -->
+          <button class="btn btn-primary" onclick="NavCoreApp.toggleQuickActionsModal()">
+            <i class="fa-solid fa-bolt"></i> Quick Actions
+          </button>
+
+          <!-- Live Time Indicator -->
+          <div class="header-time" id="header-time-clock">
+            10:50:56 AM
+          </div>
+
+          <!-- Notifications Button -->
+          <div class="header-icon-btn" onclick="NavCoreApp.toggleNotificationsModal()">
+            <i class="fa-solid fa-bell"></i>
+            <span class="badge-dot"></span>
+          </div>
+
+          <!-- Theme Toggle Button -->
+          <div class="header-icon-btn" onclick="NavCoreApp.toggleTheme()" title="Toggle Dark/Light Mode">
+            <i class="fa-solid fa-moon" id="theme-icon"></i>
+          </div>
+
+          <!-- User Profile -->
+          <div class="user-profile">
+            <div class="avatar">SA</div>
+            <div class="user-info">
+              <span class="user-name">Sinthujan A.</span>
+              <span class="user-role">Super Admin</span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <!-- View Containers -->
+      <div class="content-body">
+        <div id="view-dashboard" class="view-panel active"></div>
+        <div id="view-malls" class="view-panel hidden"></div>
+        <div id="view-shops" class="view-panel hidden"></div>
+        <div id="view-wayfinding" class="view-panel hidden"></div>
+        <div id="view-anchors" class="view-panel hidden"></div>
+        <div id="view-parking" class="view-panel hidden"></div>
+        <div id="view-emergency" class="view-panel hidden"></div>
+        <div id="view-telemetry" class="view-panel hidden"></div>
+        <div id="view-analytics" class="view-panel hidden"></div>
+        <div id="view-settings" class="view-panel hidden"></div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Global Modals Container -->
+  <div id="modal-backdrop" class="modal-backdrop hidden" onclick="NavCoreApp.closeAllModals(event)">
+    <div class="modal-dialog" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h3 id="modal-title">Modal Title</h3>
+        <button class="btn-close" onclick="NavCoreApp.closeModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body" id="modal-body">
+        <!-- Dynamic content -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- App Scripts -->
+  <script src="scripts/store.js"></script>
+  <script src="scripts/views/dashboard.js"></script>
+  <script src="scripts/views/malls.js"></script>
+  <script src="scripts/views/shops.js"></script>
+  <script src="scripts/views/wayfinding.js"></script>
+  <script src="scripts/views/anchors.js"></script>
+  <script src="scripts/views/parking.js"></script>
+  <script src="scripts/views/emergency.js"></script>
+  <script src="scripts/views/telemetry.js"></script>
+  <script src="scripts/views/analytics.js"></script>
+  <script src="scripts/views/settings.js"></script>
+  <script src="scripts/app.js"></script>
+</body>
+</html>

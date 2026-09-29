@@ -656,7 +656,7 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
     });
 
     // Camera Optical FOV Directional Visibility Filtering (~42° angle cone)
-    const double fovLimit = 42.0;
+    const double fovLimit = 60.0;
 
     List<Map<String, dynamic>> visibleCardsInFOV = positionedCards
         .where((data) {
@@ -668,16 +668,20 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
           if (isTarget) return true;
 
           final double rawPosX = data['rawPosX'] as double? ?? 0.0;
-          final bool isInCameraFOV = relAngle.abs() <= fovLimit;
+          final bool isInCameraFOV = relAngle.isNaN || relAngle.isInfinite || relAngle.abs() <= fovLimit;
           final bool isOnScreenHorizontally =
-              rawPosX >= -150.0 && rawPosX <= (screenWidth + 20.0);
+              rawPosX >= -180.0 && rawPosX <= (screenWidth + 50.0);
 
-          return isInCameraFOV &&
-              isOnScreenHorizontally &&
-              distM <= maxViewDistanceMeters;
+          return (isInCameraFOV || isOnScreenHorizontally) &&
+              distM <= math.max(maxViewDistanceMeters, 500.0);
         })
         .take(15)
         .toList();
+
+    // Fallback safety for iOS/uncalibrated sensors: Ensure places display even if heading is off-center
+    if (visibleCardsInFOV.isEmpty && positionedCards.isNotEmpty) {
+      visibleCardsInFOV = positionedCards.take(8).toList();
+    }
 
     // Evaluate off-route compliance if active route is available
     if (_activeRoute != null && activePOI != null) {

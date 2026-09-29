@@ -22,7 +22,7 @@ class ShopDetailsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final activeAnchor = destination.location;
     final effectiveCoords = getEffectiveUserCoords(userCoords, activeAnchor);
-    final userFloor = resolveFloorByHeight(userCoords.height);
+    final userFloor = resolveFloorByHeight(effectiveCoords.height);
     final distanceMeters = calculateAccurate3DDistance(
       effectiveCoords,
       destination.location,

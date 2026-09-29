@@ -172,15 +172,29 @@ class RealSensorService {
     _accelerometerSubscription = accelerometerEventStream(
       samplingPeriod: const Duration(milliseconds: 33),
     ).listen((AccelerometerEvent event) {
-      _accelX = event.x;
-      _accelY = event.y;
-      _accelZ = event.z;
+      double rawX = event.x;
+      double rawY = event.y;
+      double rawZ = event.z;
+
+      // Handle iOS CoreMotion vs Android scale mismatch (g-force vs m/s²)
+      final double magnitude = math.sqrt(rawX * rawX + rawY * rawY + rawZ * rawZ);
+      if (magnitude > 0 && magnitude < 3.0) {
+        // Values delivered in G's (iOS scale) -> Convert to m/s²
+        rawX *= 9.80665;
+        rawY *= 9.80665;
+        rawZ *= 9.80665;
+      }
+
+      _accelX = rawX.isNaN || rawX.isInfinite ? 0.0 : rawX;
+      _accelY = rawY.isNaN || rawY.isInfinite ? 0.0 : rawY;
+      _accelZ = rawZ.isNaN || rawZ.isInfinite ? 9.81 : rawZ;
 
       final pitchRad = math.atan2(-_accelX, math.sqrt(_accelY * _accelY + _accelZ * _accelZ));
       final rawPitchDeg = pitchRad * (180.0 / math.pi);
+      final safePitchDeg = rawPitchDeg.isNaN || rawPitchDeg.isInfinite ? 0.0 : rawPitchDeg;
 
       // Low-Pass Smoothing Filter
-      _smoothedPitch = (_alpha * rawPitchDeg) + ((1.0 - _alpha) * _smoothedPitch);
+      _smoothedPitch = (_alpha * safePitchDeg) + ((1.0 - _alpha) * _smoothedPitch);
 
       PitchTiltDirection dir = PitchTiltDirection.level;
       if (_smoothedPitch < -15.0) {
@@ -204,9 +218,9 @@ class RealSensorService {
     _magnetometerSubscription = magnetometerEventStream(
       samplingPeriod: const Duration(milliseconds: 33),
     ).listen((MagnetometerEvent event) {
-      double magX = event.x;
-      double magY = event.y;
-      double magZ = event.z;
+      double magX = event.x.isNaN || event.x.isInfinite ? 0.0 : event.x;
+      double magY = event.y.isNaN || event.y.isInfinite ? 0.0 : event.y;
+      double magZ = event.z.isNaN || event.z.isInfinite ? 0.0 : event.z;
 
       // Pitch & Roll estimate from accelerometer
       double roll = math.atan2(_accelY, _accelZ);
@@ -218,8 +232,18 @@ class RealSensorService {
           magY * math.cos(roll) -
           magZ * math.sin(roll) * math.cos(pitch);
 
-      double headingRad = math.atan2(-magCompY, magCompX);
-      double headingDeg = (headingRad * (180 / math.pi) + 360) % 360;
+      double headingDeg;
+      if (magCompX.abs() < 1e-5 && magCompY.abs() < 1e-5) {
+        // Fallback when magnetometer is uncalibrated or zero (common on iOS simulator / uncalibrated sensors)
+        headingDeg = _currentHeadingDegrees;
+      } else {
+        double headingRad = math.atan2(-magCompY, magCompX);
+        headingDeg = (headingRad * (180 / math.pi) + 360) % 360;
+      }
+
+      if (headingDeg.isNaN || headingDeg.isInfinite) {
+        headingDeg = 0.0;
+      }
 
       final now = DateTime.now();
       final headingDelta = (headingDeg - _lastNotifiedHeading).abs();
