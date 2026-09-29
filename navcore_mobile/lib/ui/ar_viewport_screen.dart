@@ -101,9 +101,9 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
         : widget.currentFloor.floorNumber;
     _tiltFloorMapper = TiltFloorMapper(
       initialFloorIndex: initialFloorIdx,
-      thetaStepPerFloor: 10.0,
-      thetaDeadzone: 4.0,
-      hysteresisMargin: 2.5,
+      thetaStepPerFloor: 6.0,
+      thetaDeadzone: 2.5,
+      hysteresisMargin: 1.0,
     );
     _floorPointCalculator = ARFloorPointCalculator(floorToFloorHeight: 5.0);
     _shopMarkerManager = ARShopMarkerManager();
@@ -135,6 +135,17 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
   @override
   void didUpdateWidget(covariant ARViewportScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.currentFloor != oldWidget.currentFloor) {
+      final initialFloorIdx = widget.currentFloor.floorNumber < 0
+          ? 0
+          : widget.currentFloor.floorNumber;
+      _tiltFloorMapper = TiltFloorMapper(
+        initialFloorIndex: initialFloorIdx,
+        thetaStepPerFloor: 6.0,
+        thetaDeadzone: 2.5,
+        hysteresisMargin: 1.0,
+      );
+    }
     if (widget.targetDestination != oldWidget.targetDestination) {
       final activeAnchor = widget.destinations.isNotEmpty
           ? widget.destinations.first.location

@@ -114,9 +114,9 @@ class TiltFloorMapper {
 
   TiltFloorMapper({
     int initialFloorIndex = 1,
-    this.thetaStepPerFloor = 10.0,
-    this.thetaDeadzone = 4.0,
-    this.hysteresisMargin = 2.5,
+    this.thetaStepPerFloor = 6.0,
+    this.thetaDeadzone = 2.5,
+    this.hysteresisMargin = 1.0,
   }) : _resolvedFloorIndex = initialFloorIndex;
 
   int get currentResolvedFloorIndex => _resolvedFloorIndex;

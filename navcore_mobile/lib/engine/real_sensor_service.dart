@@ -189,7 +189,9 @@ class RealSensorService {
       _accelY = rawY.isNaN || rawY.isInfinite ? 0.0 : rawY;
       _accelZ = rawZ.isNaN || rawZ.isInfinite ? 9.81 : rawZ;
 
-      final pitchRad = math.atan2(-_accelX, math.sqrt(_accelY * _accelY + _accelZ * _accelZ));
+      // Pitch is tilt around X-axis (tilting phone up towards ceiling (+) or down towards floor (-))
+      // In portrait orientation: Y is vertical axis along phone, Z is normal to screen
+      final double pitchRad = math.atan2(-_accelZ, math.sqrt(_accelX * _accelX + _accelY * _accelY));
       final rawPitchDeg = pitchRad * (180.0 / math.pi);
       final safePitchDeg = rawPitchDeg.isNaN || rawPitchDeg.isInfinite ? 0.0 : rawPitchDeg;
 
@@ -197,15 +199,15 @@ class RealSensorService {
       _smoothedPitch = (_alpha * safePitchDeg) + ((1.0 - _alpha) * _smoothedPitch);
 
       PitchTiltDirection dir = PitchTiltDirection.level;
-      if (_smoothedPitch < -15.0) {
+      if (_smoothedPitch < -8.0) {
         dir = PitchTiltDirection.down;
-      } else if (_smoothedPitch > 15.0) {
+      } else if (_smoothedPitch > 8.0) {
         dir = PitchTiltDirection.up;
       }
 
       final now = DateTime.now();
       final pitchDelta = (_smoothedPitch - _lastNotifiedPitch).abs();
-      if (now.difference(_lastPitchNotifyTime).inMilliseconds >= 33 || pitchDelta >= 0.4) {
+      if (now.difference(_lastPitchNotifyTime).inMilliseconds >= 33 || pitchDelta >= 0.3) {
         _lastPitchNotifyTime = now;
         _lastNotifiedPitch = _smoothedPitch;
         if (onPitchUpdated != null) {
@@ -223,8 +225,8 @@ class RealSensorService {
       double magZ = event.z.isNaN || event.z.isInfinite ? 0.0 : event.z;
 
       // Pitch & Roll estimate from accelerometer
-      double roll = math.atan2(_accelY, _accelZ);
-      double pitch = math.atan2(-_accelX, math.sqrt(_accelY * _accelY + _accelZ * _accelZ));
+      double roll = math.atan2(_accelX, math.sqrt(_accelY * _accelY + _accelZ * _accelZ));
+      double pitch = math.atan2(-_accelZ, math.sqrt(_accelX * _accelX + _accelY * _accelY));
 
       // Tilt compensated magnetic calculation
       double magCompX = magX * math.cos(pitch) + magZ * math.sin(pitch);
