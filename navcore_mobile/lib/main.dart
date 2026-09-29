@@ -136,8 +136,8 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
       },
     );
 
-    // 4. Load initial active mall map from database
-    await _loadActiveMallPackage('mall-one-galle-face');
+    // 4. Auto-load nearest or global venue map package based on user's GPS position
+    await _autoLoadNearestMallMap();
 
     if (!report.hasLocationPermission && mounted) {
       _showPermissionOnboardingDialog();
@@ -145,7 +145,10 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
   }
 
   Future<void> _loadActiveMallPackage(String mallId) async {
-    final pkg = await _mallDatabaseService.loadMallPackage(mallId);
+    final pkg = await _mallDatabaseService.loadMallPackage(
+      mallId,
+      userCoords: _userCoords,
+    );
     if (mounted) {
       setState(() {
         _buildingProfile = pkg.profile;

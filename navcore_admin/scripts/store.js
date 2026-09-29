@@ -8,6 +8,15 @@ const NavCoreStore = (function () {
 
   // Initial State Database
   let state = {
+    auth: {
+      isLoggedIn: localStorage.getItem('navcore_logged_in') === 'true',
+      user: JSON.parse(localStorage.getItem('navcore_user_session') || 'null') || {
+        name: 'Sinthujan A.',
+        email: 'admin@navcore.io',
+        role: 'Super Admin',
+        avatar: 'SA'
+      }
+    },
     activeBuildingId: 'mall-one-galle-face',
     theme: 'dark',
     emergencyActive: false,
@@ -446,6 +455,59 @@ const NavCoreStore = (function () {
       state.emergencyActive = active;
       state.emergencyReason = reason;
       notify();
+    },
+
+    // Auth Management
+    login: function (email, password, role = 'Super Admin', name = '') {
+      let avatar = 'SA';
+      let userName = name || (email ? email.split('@')[0] : 'Admin User');
+      if (role === 'Super Admin') { avatar = 'SA'; if (!name) userName = 'Sinthujan A.'; }
+      else if (role === 'Venue Operations Manager') { avatar = 'VM'; if (!name) userName = 'Sarah Jenkins'; }
+      else if (role === 'Security & Emergency Officer') { avatar = 'SO'; if (!name) userName = 'Cmdr. Dave Miller'; }
+
+      state.auth = {
+        isLoggedIn: true,
+        user: {
+          email: email || 'admin@navcore.io',
+          name: userName,
+          role: role,
+          avatar: avatar
+        }
+      };
+
+      try {
+        localStorage.setItem('navcore_logged_in', 'true');
+        localStorage.setItem('navcore_user_session', JSON.stringify(state.auth.user));
+      } catch (e) {
+        console.warn('LocalStorage error', e);
+      }
+
+      notify();
+      return state.auth.user;
+    },
+
+    logout: function () {
+      state.auth = {
+        isLoggedIn: false,
+        user: null
+      };
+
+      try {
+        localStorage.removeItem('navcore_logged_in');
+        localStorage.removeItem('navcore_user_session');
+      } catch (e) {
+        console.warn('LocalStorage error', e);
+      }
+
+      notify();
+    },
+
+    isLoggedIn: function () {
+      return state.auth ? state.auth.isLoggedIn : false;
+    },
+
+    getUser: function () {
+      return state.auth ? state.auth.user : null;
     }
   };
 })();

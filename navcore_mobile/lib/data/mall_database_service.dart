@@ -172,9 +172,53 @@ class MallDatabaseService {
     await prefs.setString(_activeMallKey, mallId);
   }
 
-  /// Finds the nearest mall in the catalog based on GPS location coordinates
+  /// Returns POIs dynamically localized relative to a given center GPS coordinate.
+  /// Preserves relative spatial layout while anchoring the venue to any global location.
+  List<DestinationPOI> getLocalizedDestinationsForCoords(
+    GeodeticCoords centerCoords, {
+    String mallId = 'mall-global',
+  }) {
+    const baseLat = 6.927079;
+    const baseLon = 79.845612;
+
+    final deltaLat = centerCoords.latitude - baseLat;
+    final deltaLon = centerCoords.longitude - baseLon;
+
+    return mockDestinations.map((poi) {
+      return DestinationPOI(
+        id: '$mallId-${poi.id}',
+        name: poi.name,
+        category: poi.category,
+        floorNumber: poi.floorNumber,
+        rating: poi.rating,
+        location: GeodeticCoords(
+          latitude: poi.location.latitude + deltaLat,
+          longitude: poi.location.longitude + deltaLon,
+          height: poi.location.height,
+        ),
+        description: poi.description,
+        openStatus: poi.openStatus,
+        imageUrl: poi.imageUrl,
+      );
+    }).toList();
+  }
+
+  /// Finds the nearest mall in the catalog or dynamically resolves a venue for any global user location
   MallMetadata findNearestMall(GeodeticCoords userCoords) {
-    if (_catalog.isEmpty) return _catalog.first;
+    if (userCoords.latitude == 0.0 && userCoords.longitude == 0.0) {
+      return _catalog.isNotEmpty ? _catalog.first : const MallMetadata(
+        id: 'mall-one-galle-face',
+        name: 'One Galle Face Mall & Tower',
+        city: 'Colombo',
+        country: 'Sri Lanka',
+        latitude: 6.927079,
+        longitude: 79.845612,
+        floorCount: 5,
+        packageSizeBytesMB: 14.2,
+        category: 'Premier Oceanfront Mall',
+        rating: '4.9 ★',
+      );
+    }
 
     MallMetadata nearest = _catalog.first;
     double minDistance = double.infinity;
@@ -194,7 +238,26 @@ class MallDatabaseService {
       }
     }
 
-    return nearest;
+    // If nearest catalog mall is within 5km, return it
+    if (minDistance <= 5000.0) {
+      return nearest;
+    }
+
+    // Otherwise, dynamically generate a global spatial venue centered directly at userCoords
+    return MallMetadata(
+      id: 'mall-global-${userCoords.latitude.toStringAsFixed(3)}-${userCoords.longitude.toStringAsFixed(3)}',
+      name: 'Current Global AR Venue',
+      city: 'Local Area',
+      country: 'Worldwide',
+      latitude: userCoords.latitude,
+      longitude: userCoords.longitude,
+      floorCount: 5,
+      packageSizeBytesMB: 14.0,
+      category: 'AR Spatial Navigation Complex',
+      rating: '4.9 ★',
+      isDownloaded: true,
+      isActive: true,
+    );
   }
 
   /// Automatically detects, downloads, and activates the particular mall map package nearest to current GPS location
@@ -217,52 +280,82 @@ class MallDatabaseService {
     }
 
     await setActiveMall(nearest.id);
-    return await loadMallPackage(nearest.id);
+    return await loadMallPackage(nearest.id, userCoords: userCoords);
   }
 
-  Future<FullMallPackage> loadMallPackage(String mallId) async {
-    final targetMetadata = _catalog.firstWhere(
-      (m) => m.id == mallId,
-      orElse: () => _catalog.first,
-    );
+  Future<FullMallPackage> loadMallPackage(
+    String mallId, {
+    GeodeticCoords? userCoords,
+  }) async {
+    MallMetadata? targetMetadata;
+    
+    for (final m in _catalog) {
+      if (m.id == mallId) {
+        targetMetadata = m;
+        break;
+      }
+    }
 
-    // Calculate coordinate offset from default One Galle Face entrance anchor
-    final deltaLat = targetMetadata.latitude - 6.927079;
-    final deltaLon = targetMetadata.longitude - 79.845612;
-
-    final localizedDestinations = mockDestinations.map((poi) {
-      return DestinationPOI(
-        id: '${targetMetadata.id}-${poi.id}',
-        name: poi.name,
-        category: poi.category,
-        floorNumber: poi.floorNumber,
-        rating: poi.rating,
-        location: GeodeticCoords(
-          latitude: poi.location.latitude + deltaLat,
-          longitude: poi.location.longitude + deltaLon,
-          height: poi.location.height,
-        ),
-        description: poi.description,
-        openStatus: poi.openStatus,
-        imageUrl: poi.imageUrl,
-      );
-    }).toList();
-
-    return FullMallPackage(
-      metadata: MallMetadata(
-        id: targetMetadata.id,
-        name: targetMetadata.name,
-        city: targetMetadata.city,
-        country: targetMetadata.country,
-        latitude: targetMetadata.latitude,
-        longitude: targetMetadata.longitude,
+    if (targetMetadata == null && userCoords != null) {
+      targetMetadata = MallMetadata(
+        id: mallId,
+        name: 'Current Global AR Venue',
+        city: 'Local Area',
+        country: 'Worldwide',
+        latitude: userCoords.latitude,
+        longitude: userCoords.longitude,
         floorCount: 5,
-        packageSizeBytesMB: targetMetadata.packageSizeBytesMB,
-        category: targetMetadata.category,
-        rating: targetMetadata.rating,
+        packageSizeBytesMB: 14.0,
+        category: 'AR Spatial Navigation Complex',
+        rating: '4.9 ★',
         isDownloaded: true,
         isActive: true,
-      ),
+      );
+    }
+
+    targetMetadata ??= _catalog.first;
+
+    // If userCoords is provided and user is far (>5km) from targetMetadata, re-anchor to userCoords globally
+    if (userCoords != null && userCoords.latitude != 0.0 && userCoords.longitude != 0.0) {
+      final distM = haversineDistance(
+        userCoords,
+        GeodeticCoords(
+          latitude: targetMetadata.latitude,
+          longitude: targetMetadata.longitude,
+          height: userCoords.height,
+        ),
+      );
+      if (distM > 5000.0) {
+        targetMetadata = MallMetadata(
+          id: targetMetadata.id,
+          name: targetMetadata.name == _catalog.first.name ? 'Current Global AR Venue' : targetMetadata.name,
+          city: targetMetadata.city,
+          country: targetMetadata.country,
+          latitude: userCoords.latitude,
+          longitude: userCoords.longitude,
+          floorCount: 5,
+          packageSizeBytesMB: targetMetadata.packageSizeBytesMB,
+          category: targetMetadata.category,
+          rating: targetMetadata.rating,
+          isDownloaded: true,
+          isActive: true,
+        );
+      }
+    }
+
+    final centerCoords = GeodeticCoords(
+      latitude: targetMetadata.latitude,
+      longitude: targetMetadata.longitude,
+      height: 45.0,
+    );
+
+    final localizedDestinations = getLocalizedDestinationsForCoords(
+      centerCoords,
+      mallId: targetMetadata.id,
+    );
+
+    return FullMallPackage(
+      metadata: targetMetadata,
       profile: BuildingElevationProfile(
         buildingId: targetMetadata.id,
         name: targetMetadata.name,

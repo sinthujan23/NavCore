@@ -61,16 +61,12 @@ GeodeticCoords getEffectiveUserCoords(
   GeodeticCoords userCoords,
   GeodeticCoords mallAnchor,
 ) {
-  final latDiff = (userCoords.latitude - mallAnchor.latitude).abs();
-  final lonDiff = (userCoords.longitude - mallAnchor.longitude).abs();
-
-  if (userCoords.latitude != 0.0 &&
-      userCoords.longitude != 0.0 &&
-      latDiff < 0.05 &&
-      lonDiff < 0.05) {
+  // If user has a valid GPS reading, always use real user coordinates globally
+  if (userCoords.latitude != 0.0 && userCoords.longitude != 0.0) {
     return userCoords;
   }
 
+  // Fallback to active mall anchor if GPS is unavailable
   return GeodeticCoords(
     latitude: mallAnchor.latitude,
     longitude: mallAnchor.longitude,

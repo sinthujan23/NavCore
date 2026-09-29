@@ -6,18 +6,21 @@ const NavCoreApp = (function () {
   let currentView = 'dashboard';
 
   function init() {
-    // 1. Subscribe to Store Updates
+    // 1. Check Authentication Status
+    checkAuthStatus();
+
+    // 2. Subscribe to Store Updates
     NavCoreStore.subscribe(onStoreUpdate);
 
-    // 2. Setup Hash Router
+    // 3. Setup Hash Router
     window.addEventListener('hashchange', handleHashChange);
     handleHashChange();
 
-    // 3. Setup Clock Timer
+    // 4. Setup Clock Timer
     setInterval(updateClock, 1000);
     updateClock();
 
-    // 4. Setup Mobile Sidebar Toggle
+    // 5. Setup Mobile Sidebar Toggle
     const sidebarToggle = document.getElementById('sidebar-toggle');
     if (sidebarToggle) {
       sidebarToggle.addEventListener('click', () => {
@@ -25,7 +28,7 @@ const NavCoreApp = (function () {
       });
     }
 
-    // 5. Populate Building Selector
+    // 6. Populate Building Selector
     populateBuildingSelector();
   }
 
@@ -326,10 +329,125 @@ const NavCoreApp = (function () {
     showToast('No new unread system notifications.', 'info');
   }
 
+  // ==========================================================================
+  // AUTHENTICATION & SESSION MANAGEMENT CONTROLLER
+  // ==========================================================================
+
+  function checkAuthStatus() {
+    const isLoggedIn = NavCoreStore.isLoggedIn();
+    const loginWrapper = document.getElementById('login-wrapper');
+    const adminWrapper = document.querySelector('.admin-wrapper');
+
+    if (isLoggedIn) {
+      if (loginWrapper) loginWrapper.classList.add('hidden');
+      if (adminWrapper) adminWrapper.classList.remove('hidden');
+      updateUserProfileDisplay();
+    } else {
+      if (loginWrapper) loginWrapper.classList.remove('hidden');
+      if (adminWrapper) adminWrapper.classList.add('hidden');
+    }
+  }
+
+  function updateUserProfileDisplay() {
+    const user = NavCoreStore.getUser();
+    if (!user) return;
+    const avatarEl = document.getElementById('header-user-avatar');
+    const nameEl = document.getElementById('header-user-name');
+    const roleEl = document.getElementById('header-user-role');
+
+    if (avatarEl) avatarEl.textContent = user.avatar || 'SA';
+    if (nameEl) nameEl.textContent = user.name || 'Sinthujan A.';
+    if (roleEl) roleEl.textContent = user.role || 'Super Admin';
+  }
+
+  function handleLogin(e) {
+    if (e) e.preventDefault();
+
+    const emailInput = document.getElementById('login-email');
+    const pwInput = document.getElementById('login-password');
+    const roleSelect = document.getElementById('login-role');
+    const errAlert = document.getElementById('login-error-alert');
+    const btnSubmit = document.getElementById('btn-login-submit');
+    const btnText = document.getElementById('btn-login-text');
+
+    const email = emailInput ? emailInput.value.trim() : '';
+    const password = pwInput ? pwInput.value.trim() : '';
+    const role = roleSelect ? roleSelect.value : 'Super Admin';
+
+    if (!email || !password) {
+      if (errAlert) {
+        document.getElementById('login-error-text').textContent = 'Please enter both Email and Access Key.';
+        errAlert.classList.remove('hidden');
+      }
+      return;
+    }
+
+    if (errAlert) errAlert.classList.add('hidden');
+
+    // Loading State Animation
+    if (btnSubmit) btnSubmit.disabled = true;
+    if (btnText) btnText.textContent = 'VERIFYING CREDENTIALS...';
+
+    setTimeout(() => {
+      const user = NavCoreStore.login(email, password, role);
+      if (btnSubmit) btnSubmit.disabled = false;
+      if (btnText) btnText.textContent = 'AUTHENTICATE & LAUNCH DASHBOARD';
+
+      checkAuthStatus();
+      renderCurrentView();
+      showToast(`Welcome back, ${user.name}! Session authenticated as ${user.role}.`, 'success');
+    }, 500);
+  }
+
+  function quickLogin(roleType) {
+    let email = 'admin@navcore.io';
+    let name = 'Sinthujan A.';
+    if (roleType === 'Venue Operations Manager') {
+      email = 'sarah.j@navcore.io';
+      name = 'Sarah Jenkins';
+    } else if (roleType === 'Security & Emergency Officer') {
+      email = 'dave.m@navcore.io';
+      name = 'Cmdr. Dave Miller';
+    }
+
+    const errAlert = document.getElementById('login-error-alert');
+    if (errAlert) errAlert.classList.add('hidden');
+
+    const user = NavCoreStore.login(email, 'demo123', roleType, name);
+    checkAuthStatus();
+    renderCurrentView();
+    showToast(`Quick Login Successful! Logged in as ${user.name} (${user.role}).`, 'success');
+  }
+
+  function logout() {
+    NavCoreStore.logout();
+    checkAuthStatus();
+    showToast('Logged out of NavCore Spatial Ops Hub.', 'info');
+  }
+
+  function togglePasswordVisibility() {
+    const pwInput = document.getElementById('login-password');
+    const icon = document.getElementById('pw-toggle-icon');
+    if (!pwInput) return;
+
+    if (pwInput.type === 'password') {
+      pwInput.type = 'text';
+      if (icon) icon.className = 'fa-solid fa-eye-slash';
+    } else {
+      pwInput.type = 'password';
+      if (icon) icon.className = 'fa-solid fa-eye';
+    }
+  }
+
   // Initialize App when DOM is loaded
   document.addEventListener('DOMContentLoaded', init);
 
   return {
+    checkAuthStatus,
+    handleLogin,
+    quickLogin,
+    logout,
+    togglePasswordVisibility,
     navigateTo,
     renderCurrentView,
     toggleTheme,

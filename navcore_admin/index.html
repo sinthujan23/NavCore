@@ -36,6 +36,118 @@
     <button class="btn btn-sm btn-outline-danger" onclick="NavCoreApp.deactivateEmergency()">DEACTIVATE EMERGENCY</button>
   </div>
 
+  <!-- Admin Authentication Login Screen Overlay -->
+  <div id="login-wrapper" class="login-wrapper">
+    <div class="login-bg-decor">
+      <div class="glow-orb orb-1"></div>
+      <div class="glow-orb orb-2"></div>
+      <div class="grid-overlay"></div>
+    </div>
+
+    <div class="login-card">
+      <div class="login-header">
+        <div class="brand-logo login-logo">
+          <div class="logo-icon pulse">
+            <i class="fa-solid fa-location-crosshairs"></i>
+          </div>
+          <div class="logo-text">
+            <span class="brand-name">NavCore<span class="brand-badge">PRO</span></span>
+            <span class="brand-sub">SPATIAL OPS HUB</span>
+          </div>
+        </div>
+        <div class="login-security-badge">
+          <i class="fa-solid fa-shield-halved"></i> 256-Bit ECEF Encrypted Auth Portal
+        </div>
+      </div>
+
+      <div class="login-body">
+        <h2 class="login-title">Operations Console Login</h2>
+        <p class="login-subtitle">Enter admin credentials or select a quick demo profile to access real-time venue telemetry & AR graph solver.</p>
+
+        <form id="login-form" onsubmit="NavCoreApp.handleLogin(event)">
+          <div class="form-group">
+            <label for="login-email"><i class="fa-solid fa-user-gear"></i> Admin Email / ID</label>
+            <input type="email" id="login-email" class="form-control" placeholder="admin@navcore.io" value="admin@navcore.io" required>
+          </div>
+
+          <div class="form-group">
+            <label for="login-password"><i class="fa-solid fa-key"></i> Access Key / Password</label>
+            <div class="password-input-group">
+              <input type="password" id="login-password" class="form-control" placeholder="••••••••••••" value="admin123" required>
+              <button type="button" class="btn-toggle-pw" onclick="NavCoreApp.togglePasswordVisibility()">
+                <i class="fa-solid fa-eye" id="pw-toggle-icon"></i>
+              </button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="login-role"><i class="fa-solid fa-id-card-clip"></i> Operational Security Role</label>
+            <select id="login-role" class="form-control">
+              <option value="Super Admin" selected>Super Admin (Full System Access)</option>
+              <option value="Venue Operations Manager">Venue Operations Manager</option>
+              <option value="Security & Emergency Officer">Security & Emergency Officer</option>
+            </select>
+          </div>
+
+          <div class="form-row-remember">
+            <label class="checkbox-container">
+              <input type="checkbox" id="login-remember" checked>
+              <span class="checkmark"></span>
+              <span>Remember session on this device</span>
+            </label>
+          </div>
+
+          <div id="login-error-alert" class="login-error hidden">
+            <i class="fa-solid fa-circle-exclamation"></i> <span id="login-error-text">Invalid login credentials</span>
+          </div>
+
+          <button type="submit" id="btn-login-submit" class="btn btn-primary btn-block btn-login">
+            <i class="fa-solid fa-right-to-bracket"></i>
+            <span id="btn-login-text">AUTHENTICATE & LAUNCH DASHBOARD</span>
+          </button>
+        </form>
+
+        <div class="login-divider">
+          <span>OR QUICK DEMO LOGIN</span>
+        </div>
+
+        <div class="demo-presets">
+          <button class="btn-demo-preset super-admin" onclick="NavCoreApp.quickLogin('Super Admin')">
+            <div class="preset-avatar">SA</div>
+            <div class="preset-info">
+              <span class="preset-name">Sinthujan A.</span>
+              <span class="preset-role"><i class="fa-solid fa-crown"></i> Super Admin</span>
+            </div>
+            <i class="fa-solid fa-chevron-right preset-arrow"></i>
+          </button>
+
+          <button class="btn-demo-preset venue-mgr" onclick="NavCoreApp.quickLogin('Venue Operations Manager')">
+            <div class="preset-avatar">VM</div>
+            <div class="preset-info">
+              <span class="preset-name">Sarah Jenkins</span>
+              <span class="preset-role"><i class="fa-solid fa-building-user"></i> Venue Manager</span>
+            </div>
+            <i class="fa-solid fa-chevron-right preset-arrow"></i>
+          </button>
+
+          <button class="btn-demo-preset security-officer" onclick="NavCoreApp.quickLogin('Security & Emergency Officer')">
+            <div class="preset-avatar">SO</div>
+            <div class="preset-info">
+              <span class="preset-name">Cmdr. Dave Miller</span>
+              <span class="preset-role"><i class="fa-solid fa-shield-cat"></i> Security Chief</span>
+            </div>
+            <i class="fa-solid fa-chevron-right preset-arrow"></i>
+          </button>
+        </div>
+      </div>
+
+      <div class="login-footer">
+        <div class="sys-metric"><i class="fa-solid fa-signal text-emerald"></i> VPS Node Grid: ONLINE</div>
+        <div class="sys-metric"><i class="fa-solid fa-satellite text-cyan"></i> ECEF Pose Solver: READY</div>
+      </div>
+    </div>
+  </div>
+
   <div class="admin-wrapper">
     <!-- Sidebar Navigation -->
     <aside class="sidebar">
@@ -164,13 +276,16 @@
             <i class="fa-solid fa-moon" id="theme-icon"></i>
           </div>
 
-          <!-- User Profile -->
-          <div class="user-profile">
-            <div class="avatar">SA</div>
+          <!-- User Profile & Logout -->
+          <div class="user-profile" title="Active Admin Session">
+            <div class="avatar" id="header-user-avatar">SA</div>
             <div class="user-info">
-              <span class="user-name">Sinthujan A.</span>
-              <span class="user-role">Super Admin</span>
+              <span class="user-name" id="header-user-name">Sinthujan A.</span>
+              <span class="user-role" id="header-user-role">Super Admin</span>
             </div>
+            <button class="btn-logout" onclick="NavCoreApp.logout()" title="Logout of Spatial Ops Hub">
+              <i class="fa-solid fa-right-from-bracket"></i>
+            </button>
           </div>
         </div>
       </header>
