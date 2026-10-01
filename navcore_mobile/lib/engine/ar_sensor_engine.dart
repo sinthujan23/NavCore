@@ -226,3 +226,39 @@ class ARSensorEngine {
     return 'NW';
   }
 }
+
+/// IndoorAtlas-Style Barometric Elevation Engine
+class BarometricElevationEngine {
+  double? _entranceBaselinePressureHpa;
+  double _entranceAnchorHeightMeters = 45.0;
+
+  bool get isCalibrated => _entranceBaselinePressureHpa != null;
+  double? get baselinePressure => _entranceBaselinePressureHpa;
+
+  /// Calibrate reference baseline pressure at building entrance or anchor point
+  void calibrateBaseline(double currentPressureHpa, [double baseHeightMeters = 45.0]) {
+    if (currentPressureHpa > 0 && !currentPressureHpa.isNaN && !currentPressureHpa.isInfinite) {
+      _entranceBaselinePressureHpa = currentPressureHpa;
+      _entranceAnchorHeightMeters = baseHeightMeters;
+    }
+  }
+
+  /// Calculates real-time height in meters using relative hypsometric equation
+  double calculateAbsoluteHeight(double currentPressureHpa) {
+    if (currentPressureHpa <= 0 || currentPressureHpa.isNaN || currentPressureHpa.isInfinite) {
+      return _entranceAnchorHeightMeters;
+    }
+
+    if (_entranceBaselinePressureHpa == null || _entranceBaselinePressureHpa == 0) {
+      // Standard sea level fallback formula (1013.25 hPa)
+      return 44330.0 * (1.0 - math.pow(currentPressureHpa / 1013.25, 0.1903));
+    }
+
+    // Relative height delta (m) from calibrated baseline pressure
+    double deltaMeters = 44330.0 *
+        (1.0 - math.pow(currentPressureHpa / _entranceBaselinePressureHpa!, 0.1903));
+
+    return _entranceAnchorHeightMeters + deltaMeters;
+  }
+}
+

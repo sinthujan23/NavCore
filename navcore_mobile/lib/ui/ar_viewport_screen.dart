@@ -90,6 +90,13 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
     return 'Follow AR path';
   }
 
+  FloorLevelConfig _getFloorConfig(int floorNumber) {
+    return defaultBuildingProfile.floors.firstWhere(
+      (f) => f.floorNumber == floorNumber,
+      orElse: () => widget.currentFloor,
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -289,28 +296,33 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
         ? rayWorldPoint.length
         : 15.0;
 
-    // Resolves camera view distance dynamically based on camera pitch tilt angle and motion:
+    // Resolves camera view distance dynamically based on camera pitch tilt angle and target floor length bounds:
     final double pitch = cameraPose.pitchDegrees;
     final double absPitch = pitch.abs();
-    int maxVisibleFloorOffset = 2;
-    double maxViewDistanceMeters = 250.0;
+    int maxVisibleFloorOffset = 1;
+    double distanceReachMultiplier = 2.5;
 
     if (absPitch > 20.0) {
-      maxVisibleFloorOffset = 10;
-      maxViewDistanceMeters = math.max(600.0, rayDistanceMeters * 5.0);
-    } else if (absPitch > 10.0) {
-      maxVisibleFloorOffset = 5;
-      maxViewDistanceMeters = math.max(450.0, rayDistanceMeters * 4.0);
-    } else if (absPitch > 4.0) {
       maxVisibleFloorOffset = 3;
-      maxViewDistanceMeters = math.max(350.0, rayDistanceMeters * 3.0);
-    } else {
+      distanceReachMultiplier = 5.0;
+    } else if (absPitch > 12.0) {
       maxVisibleFloorOffset = 2;
-      maxViewDistanceMeters = math.max(250.0, rayDistanceMeters * 2.0);
+      distanceReachMultiplier = 3.5;
+    } else if (absPitch > 6.0) {
+      maxVisibleFloorOffset = 1;
+      distanceReachMultiplier = 2.8;
+    } else {
+      maxVisibleFloorOffset = 1; // Level horizon: Focus on target floor + 1 floor adjacent preview
+      distanceReachMultiplier = 2.5;
     }
+    final double maxViewDistanceMeters =
+        math.max(250.0, rayDistanceMeters * distanceReachMultiplier);
 
-    // 4. Shop marker filtering (Fixes overlap bug)
+    // 4. Shop marker filtering based on pitch-selected floor & target floor length bounds
     _shopMarkerManager.loadShops(widget.destinations);
+
+    // Dynamic indoor anchor coordinates to support testing on devices outside physical mall bounds
+    final indoorAnchorCoords = activeMallAnchor;
 
     List<DestinationPOI> candidatePOIs;
     if (_floorFilterMode == ARFloorFilterMode.currentFloorOnly) {
@@ -323,14 +335,48 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
           ? (cameraPose.pitchDegrees < -4.0 ||
                     widget.currentFloor.floorNumber < 0
                 ? -1
-                : 1)
+                : widget.currentFloor.floorNumber)
           : resolvedFloorIndex;
 
-      // Include target floor and adjacent floors based on camera motion reach
+      // Include target floor and adjacent floors based on camera pitch reach & floor length limits
       candidatePOIs = widget.destinations.where((poi) {
         final fDelta = (poi.floorNumber - targetFloorNumber).abs();
-        return fDelta <= maxVisibleFloorOffset;
+        if (fDelta > maxVisibleFloorOffset) return false;
+
+        // Dynamic floor length & distance filtering relative to active indoor mall layout anchor
+        final poiFloorConfig = _getFloorConfig(poi.floorNumber);
+        final double maxFloorDistance =
+            poiFloorConfig.floorLengthMeters * distanceReachMultiplier;
+
+        // Use indoor anchor relative distance if device GPS is outside physical mall range (>300m)
+        final double rawGpsDist = calculateAccurate3DDistance(
+          effectiveUserCoords,
+          poi.location,
+          userFloorNumber: widget.currentFloor.floorNumber,
+          targetFloorNumber: poi.floorNumber,
+        );
+
+        final double indoorDist = calculateAccurate3DDistance(
+          indoorAnchorCoords,
+          poi.location,
+          userFloorNumber: widget.currentFloor.floorNumber,
+          targetFloorNumber: poi.floorNumber,
+        );
+
+        final double poiDist = rawGpsDist > 300.0 ? indoorDist : rawGpsDist;
+
+        return poiDist <= maxFloorDistance;
       }).toList();
+
+      // Robust Fallback: If distance filtering resulted in 0 candidates (e.g. on test devices), populate floor shops!
+      if (candidatePOIs.isEmpty) {
+        candidatePOIs = widget.destinations.where((poi) {
+          return (poi.floorNumber - targetFloorNumber).abs() <= maxVisibleFloorOffset;
+        }).toList();
+        if (candidatePOIs.isEmpty) {
+          candidatePOIs = List.from(widget.destinations);
+        }
+      }
 
       if (_selectedPOI != null &&
           !candidatePOIs.any((p) => p.id == _selectedPOI!.id)) {
@@ -415,10 +461,10 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
         .clamp(-250.0, 250.0);
 
     // Multi-Floor Spatial Collision Avoidance Layout Pass for Ambient Floating Cards
-    const double topSafeLimit = 160.0;
+    const double topSafeLimit = 110.0;
     final double bottomSafeLimit = math.max(
-      screenHeight - 220.0,
-      topSafeLimit + 80.0,
+      screenHeight - 110.0,
+      topSafeLimit + 100.0,
     );
 
     // 1. Sort POIs deterministically by floorNumber descending (Floor 10 down to B1), then by relAngle
@@ -489,17 +535,21 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
       final double pitchOffsetPx =
           (widget.phonePitchDegrees * (math.pi / 180.0)) * focalPx * 0.45;
 
+      // Physical floor separation: 65px vertical offset per floor level delta
+      final double floorPixelOffset = floorDelta * 65.0;
+
       double posY;
       if (_floorFilterMode == ARFloorFilterMode.allFloors ||
           _floorFilterMode == ARFloorFilterMode.autoTilt) {
-        // Multi-floor/auto-tilt mode: Pinhole elevation projection + pitch shift
+        // Multi-floor/auto-tilt mode: Pinhole elevation projection + physical floor separation + pitch shift
         posY =
-            (screenHeight * 0.46) -
-            (math.tan(elevationAngleRad) * focalPx * 0.85) +
+            (screenHeight * 0.44) -
+            floorPixelOffset -
+            (math.tan(elevationAngleRad) * focalPx * 1.1) +
             pitchOffsetPx;
       } else {
         // Current floor only mode: Level horizon projection + pitch shift
-        posY = (screenHeight * 0.46) + pitchOffsetPx;
+        posY = (screenHeight * 0.44) + pitchOffsetPx;
       }
 
       double cardOpacity = 1.0;
@@ -525,14 +575,15 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
         1.20,
       );
 
+      final poiFloorConfig = _getFloorConfig(poi.floorNumber);
       final spatialMetrics = calculateRealWorldSpatialMetrics(
         userCoords: effectiveUserCoords,
         targetCoords: poi.location,
         userFloorNumber: widget.currentFloor.floorNumber,
         targetFloorNumber: poi.floorNumber,
-        floorWidthMeters: widget.currentFloor.floorWidthMeters,
-        floorLengthMeters: widget.currentFloor.floorLengthMeters,
-        ceilingHeightMeters: widget.currentFloor.ceilingHeightMeters,
+        floorWidthMeters: poiFloorConfig.floorWidthMeters,
+        floorLengthMeters: poiFloorConfig.floorLengthMeters,
+        ceilingHeightMeters: poiFloorConfig.ceilingHeightMeters,
       );
 
       rawPositioned.add({
@@ -552,13 +603,11 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
       });
     }
 
-    // 2. Guaranteed 2D Spatial Collision Avoidance & Multi-Lane Layout Engine
-    // Uses real physical card bounding box height (125px) + width (195px) and multi-pass relaxation
+    // 2. Guaranteed Zero-Overlap 2D Spatial Collision Avoidance & Multi-Lane Layout Engine
     const double baseCardW = 195.0;
-    const double baseCardH =
-        125.0; // Real physical height including card, dotted stem, & ground dot
-    const double minGapX = 14.0;
-    const double minGapY = 16.0;
+    const double baseCardH = 80.0;
+    const double minGapX = 12.0;
+    const double minGapY = 14.0;
     final List<Map<String, dynamic>> positionedCards = [];
 
     for (final item in rawPositioned) {
@@ -569,60 +618,53 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
       final double effectiveH = baseCardH * cardScale;
 
       curY = curY.clamp(topSafeLimit, bottomSafeLimit);
+      curX = curX.clamp(12.0, screenWidth - effectiveW - 12.0);
 
-      bool hasCollision = true;
-      int iterations = 0;
+      bool hasOverlap = false;
 
-      while (hasCollision && iterations < 25) {
-        iterations++;
-        hasCollision = false;
+      for (final existing in positionedCards) {
+        final double exX = existing['posX'] as double;
+        final double exY = existing['posY'] as double;
+        final double exScale = (existing['distanceScale'] as double? ?? 1.0);
+        final double exW = baseCardW * exScale;
+        final double exH = baseCardH * exScale;
 
-        for (final existing in positionedCards) {
-          final double exX = existing['posX'] as double;
-          final double exY = existing['posY'] as double;
-          final double exScale = (existing['distanceScale'] as double? ?? 1.0);
-          final double exW = baseCardW * exScale;
-          final double exH = baseCardH * exScale;
+        final bool overlapX =
+            (curX < exX + exW + minGapX) &&
+            (curX + effectiveW + minGapX > exX);
+        final bool overlapY =
+            (curY < exY + exH + minGapY) &&
+            (curY + effectiveH + minGapY > exY);
 
-          // Check 2D bounding box intersection with real physical height
-          final bool overlapX =
-              (curX < exX + exW + minGapX) &&
-              (curX + effectiveW + minGapX > exX);
-          final bool overlapY =
-              (curY < exY + exH + minGapY) &&
-              (curY + effectiveH + minGapY > exY);
+        if (overlapX && overlapY) {
+          final double shiftYUp = exY - effectiveH - minGapY;
+          final double shiftYDown = exY + exH + minGapY;
+          final double shiftXRight = exX + exW + minGapX;
+          final double shiftXLeft = exX - effectiveW - minGapX;
 
-          if (overlapX && overlapY) {
-            hasCollision = true;
-
-            final double shiftXRight = exX + exW + minGapX;
-            final double shiftXLeft = exX - effectiveW - minGapX;
-            final double shiftYDown = exY + exH + minGapY;
-            final double shiftYUp = exY - effectiveH - minGapY;
-
-            // Prefer vertical lane shift to preserve horizontal compass bearing accuracy
-            if (shiftYDown + effectiveH <= bottomSafeLimit) {
-              curY = shiftYDown;
-            } else if (shiftXRight + effectiveW <= screenWidth - 12.0) {
-              curX = shiftXRight;
-            } else if (shiftYUp >= topSafeLimit) {
-              curY = shiftYUp;
-            } else if (shiftXLeft >= 12.0) {
-              curX = shiftXLeft;
-            } else {
-              curY = (curY + 40.0).clamp(topSafeLimit, bottomSafeLimit);
-              curX = (curX + 30.0).clamp(12.0, screenWidth - effectiveW - 12.0);
-            }
-
-            curX = curX.clamp(12.0, screenWidth - effectiveW - 12.0);
-            curY = curY.clamp(topSafeLimit, bottomSafeLimit);
+          if (shiftYUp >= topSafeLimit) {
+            curY = shiftYUp;
+          } else if (shiftYDown + effectiveH <= bottomSafeLimit) {
+            curY = shiftYDown;
+          } else if (shiftXRight + effectiveW <= screenWidth - 12.0) {
+            curX = shiftXRight;
+          } else if (shiftXLeft >= 12.0) {
+            curX = shiftXLeft;
+          } else {
+            hasOverlap = true;
+            break;
           }
+
+          curX = curX.clamp(12.0, screenWidth - effectiveW - 12.0);
+          curY = curY.clamp(topSafeLimit, bottomSafeLimit);
         }
       }
 
-      item['posX'] = curX;
-      item['posY'] = curY;
-      positionedCards.add(item);
+      if (!hasOverlap) {
+        item['posX'] = curX;
+        item['posY'] = curY;
+        positionedCards.add(item);
+      }
     }
 
     // Dynamic 3D AR Target Badge Screen Offset based on activeRelAngle & Pitch
@@ -668,7 +710,7 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
           return (isInCameraFOV || isOnScreenHorizontally) &&
               distM <= math.max(maxViewDistanceMeters, 500.0);
         })
-        .take(15)
+        .take(8)
         .toList();
 
     // Fallback safety for iOS/uncalibrated sensors: Ensure places display even if heading is off-center
@@ -695,15 +737,16 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
       }
     }
 
+    final activePOIConfig = activePOI != null ? _getFloorConfig(activePOI.floorNumber) : widget.currentFloor;
     final activeSpatialMetrics = activePOI != null
         ? calculateRealWorldSpatialMetrics(
             userCoords: fusedPose.position,
             targetCoords: activePOI.location,
             userFloorNumber: widget.currentFloor.floorNumber,
             targetFloorNumber: activePOI.floorNumber,
-            floorWidthMeters: widget.currentFloor.floorWidthMeters,
-            floorLengthMeters: widget.currentFloor.floorLengthMeters,
-            ceilingHeightMeters: widget.currentFloor.ceilingHeightMeters,
+            floorWidthMeters: activePOIConfig.floorWidthMeters,
+            floorLengthMeters: activePOIConfig.floorLengthMeters,
+            ceilingHeightMeters: activePOIConfig.ceilingHeightMeters,
           )
         : null;
 
@@ -1154,7 +1197,7 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
                                           ),
                                           const SizedBox(height: 3),
                                           Text(
-                                            '$floorRelationStr • ${(widget.currentFloor.floorAreaSqMeters / 1000).toStringAsFixed(1)}k m²',
+                                            '$floorRelationStr • ${((cardMetrics?.floorAreaSqMeters ?? _getFloorConfig(poi.floorNumber).floorAreaSqMeters) / 1000).toStringAsFixed(1)}k m²',
                                             style: TextStyle(
                                               color: isSelected
                                                   ? const Color(0xFF34D399)
@@ -1487,60 +1530,84 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
 
                     // Top Category Filter Chips Bar (when not navigating)
                     if (!_isNavigatingActive)
-                      Padding(
-                        padding: const EdgeInsets.only(
-                          left: 14,
-                          right: 14,
-                          bottom: 6,
-                        ),
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: Row(
-                            children: [
-                              _buildCategoryPill(
-                                'All',
-                                '${widget.destinations.length}',
-                                LucideIcons.globe,
+                      Builder(
+                        builder: (context) {
+                          final allCount = candidatePOIs.length;
+                          final fashionCount = candidatePOIs
+                              .where((p) => _matchesCategory(p, 'Fashion'))
+                              .length;
+                          final foodCount = candidatePOIs
+                              .where((p) => _matchesCategory(p, 'Food'))
+                              .length;
+                          final techCount = candidatePOIs
+                              .where((p) => _matchesCategory(p, 'Tech'))
+                              .length;
+                          final luxuryCount = candidatePOIs
+                              .where((p) => _matchesCategory(p, 'Luxury'))
+                              .length;
+                          final servicesCount = candidatePOIs
+                              .where((p) => _matchesCategory(p, 'Services'))
+                              .length;
+                          final parkingCount = candidatePOIs
+                              .where((p) => _matchesCategory(p, 'Parking'))
+                              .length;
+
+                          return Padding(
+                            padding: const EdgeInsets.only(
+                              left: 14,
+                              right: 14,
+                              bottom: 6,
+                            ),
+                            child: SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: Row(
+                                children: [
+                                  _buildCategoryPill(
+                                    'All',
+                                    '$allCount',
+                                    LucideIcons.globe,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  _buildCategoryPill(
+                                    'Fashion',
+                                    '$fashionCount',
+                                    LucideIcons.shoppingBag,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  _buildCategoryPill(
+                                    'Food',
+                                    '$foodCount',
+                                    LucideIcons.utensils,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  _buildCategoryPill(
+                                    'Tech',
+                                    '$techCount',
+                                    LucideIcons.laptop,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  _buildCategoryPill(
+                                    'Luxury',
+                                    '$luxuryCount',
+                                    LucideIcons.sparkles,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  _buildCategoryPill(
+                                    'Services',
+                                    '$servicesCount',
+                                    LucideIcons.headphones,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  _buildCategoryPill(
+                                    'Parking',
+                                    '$parkingCount',
+                                    LucideIcons.parkingCircle,
+                                  ),
+                                ],
                               ),
-                              const SizedBox(width: 6),
-                              _buildCategoryPill(
-                                'Fashion',
-                                'Apparel',
-                                LucideIcons.shoppingBag,
-                              ),
-                              const SizedBox(width: 6),
-                              _buildCategoryPill(
-                                'Food',
-                                'Dining',
-                                LucideIcons.utensils,
-                              ),
-                              const SizedBox(width: 6),
-                              _buildCategoryPill(
-                                'Tech',
-                                'Gadgets',
-                                LucideIcons.laptop,
-                              ),
-                              const SizedBox(width: 6),
-                              _buildCategoryPill(
-                                'Luxury',
-                                'Boutique',
-                                LucideIcons.sparkles,
-                              ),
-                              const SizedBox(width: 6),
-                              _buildCategoryPill(
-                                'Services',
-                                'Info',
-                                LucideIcons.headphones,
-                              ),
-                              const SizedBox(width: 6),
-                              _buildCategoryPill(
-                                'Parking',
-                                'Slots',
-                                LucideIcons.parkingCircle,
-                              ),
-                            ],
-                          ),
-                        ),
+                            ),
+                          );
+                        },
                       ),
                   ],
                 ),

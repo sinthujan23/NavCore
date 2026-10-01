@@ -37,6 +37,7 @@ class RealSensorService {
   StreamSubscription<Position>? _positionSubscription;
   StreamSubscription<MagnetometerEvent>? _magnetometerSubscription;
   StreamSubscription<AccelerometerEvent>? _accelerometerSubscription;
+  StreamSubscription<BarometerEvent>? _barometerSubscription;
 
   GeodeticCoords? _lastCoords;
   double _lastAccuracyMeters = 0.0;
@@ -44,6 +45,9 @@ class RealSensorService {
   DateTime? _lastFixTime;
 
   double _accelX = 0, _accelY = 0, _accelZ = 9.8;
+  double _rawPressureHpa = 1013.25;
+  double _smoothedPressureHpa = 1013.25;
+  final double _baroAlpha = 0.15; // Low-pass filter smoothing coefficient for atmospheric pressure
 
   bool _isGpsPermissionGranted = false;
   bool _isCameraPermissionGranted = false;
@@ -51,6 +55,7 @@ class RealSensorService {
   GeodeticCoords? get lastCoords => _lastCoords;
   double get lastAccuracy => _lastAccuracyMeters;
   double get currentHeading => _currentHeadingDegrees;
+  double get currentPressure => _smoothedPressureHpa;
   bool get isGpsGranted => _isGpsPermissionGranted;
   bool get isCameraGranted => _isCameraPermissionGranted;
 
@@ -141,6 +146,7 @@ class RealSensorService {
     required Function(GeodeticCoords coords, double accuracyMeters) onLocationUpdated,
     required Function(double headingDegrees) onHeadingUpdated,
     Function(double pitchDegrees, PitchTiltDirection tiltDirection)? onPitchUpdated,
+    Function(double rawPressureHpa, double smoothedPressureHpa)? onPressureUpdated,
   }) {
     stopHardwareStreams();
 
@@ -254,6 +260,25 @@ class RealSensorService {
         onHeadingUpdated(headingDeg);
       }
     });
+
+    // 4. Barometer Stream for Barometric Altitude & Indoor Floor Resolution
+    _barometerSubscription = barometerEventStream(
+      samplingPeriod: const Duration(milliseconds: 100),
+    ).listen((BarometerEvent event) {
+      double rawPressure = event.pressure;
+      if (rawPressure.isNaN || rawPressure.isInfinite || rawPressure <= 0) return;
+
+      _rawPressureHpa = rawPressure;
+      _smoothedPressureHpa = (_baroAlpha * rawPressure) + ((1.0 - _baroAlpha) * _smoothedPressureHpa);
+
+      if (onPressureUpdated != null) {
+        onPressureUpdated(_rawPressureHpa, _smoothedPressureHpa);
+      }
+    }, onError: (err) {
+      if (kDebugMode) {
+        print('Barometer hardware error or sensor unavailable: $err');
+      }
+    });
   }
 
   void stopHardwareStreams() {
@@ -265,5 +290,8 @@ class RealSensorService {
 
     _magnetometerSubscription?.cancel();
     _magnetometerSubscription = null;
+
+    _barometerSubscription?.cancel();
+    _barometerSubscription = null;
   }
 }
