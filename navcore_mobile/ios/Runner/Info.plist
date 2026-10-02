@@ -32,6 +32,8 @@
 	<string>NexNav requires location access to navigate complex multi-story building floor maps.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>NexNav requires camera access for AR navigation mode and scanning PnP entrance nodes.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>NexNav requires motion sensor access to track device orientation, camera tilt pitch, step counts, and indoor AR direction guidance.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
