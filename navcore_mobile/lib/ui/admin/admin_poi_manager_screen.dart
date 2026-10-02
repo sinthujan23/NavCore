@@ -706,11 +706,11 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF2563EB),
+                    color: const Color(0xFF0F172A),
                     borderRadius: BorderRadius.circular(20),
                     boxShadow: [
                       BoxShadow(
-                        color: const Color(0xFF2563EB).withValues(alpha: 0.35),
+                        color: const Color(0xFF0F172A).withValues(alpha: 0.25),
                         blurRadius: 10,
                         offset: const Offset(0, 4),
                       ),
