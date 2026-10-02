@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'ecef_engine.dart';
+import 'floor_tracker.dart';
 
 /// NexNav Bearing & AR Spatial Placement Engine in Dart
 /// Implements Section 5 of NexNav Technical Spec
@@ -189,5 +190,33 @@ RealWorldSpatialMetrics calculateRealWorldSpatialMetrics({
     floorLengthMeters: floorLengthMeters,
     floorAreaSqMeters: floorWidthMeters * floorLengthMeters,
     ceilingHeightMeters: ceilingHeightMeters,
+  );
+}
+
+/// Calculates precise 3D spatial height metrics for POIs sharing identical Lat/Lon coordinates
+RealWorldSpatialMetrics calculateSameCoordinateSpatialMetrics({
+  required GeodeticCoords userCoords,
+  required GeodeticCoords poiCoords,
+  required int userFloorNumber,
+  required int poiFloorNumber,
+  required FloorLevelConfig userFloorConfig,
+  required FloorLevelConfig poiFloorConfig,
+}) {
+  final d2D = haversineDistance(userCoords, poiCoords);
+  // Floor elevation delta Δh derived from target vs user absolute floor height specs
+  final deltaH = poiFloorConfig.absoluteHeightMeters - userFloorConfig.absoluteHeightMeters;
+  final d3D = sqrt(d2D * d2D + deltaH * deltaH);
+  final distanceFromGround = poiFloorConfig.absoluteHeightMeters - 45.0; // 45.0m ground base anchor
+
+  return RealWorldSpatialMetrics(
+    horizontalHaversineDistMeters: d2D,
+    elevationDeltaMeters: deltaH,
+    euclidean3DDistanceMeters: d3D,
+    distanceFromGroundMeters: distanceFromGround,
+    estimatedWalkTimeSeconds: d3D / 1.4,
+    floorWidthMeters: poiFloorConfig.floorWidthMeters,
+    floorLengthMeters: poiFloorConfig.floorLengthMeters,
+    floorAreaSqMeters: poiFloorConfig.floorAreaSqMeters,
+    ceilingHeightMeters: poiFloorConfig.ceilingHeightMeters,
   );
 }

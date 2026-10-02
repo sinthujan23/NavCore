@@ -243,6 +243,59 @@ class ParkingService extends ChangeNotifier {
         myVehicle.status == 'parked';
   }
 
+  Map<String, List<ParkingSlot>> get allFloorSlots => _floorSlots;
+
+  /// Dynamically load and generate parking bay grid layouts anchored at a specific Mall Map package's geodetic location
+  void loadLayoutForMallMetadata({
+    required String mallId,
+    required double baseLat,
+    required double baseLon,
+    int basementFloors = 2,
+  }) {
+    _floorSlots.clear();
+
+    final int numBasements = basementFloors > 0 ? basementFloors : 2;
+
+    for (int b = numBasements; b >= 1; b--) {
+      final String floorId = 'B$b';
+      final double height = 45.0 - (b * 5.0);
+      _floorSlots[floorId] = _generateGridSlots(
+        floorId: floorId,
+        baseHeight: height,
+        rows: 6,
+        cols: 4,
+        sections: ['A', 'B'],
+        baseLat: baseLat - (b * 0.0002),
+        baseLon: baseLon - (b * 0.0002),
+      );
+    }
+
+    // Ground Floor / VIP Surface Parking
+    _floorSlots['GF'] = _generateGridSlots(
+      floorId: 'GF',
+      baseHeight: 45.0,
+      rows: 3,
+      cols: 4,
+      sections: ['P'],
+      baseLat: baseLat + 0.0001,
+      baseLon: baseLon + 0.0001,
+    );
+
+    _slotStreamController.add(_floorSlots);
+    notifyListeners();
+  }
+
+  /// Reset all slots across all floors for active mall map to FREE status
+  void resetAllSlotsToFree() {
+    for (final slots in _floorSlots.values) {
+      for (final slot in slots) {
+        slot.status = ParkingSlotStatus.free;
+      }
+    }
+    _slotStreamController.add(_floorSlots);
+    notifyListeners();
+  }
+
   /// Initialize Parking Layout Grids for B2, B1, and Ground Floor
   void _initializeMockParkingLayouts() {
     const baseLat = 6.927079;

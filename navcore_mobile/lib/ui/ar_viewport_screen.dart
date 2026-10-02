@@ -463,7 +463,7 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
     // Multi-Floor Spatial Collision Avoidance Layout Pass for Ambient Floating Cards
     const double topSafeLimit = 110.0;
     final double bottomSafeLimit = math.max(
-      screenHeight - 110.0,
+      screenHeight - 140.0,
       topSafeLimit + 100.0,
     );
 
@@ -479,10 +479,21 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
         return bearingA.compareTo(bearingB);
       });
 
+    // 3D Perspective Camera Projection & Motion Tracking Engine
+    final double hFovRad = (65.0 * math.pi) / 180.0;
+    final double focalPx = (screenWidth / 2.0) / math.tan(hFovRad / 2.0);
+    const double cardWidth = 195.0;
+    const double cardHeight = 80.0;
+
+    final double headingRad = (fusedPose.headingDegrees * math.pi) / 180.0;
+    final double pitchRad = (widget.phonePitchDegrees * math.pi) / 180.0;
+
     final List<Map<String, dynamic>> rawPositioned = [];
 
     for (int i = 0; i < sortedPOIs.length; i++) {
       final poi = sortedPOIs[i];
+      final poiFloorConfig = _getFloorConfig(poi.floorNumber);
+
       final shopENU = _floorPointCalculator.calculateShopENUVector(
         userCoords: effectiveUserCoords,
         shopCoords: poi.location,
@@ -490,12 +501,18 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
         shopFloorNumber: poi.floorNumber,
       );
 
+      final double east = shopENU.x;
+      final double north = shopENU.z;
+      final double deltaUpMeters =
+          poiFloorConfig.absoluteHeightMeters - widget.currentFloor.absoluteHeightMeters;
+
       int distM = calculateAccurate3DDistance(
         effectiveUserCoords,
         poi.location,
         userFloorNumber: widget.currentFloor.floorNumber,
         targetFloorNumber: poi.floorNumber,
       ).round();
+
       final bearing = calculateBearingAngle(effectiveUserCoords, poi.location);
       final directionStr = _getCardinalDirection(bearing);
 
@@ -507,50 +524,39 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
         relAngle += 360;
       }
 
-      // Accurate Optical Perspective Camera Pinhole Projection (65° Horizontal FOV)
-      final double hFovRad = (65.0 * math.pi) / 180.0;
-      final double focalPx = (screenWidth / 2.0) / math.tan(hFovRad / 2.0);
-      final double relAngleRad = (relAngle * math.pi) / 180.0;
+      // 1. Transform ENU vector to Horizontal Camera Space (forwardH, rightH, upH)
+      final double forwardH = east * math.sin(headingRad) + north * math.cos(headingRad);
+      final double rightH = east * math.cos(headingRad) - north * math.sin(headingRad);
+      final double upH = deltaUpMeters;
 
-      // True optical pinhole X projection: X = (ScreenWidth / 2 - CardWidth / 2) + tan(relAngle) * focalPx
-      const double cardWidth = 195.0;
-      double posX =
-          (screenWidth / 2.0 - cardWidth / 2.0) +
-          (math.tan(relAngleRad.clamp(-1.25, 1.25)) * focalPx);
+      // 2. Rotate by Phone Pitch around camera Right axis
+      // When pitch > 0 (tilting UP towards ceiling), forward looking ray tilts up into sky
+      final double zCam = forwardH * math.cos(pitchRad) + upH * math.sin(pitchRad);
+      final double yCam = upH * math.cos(pitchRad) - forwardH * math.sin(pitchRad);
+      final double xCam = rightH;
 
-      // Real 3D Geometric Vertical Projection incorporating floor elevation delta Δh & distance d_2D:
-      final double floorDelta =
-          (poi.floorNumber - widget.currentFloor.floorNumber).toDouble();
-      final double floorHeightGap = widget.currentFloor.ceilingHeightMeters > 0
-          ? widget.currentFloor.ceilingHeightMeters
-          : 4.8;
-      final double elevationDeltaMeters = floorDelta * floorHeightGap;
-      final double horizontalDistMeters = math.max(distM.toDouble(), 4.0);
+      // Cull points behind or too close to camera plane (zCam < 0.5m)
+      if (zCam < 0.5) continue;
 
-      // Elevation pitch angle: theta = atan(Δh / d_2D)
-      final double elevationAngleRad = math.atan2(
-        elevationDeltaMeters,
-        horizontalDistMeters,
-      );
-      final double pitchOffsetPx =
-          (widget.phonePitchDegrees * (math.pi / 180.0)) * focalPx * 0.45;
+      // 3. Pinhole Projection to Viewport Coordinates
+      final double rawScreenX =
+          (screenWidth / 2.0) + (xCam / zCam) * focalPx - (cardWidth / 2.0);
+      final double rawScreenY =
+          (screenHeight / 2.0) - (yCam / zCam) * focalPx - (cardHeight / 2.0);
 
-      // Physical floor separation: 65px vertical offset per floor level delta
-      final double floorPixelOffset = floorDelta * 65.0;
+      // CULLING CHECK: Strict Viewport Bound Filtering & Distance Reach Limit
+      final bool isWithinMaxDistance = distM <= maxViewDistanceMeters;
+      final bool isVisibleOnScreen =
+          isWithinMaxDistance &&
+          rawScreenX >= -cardWidth + 20.0 &&
+          rawScreenX <= screenWidth - 20.0 &&
+          rawScreenY >= (topSafeLimit - 30.0) &&
+          rawScreenY <= (bottomSafeLimit + 30.0);
 
-      double posY;
-      if (_floorFilterMode == ARFloorFilterMode.allFloors ||
-          _floorFilterMode == ARFloorFilterMode.autoTilt) {
-        // Multi-floor/auto-tilt mode: Pinhole elevation projection + physical floor separation + pitch shift
-        posY =
-            (screenHeight * 0.44) -
-            floorPixelOffset -
-            (math.tan(elevationAngleRad) * focalPx * 1.1) +
-            pitchOffsetPx;
-      } else {
-        // Current floor only mode: Level horizon projection + pitch shift
-        posY = (screenHeight * 0.44) + pitchOffsetPx;
-      }
+      final isTargetPOI = activePOI?.id == poi.id;
+
+      // Only include cards that fall within the camera viewport and max reach (or active navigation target)
+      if (!isVisibleOnScreen && !isTargetPOI) continue;
 
       double cardOpacity = 1.0;
       bool isPitchFocused = true;
@@ -575,15 +581,13 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
         1.20,
       );
 
-      final poiFloorConfig = _getFloorConfig(poi.floorNumber);
-      final spatialMetrics = calculateRealWorldSpatialMetrics(
+      final spatialMetrics = calculateSameCoordinateSpatialMetrics(
         userCoords: effectiveUserCoords,
-        targetCoords: poi.location,
+        poiCoords: poi.location,
         userFloorNumber: widget.currentFloor.floorNumber,
-        targetFloorNumber: poi.floorNumber,
-        floorWidthMeters: poiFloorConfig.floorWidthMeters,
-        floorLengthMeters: poiFloorConfig.floorLengthMeters,
-        ceilingHeightMeters: poiFloorConfig.ceilingHeightMeters,
+        poiFloorNumber: poi.floorNumber,
+        userFloorConfig: widget.currentFloor,
+        poiFloorConfig: poiFloorConfig,
       );
 
       rawPositioned.add({
@@ -592,9 +596,9 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
         'bearing': bearing,
         'directionStr': directionStr,
         'relAngle': relAngle,
-        'rawPosX': posX,
-        'posX': posX.clamp(12.0, screenWidth - 190.0),
-        'posY': posY.clamp(topSafeLimit, bottomSafeLimit),
+        'rawPosX': rawScreenX,
+        'posX': rawScreenX.clamp(12.0, screenWidth - cardWidth - 12.0),
+        'posY': rawScreenY.clamp(topSafeLimit, bottomSafeLimit),
         'cardOpacity': cardOpacity,
         'isPitchFocused': isPitchFocused,
         'distanceScale': distanceScaleFactor,
@@ -603,7 +607,7 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
       });
     }
 
-    // 2. Guaranteed Zero-Overlap 2D Spatial Collision Avoidance & Multi-Lane Layout Engine
+    // 2. Guaranteed Zero-Overlap 2D Spatial Collision Avoidance Engine
     const double baseCardW = 195.0;
     const double baseCardH = 80.0;
     const double minGapX = 12.0;
@@ -690,33 +694,7 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
       return (b['distM'] as int).compareTo(a['distM'] as int);
     });
 
-    // Camera Optical FOV Directional Visibility Filtering (~42° angle cone)
-    const double fovLimit = 60.0;
-
-    List<Map<String, dynamic>> visibleCardsInFOV = positionedCards
-        .where((data) {
-          final relAngle = (data['relAngle'] as double);
-          final distM = (data['distM'] as int);
-          final poi = (data['poi'] as DestinationPOI);
-          final isTarget = activePOI?.id == poi.id;
-
-          if (isTarget) return true;
-
-          final double rawPosX = data['rawPosX'] as double? ?? 0.0;
-          final bool isInCameraFOV = relAngle.isNaN || relAngle.isInfinite || relAngle.abs() <= fovLimit;
-          final bool isOnScreenHorizontally =
-              rawPosX >= -180.0 && rawPosX <= (screenWidth + 50.0);
-
-          return (isInCameraFOV || isOnScreenHorizontally) &&
-              distM <= math.max(maxViewDistanceMeters, 500.0);
-        })
-        .take(8)
-        .toList();
-
-    // Fallback safety for iOS/uncalibrated sensors: Ensure places display even if heading is off-center
-    if (visibleCardsInFOV.isEmpty && positionedCards.isNotEmpty) {
-      visibleCardsInFOV = positionedCards.take(8).toList();
-    }
+    List<Map<String, dynamic>> visibleCardsInFOV = positionedCards.take(8).toList();
 
     // Evaluate off-route compliance if active route is available
     if (_activeRoute != null && activePOI != null) {

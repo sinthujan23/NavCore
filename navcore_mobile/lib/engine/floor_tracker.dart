@@ -14,6 +14,8 @@ class FloorLevelConfig {
   final double floorWidthMeters;
   final double floorLengthMeters;
   final double ceilingHeightMeters;
+  final int osmLevel;
+  final double osmHeightMeters;
 
   const FloorLevelConfig({
     required this.floorId,
@@ -27,13 +29,26 @@ class FloorLevelConfig {
     this.floorWidthMeters = 120.0,
     this.floorLengthMeters = 85.0,
     this.ceilingHeightMeters = 4.5,
-  });
+    int? osmLevel,
+    double? osmHeightMeters,
+  })  : osmLevel = osmLevel ?? floorNumber,
+        osmHeightMeters = osmHeightMeters ?? relativeVectorMeters;
 
   /// Real-world floor surface area in square meters (m²)
   double get floorAreaSqMeters => floorWidthMeters * floorLengthMeters;
 
   /// Real-world floor perimeter in meters (m)
   double get perimeterMeters => 2 * (floorWidthMeters + floorLengthMeters);
+
+  /// Height difference relative to another target floor
+  double heightDeltaTo(FloorLevelConfig other) {
+    return absoluteHeightMeters - other.absoluteHeightMeters;
+  }
+
+  /// Evaluates whether a barometric altitude reading falls within this floor's band
+  bool isAltitudeWithinBand(double altitudeMeters) {
+    return altitudeMeters >= bandMinMeters && altitudeMeters < bandMaxMeters;
+  }
 }
 
 class BuildingElevationProfile {

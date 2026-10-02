@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:geolocator/geolocator.dart';
 
 import '../../data/destinations.dart';
 import '../../engine/ecef_engine.dart';
+import '../../engine/floor_tracker.dart';
+import 'admin_osm_map_screen.dart';
 
 class AdminPOIManagerScreen extends StatefulWidget {
   final List<DestinationPOI> destinations;
@@ -63,6 +66,74 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
     }).toList();
   }
 
+  Future<GeodeticCoords?> _getLiveGpsCoordinates(BuildContext context) async {
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('GPS Location service is disabled on device. Please enable location.'),
+              backgroundColor: Color(0xFFF59E0B),
+            ),
+          );
+        }
+        return null;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Location permission denied.'),
+                backgroundColor: Color(0xFFEF4444),
+              ),
+            );
+          }
+          return null;
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Location permission is permanently denied in settings.'),
+              backgroundColor: Color(0xFFEF4444),
+            ),
+          );
+        }
+        return null;
+      }
+
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 10),
+        ),
+      );
+
+      return GeodeticCoords(
+        latitude: position.latitude,
+        longitude: position.longitude,
+        height: position.altitude,
+      );
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error fetching GPS: $e'),
+            backgroundColor: const Color(0xFFEF4444),
+          ),
+        );
+      }
+      return null;
+    }
+  }
+
   void _showAddEditPoiModal([DestinationPOI? existingPoi]) {
     final isEditing = existingPoi != null;
     final nameController = TextEditingController(text: existingPoi?.name ?? '');
@@ -70,15 +141,34 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
         text: existingPoi?.category ?? 'RETAIL & FASHION');
     final descController =
         TextEditingController(text: existingPoi?.description ?? '');
-    final latController = TextEditingController(
-        text: existingPoi?.location.latitude.toString() ?? '6.927079');
-    final lngController = TextEditingController(
-        text: existingPoi?.location.longitude.toString() ?? '79.845612');
-    final heightController = TextEditingController(
-        text: existingPoi?.location.height.toString() ?? '45.0');
+
     int floorNumber = existingPoi?.floorNumber ?? 1;
+    double floorOffset(int flr) => flr < 0 ? (flr * 4.5) : ((flr - 1) * 4.5);
+
+    double activeBaseAltitude;
+    if (existingPoi != null) {
+      activeBaseAltitude = existingPoi.location.height - floorOffset(existingPoi.floorNumber);
+    } else if (widget.userCoords != null && widget.userCoords!.height != 0.0) {
+      activeBaseAltitude = widget.userCoords!.height;
+    } else {
+      activeBaseAltitude = 45.0;
+    }
+
+    final initialLat = existingPoi?.location.latitude ??
+        (widget.userCoords != null && widget.userCoords!.latitude != 0.0 ? widget.userCoords!.latitude : null);
+    final initialLng = existingPoi?.location.longitude ??
+        (widget.userCoords != null && widget.userCoords!.longitude != 0.0 ? widget.userCoords!.longitude : null);
+    final initialAlt = existingPoi?.location.height ?? (activeBaseAltitude + floorOffset(floorNumber));
+
+    final latController = TextEditingController(
+        text: initialLat != null ? initialLat.toStringAsFixed(6) : '');
+    final lngController = TextEditingController(
+        text: initialLng != null ? initialLng.toStringAsFixed(6) : '');
+    final heightController = TextEditingController(
+        text: initialAlt.toStringAsFixed(1));
     double rating = existingPoi?.rating ?? 4.5;
     String openStatus = existingPoi?.openStatus ?? 'Open Today: 10 AM - 10 PM';
+    bool isFetchingGps = false;
 
     showModalBottomSheet(
       context: context,
@@ -87,6 +177,32 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setModalState) {
+            void recalculateHeight() {
+              final double currentOffset = floorOffset(floorNumber);
+              final double computedHeight = activeBaseAltitude + currentOffset;
+              heightController.text = computedHeight.toStringAsFixed(1);
+            }
+
+            // Auto-fetch live device hardware GPS & barometer altitude if creating a new POI and initial coordinates are blank
+            if (!isEditing && (latController.text.isEmpty || lngController.text.isEmpty)) {
+              _getLiveGpsCoordinates(context).then((liveCoords) {
+                if (liveCoords != null && mounted) {
+                  setModalState(() {
+                    latController.text = liveCoords.latitude.toStringAsFixed(6);
+                    lngController.text = liveCoords.longitude.toStringAsFixed(6);
+                    final autoDetectedFloor = resolveFloorByHeight(liveCoords.height);
+                    floorNumber = autoDetectedFloor.floorNumber;
+                    activeBaseAltitude = liveCoords.height - floorOffset(floorNumber);
+                    recalculateHeight();
+                  });
+                }
+              });
+            }
+
+            final double currentOffset = floorOffset(floorNumber);
+            final String floorLabel = floorNumber < 0 ? 'B${floorNumber.abs()}' : 'Floor $floorNumber';
+            final String offsetStr = '${currentOffset >= 0 ? '+' : ''}${currentOffset.toStringAsFixed(1)}m';
+
             return Container(
               padding: EdgeInsets.only(
                 bottom: MediaQuery.of(context).viewInsets.bottom + 24,
@@ -190,6 +306,7 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
                               ),
                               const SizedBox(height: 4),
                               DropdownButtonFormField<int>(
+                                key: ValueKey('floor-dropdown-$floorNumber'),
                                 initialValue: floorNumber,
                                 isExpanded: true,
                                 dropdownColor: Colors.white,
@@ -218,6 +335,7 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
                                   if (val != null) {
                                     setModalState(() {
                                       floorNumber = val;
+                                      recalculateHeight();
                                     });
                                   }
                                 },
@@ -233,56 +351,214 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(
-                          'GEODETIC POSITION',
-                          style: GoogleFonts.plusJakartaSans(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
-                            color: const Color(0xFF64748B),
-                            letterSpacing: 0.5,
-                          ),
-                        ),
-                        if (widget.userCoords != null)
-                          InkWell(
-                            onTap: () {
-                              setModalState(() {
-                                latController.text = widget.userCoords!.latitude.toStringAsFixed(6);
-                                lngController.text = widget.userCoords!.longitude.toStringAsFixed(6);
-                                heightController.text = widget.userCoords!.height.toStringAsFixed(1);
-                              });
-                            },
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFEFF6FF),
-                                borderRadius: BorderRadius.circular(6),
-                                border: Border.all(color: const Color(0xFFBFDBFE)),
-                              ),
-                              child: Row(
-                                children: [
-                                  const Icon(LucideIcons.navigation, size: 12, color: Color(0xFF2563EB)),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    'USE REAL DEVICE GPS',
-                                    style: GoogleFonts.plusJakartaSans(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold,
-                                      color: const Color(0xFF2563EB),
-                                    ),
-                                  ),
-                                ],
-                              ),
+                        Flexible(
+                          child: Text(
+                            'GEODETIC POSITION',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w800,
+                              color: const Color(0xFF64748B),
+                              letterSpacing: 0.5,
                             ),
                           ),
-                      ],
-                    ),
+                        ),
+                        const SizedBox(width: 4),
+                        Flexible(
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                InkWell(
+                                  onTap: () {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (context) => AdminOSMMapScreen(
+                                          userCoords: widget.userCoords ?? const GeodeticCoords(latitude: 6.9175, longitude: 79.8530, height: 0.0),
+                                          destinations: _poiList,
+                                          isPickerMode: true,
+                                          onSelectCoordinates: (coords) {
+                                            setModalState(() {
+                                              latController.text = coords.latitude.toStringAsFixed(6);
+                                              lngController.text = coords.longitude.toStringAsFixed(6);
+                                            });
+                                          },
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFF0FDF4),
+                                      borderRadius: BorderRadius.circular(6),
+                                      border: Border.all(color: const Color(0xFFBBF7D0)),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        const Icon(LucideIcons.map, size: 12, color: Color(0xFF16A34A)),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          'PICK ON OSM MAP',
+                                          style: GoogleFonts.plusJakartaSans(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.bold,
+                                            color: const Color(0xFF16A34A),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              const SizedBox(width: 6),
+                              InkWell(
+                                onTap: isFetchingGps
+                                    ? null
+                                    : () async {
+                                        setModalState(() {
+                                          isFetchingGps = true;
+                                        });
+
+                                        final liveCoords = await _getLiveGpsCoordinates(context);
+
+                                        if (liveCoords != null) {
+                                          setModalState(() {
+                                            latController.text = liveCoords.latitude.toStringAsFixed(6);
+                                            lngController.text = liveCoords.longitude.toStringAsFixed(6);
+                                            final autoDetectedFloor = resolveFloorByHeight(liveCoords.height);
+                                            floorNumber = autoDetectedFloor.floorNumber;
+                                            activeBaseAltitude = liveCoords.height - floorOffset(floorNumber);
+                                            recalculateHeight();
+                                            isFetchingGps = false;
+                                          });
+                                          if (context.mounted) {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              SnackBar(
+                                                content: Text(
+                                                    'Live location tracked: ${liveCoords.latitude.toStringAsFixed(6)}, ${liveCoords.longitude.toStringAsFixed(6)} (Situated Floor $floorNumber, Alt: ${liveCoords.height.toStringAsFixed(1)}m)'),
+                                                backgroundColor: const Color(0xFF16A34A),
+                                                duration: const Duration(seconds: 3),
+                                              ),
+                                            );
+                                          }
+                                        } else if (widget.userCoords != null) {
+                                          setModalState(() {
+                                            latController.text = widget.userCoords!.latitude.toStringAsFixed(6);
+                                            lngController.text = widget.userCoords!.longitude.toStringAsFixed(6);
+                                            final autoDetectedFloor = resolveFloorByHeight(widget.userCoords!.height);
+                                            floorNumber = autoDetectedFloor.floorNumber;
+                                            activeBaseAltitude = widget.userCoords!.height - floorOffset(floorNumber);
+                                            recalculateHeight();
+                                            isFetchingGps = false;
+                                          });
+                                          if (context.mounted) {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              SnackBar(
+                                                content: Text('Loaded position from current active session (Floor $floorNumber).'),
+                                                backgroundColor: const Color(0xFF2563EB),
+                                                duration: const Duration(seconds: 2),
+                                              ),
+                                            );
+                                          }
+                                        } else {
+                                          setModalState(() {
+                                            isFetchingGps = false;
+                                          });
+                                        }
+                                      },
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFEFF6FF),
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(color: const Color(0xFFBFDBFE)),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      if (isFetchingGps)
+                                        const Padding(
+                                          padding: EdgeInsets.only(right: 4.0),
+                                          child: SizedBox(
+                                            width: 10,
+                                            height: 10,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              color: Color(0xFF2563EB),
+                                            ),
+                                          ),
+                                        )
+                                      else ...[
+                                        const Icon(LucideIcons.navigation, size: 12, color: Color(0xFF2563EB)),
+                                        const SizedBox(width: 4),
+                                      ],
+                                      Text(
+                                        isFetchingGps ? 'LOCATING...' : 'GPS',
+                                        style: GoogleFonts.plusJakartaSans(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                          color: const Color(0xFF2563EB),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                     const SizedBox(height: 6),
                     Row(
                       children: [
-                        Expanded(child: _buildTextField('Latitude', latController)),
-                        const SizedBox(width: 10),
-                        Expanded(child: _buildTextField('Longitude', lngController)),
+                        Expanded(child: _buildTextField('Latitude (°N)', latController)),
+                        const SizedBox(width: 8),
+                        Expanded(child: _buildTextField('Longitude (°E)', lngController)),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _buildTextField(
+                            'WGS84 Alt (m)',
+                            heightController,
+                            onChanged: (val) {
+                              final parsed = double.tryParse(val);
+                              if (parsed != null) {
+                                setModalState(() {
+                                  activeBaseAltitude = parsed - floorOffset(floorNumber);
+                                });
+                              }
+                            },
+                          ),
+                        ),
                       ],
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF0F9FF),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: const Color(0xFFBAE6FD)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(LucideIcons.layers, size: 14, color: Color(0xFF0284C7)),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              'WGS84 Floor Height: ${heightController.text}m  •  (Base Alt: ${activeBaseAltitude.toStringAsFixed(1)}m, $floorLabel Offset: $offsetStr)',
+                              style: GoogleFonts.plusJakartaSans(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                                color: const Color(0xFF0369A1),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                     const SizedBox(height: 16),
                     ElevatedButton(
@@ -307,11 +583,11 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
                           rating: rating,
                           location: GeodeticCoords(
                             latitude:
-                                double.tryParse(latController.text) ?? 6.927079,
+                                double.tryParse(latController.text) ?? (widget.userCoords?.latitude ?? 0.0),
                             longitude:
-                                double.tryParse(lngController.text) ?? 79.845612,
+                                double.tryParse(lngController.text) ?? (widget.userCoords?.longitude ?? 0.0),
                             height:
-                                double.tryParse(heightController.text) ?? 45.0,
+                                double.tryParse(heightController.text) ?? (widget.userCoords?.height ?? 10.0),
                           ),
                           description: descController.text.trim(),
                           openStatus: openStatus,
@@ -356,7 +632,11 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
     );
   }
 
-  Widget _buildTextField(String label, TextEditingController controller) {
+  Widget _buildTextField(
+    String label,
+    TextEditingController controller, {
+    Function(String)? onChanged,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -371,6 +651,7 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
         const SizedBox(height: 4),
         TextFormField(
           controller: controller,
+          onChanged: onChanged,
           style: GoogleFonts.plusJakartaSans(
             fontSize: 13,
             fontWeight: FontWeight.w600,
@@ -406,23 +687,57 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
         elevation: 0.5,
         surfaceTintColor: Colors.transparent,
         title: Text(
-          'POI & Store Directory Manager',
+          'POI Store Directory',
+          overflow: TextOverflow.ellipsis,
           style: GoogleFonts.plusJakartaSans(
-            fontSize: 16,
+            fontSize: 15,
             fontWeight: FontWeight.w800,
             color: const Color(0xFF0F172A),
           ),
         ),
         actions: [
-          Container(
-            margin: const EdgeInsets.only(right: 12),
-            decoration: BoxDecoration(
-              color: const Color(0xFF2563EB),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: IconButton(
-              icon: const Icon(LucideIcons.plus, color: Colors.white, size: 18),
-              onPressed: () => _showAddEditPoiModal(),
+          Padding(
+            padding: const EdgeInsets.only(right: 12, top: 10, bottom: 10),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: () => _showAddEditPoiModal(),
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF2563EB), Color(0xFF1D4ED8)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF2563EB).withValues(alpha: 0.3),
+                        blurRadius: 8,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(LucideIcons.plus, color: Colors.white, size: 14),
+                      const SizedBox(width: 4),
+                      Text(
+                        'ADD NEW SHOP',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
           ),
         ],

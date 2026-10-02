@@ -20,6 +20,7 @@ import 'telemetry_screen.dart';
 import 'admin/admin_poi_manager_screen.dart';
 import 'admin/admin_venue_manager_screen.dart';
 import 'admin/admin_parking_manager_screen.dart';
+import 'admin/admin_osm_map_screen.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   final String adminEmail;
@@ -600,6 +601,34 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             letterSpacing: 1.1,
           ),
         ),
+        const SizedBox(height: 10),
+
+        _buildQuickActionCard(
+          title: 'OpenStreetMap (OSM) Live Explorer',
+          badge: 'Live Map & Pins',
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => AdminOSMMapScreen(
+                  userCoords: GeodeticCoords(
+                    latitude: _liveLat,
+                    longitude: _liveLng,
+                    height: _liveHeight,
+                  ),
+                  destinations: _currentDestinations,
+                  mallService: widget.mallService,
+                  onImportOsmPoi: (importedPoi) {
+                    setState(() {
+                      _currentDestinations.insert(0, importedPoi);
+                    });
+                  },
+                ),
+              ),
+            );
+          },
+        ),
+
         const SizedBox(height: 10),
 
         _buildQuickActionCard(
