@@ -899,22 +899,6 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
                                   const SizedBox(height: 4),
                                   Row(
                                     children: [
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFFEFF6FF),
-                                          borderRadius: BorderRadius.circular(6),
-                                        ),
-                                        child: Text(
-                                          poi.category.toUpperCase(),
-                                          style: GoogleFonts.plusJakartaSans(
-                                            fontSize: 9.5,
-                                            fontWeight: FontWeight.w800,
-                                            color: const Color(0xFF2563EB),
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
                                       const Icon(LucideIcons.star, size: 13, color: Color(0xFFD97706)),
                                       const SizedBox(width: 3),
                                       Text(
