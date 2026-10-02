@@ -702,21 +702,17 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
               color: Colors.transparent,
               child: InkWell(
                 onTap: () => _showAddEditPoiModal(),
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(20),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                   decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFF2563EB), Color(0xFF1D4ED8)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    borderRadius: BorderRadius.circular(12),
+                    color: const Color(0xFF2563EB),
+                    borderRadius: BorderRadius.circular(20),
                     boxShadow: [
                       BoxShadow(
-                        color: const Color(0xFF2563EB).withValues(alpha: 0.3),
-                        blurRadius: 8,
-                        offset: const Offset(0, 3),
+                        color: const Color(0xFF2563EB).withValues(alpha: 0.35),
+                        blurRadius: 10,
+                        offset: const Offset(0, 4),
                       ),
                     ],
                   ),
@@ -731,7 +727,7 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
                           fontSize: 11,
                           fontWeight: FontWeight.w800,
                           color: Colors.white,
-                          letterSpacing: 0.3,
+                          letterSpacing: 0.4,
                         ),
                       ),
                     ],
@@ -759,21 +755,21 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
                   onChanged: (val) => setState(() => _searchQuery = val),
                   decoration: InputDecoration(
                     hintText: 'Search POI stores by name, floor or category...',
-                    hintStyle: const TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
+                    hintStyle: GoogleFonts.plusJakartaSans(color: const Color(0xFF94A3B8), fontSize: 13),
                     prefixIcon: const Icon(LucideIcons.search, size: 18, color: Color(0xFF2563EB)),
                     filled: true,
                     fillColor: const Color(0xFFF8FAFC),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                     border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(14),
+                      borderRadius: BorderRadius.circular(24),
                       borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
                     ),
                     enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(14),
+                      borderRadius: BorderRadius.circular(24),
                       borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
                     ),
                     focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(14),
+                      borderRadius: BorderRadius.circular(24),
                       borderSide: const BorderSide(color: Color(0xFF2563EB), width: 1.5),
                     ),
                   ),
@@ -785,25 +781,38 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
                     children: _categories.map((cat) {
                       final isSelected = _selectedCategory == cat;
                       return Padding(
-                        padding: const EdgeInsets.only(right: 6),
-                        child: ChoiceChip(
-                          label: Text(
-                            cat,
-                            style: GoogleFonts.plusJakartaSans(
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.w800,
-                              color: isSelected ? Colors.white : const Color(0xFF475569),
+                        padding: const EdgeInsets.only(right: 8),
+                        child: GestureDetector(
+                          onTap: () => setState(() => _selectedCategory = cat),
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 180),
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: isSelected ? const Color(0xFF2563EB) : const Color(0xFFF1F5F9),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: isSelected ? const Color(0xFF2563EB) : const Color(0xFFE2E8F0),
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (isSelected) ...[
+                                  const Icon(LucideIcons.check, color: Colors.white, size: 13),
+                                  const SizedBox(width: 5),
+                                ],
+                                Text(
+                                  cat,
+                                  style: GoogleFonts.plusJakartaSans(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w900,
+                                    color: isSelected ? Colors.white : const Color(0xFF475569),
+                                    letterSpacing: 0.3,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                          selected: isSelected,
-                          selectedColor: const Color(0xFF2563EB),
-                          backgroundColor: const Color(0xFFF1F5F9),
-                          side: BorderSide(
-                            color: isSelected ? const Color(0xFF2563EB) : const Color(0xFFE2E8F0),
-                          ),
-                          onSelected: (val) {
-                            if (val) setState(() => _selectedCategory = cat);
-                          },
                         ),
                       );
                     }).toList(),
@@ -835,29 +844,29 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
                     itemBuilder: (context, idx) {
                       final poi = filtered[idx];
                       return Container(
-                        margin: const EdgeInsets.only(bottom: 10),
+                        margin: const EdgeInsets.only(bottom: 12),
                         padding: const EdgeInsets.all(14),
                         decoration: BoxDecoration(
                           color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
+                          borderRadius: BorderRadius.circular(20),
                           border: Border.all(color: const Color(0xFFE2E8F0)),
                           boxShadow: const [
                             BoxShadow(
-                              color: Color(0x0A0F172A),
-                              blurRadius: 10,
-                              offset: Offset(0, 2),
+                              color: Color(0x060F172A),
+                              blurRadius: 12,
+                              offset: Offset(0, 3),
                             ),
                           ],
                         ),
                         child: Row(
                           children: [
                             Container(
-                              width: 44,
-                              height: 44,
+                              width: 48,
+                              height: 48,
                               decoration: BoxDecoration(
                                 color: const Color(0xFFEFF6FF),
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: const Color(0xFFBFDBFE)),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: const Color(0xFFDBEAFE)),
                               ),
                               child: Center(
                                 child: Text(
@@ -866,13 +875,13 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
                                       : 'F${poi.floorNumber}',
                                   style: GoogleFonts.plusJakartaSans(
                                     fontWeight: FontWeight.w900,
-                                    color: const Color(0xFF2563EB),
-                                    fontSize: 13,
+                                    color: const Color(0xFF1D4ED8),
+                                    fontSize: 14,
                                   ),
                                 ),
                               ),
                             ),
-                            const SizedBox(width: 12),
+                            const SizedBox(width: 14),
                             Expanded(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -883,30 +892,30 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
                                     overflow: TextOverflow.ellipsis,
                                     style: GoogleFonts.plusJakartaSans(
                                       fontSize: 14,
-                                      fontWeight: FontWeight.w700,
+                                      fontWeight: FontWeight.w800,
                                       color: const Color(0xFF0F172A),
                                     ),
                                   ),
-                                  const SizedBox(height: 3),
+                                  const SizedBox(height: 4),
                                   Row(
                                     children: [
                                       Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                         decoration: BoxDecoration(
-                                          color: const Color(0xFFF1F5F9),
+                                          color: const Color(0xFFEFF6FF),
                                           borderRadius: BorderRadius.circular(6),
                                         ),
                                         child: Text(
-                                          poi.category,
+                                          poi.category.toUpperCase(),
                                           style: GoogleFonts.plusJakartaSans(
                                             fontSize: 9.5,
-                                            fontWeight: FontWeight.bold,
+                                            fontWeight: FontWeight.w800,
                                             color: const Color(0xFF2563EB),
                                           ),
                                         ),
                                       ),
                                       const SizedBox(width: 8),
-                                      const Icon(LucideIcons.star, size: 12, color: Color(0xFFD97706)),
+                                      const Icon(LucideIcons.star, size: 13, color: Color(0xFFD97706)),
                                       const SizedBox(width: 3),
                                       Text(
                                         '${poi.rating}',
@@ -922,7 +931,7 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
                               ),
                             ),
                             IconButton(
-                              icon: const Icon(LucideIcons.edit2, size: 16, color: Color(0xFF2563EB)),
+                              icon: const Icon(LucideIcons.pencil, size: 16, color: Color(0xFF2563EB)),
                               onPressed: () => _showAddEditPoiModal(poi),
                             ),
                             IconButton(
