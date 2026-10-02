@@ -403,6 +403,7 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                     ),
                   ),
                 ],
+                const SizedBox(width: 84),
               ],
             ),
           ),

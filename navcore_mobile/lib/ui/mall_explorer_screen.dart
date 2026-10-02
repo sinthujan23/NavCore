@@ -299,6 +299,7 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                             ),
                           ),
                         ),
+                        const SizedBox(width: 84),
                       ],
                     ),
                   ],
