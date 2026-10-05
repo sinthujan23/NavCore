@@ -31,16 +31,16 @@ class FusedSpatialPose {
 /// NexNav SensorFusionService: Integrates IMU + Camera + Compass + PnP Reference Markers
 class SensorFusionService {
   final KalmanFilter _headingFilter = KalmanFilter(
-    processNoise: 0.005,
-    measurementNoise: 0.04,
+    processNoise: 0.08,
+    measurementNoise: 0.03,
   );
   final KalmanFilter _pitchFilter = KalmanFilter(
-    processNoise: 0.01,
-    measurementNoise: 0.06,
+    processNoise: 0.08,
+    measurementNoise: 0.03,
   );
   final KalmanFilter _rollFilter = KalmanFilter(
-    processNoise: 0.01,
-    measurementNoise: 0.06,
+    processNoise: 0.05,
+    measurementNoise: 0.05,
   );
 
   GeodeticCoords? _lastPnPPosition;

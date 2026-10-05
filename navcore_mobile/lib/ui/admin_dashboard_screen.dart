@@ -21,6 +21,8 @@ import 'admin/admin_poi_manager_screen.dart';
 import 'admin/admin_venue_manager_screen.dart';
 import 'admin/admin_parking_manager_screen.dart';
 import 'admin/admin_osm_map_screen.dart';
+import 'admin/admin_floor_heights_screen.dart';
+import '../data/mall_api_service.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   final String adminEmail;
@@ -601,6 +603,24 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             letterSpacing: 1.1,
           ),
         ),
+        const SizedBox(height: 10),
+
+        _buildQuickActionCard(
+          title: 'Height Between Floors Calculator',
+          badge: 'Barometer & Lock Config',
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => AdminFloorHeightsScreen(
+                  mallId: widget.buildingProfile.buildingId,
+                  apiService: RestMallBackendApi(),
+                ),
+              ),
+            );
+          },
+        ),
+
         const SizedBox(height: 10),
 
         _buildQuickActionCard(

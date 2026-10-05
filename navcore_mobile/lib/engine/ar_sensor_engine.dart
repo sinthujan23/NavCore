@@ -73,11 +73,11 @@ class ARSensorEngine {
     double barometricPressureHpa = 1013.25,
   }) {
     // 1. Calculate raw pitch & roll in degrees from accelerometer
-    final rollRad = math.atan2(accelY, accelZ);
-    final pitchRad = math.atan2(
+    final rollRad = math.atan2(
       -accelX,
       math.sqrt(accelY * accelY + accelZ * accelZ),
     );
+    final pitchRad = math.atan2(accelZ, accelY.abs());
 
     final rawPitchDeg = pitchRad * (180.0 / math.pi);
     final rawRollDeg = rollRad * (180.0 / math.pi);

@@ -62,16 +62,14 @@ GeodeticCoords getEffectiveUserCoords(
   GeodeticCoords userCoords,
   GeodeticCoords mallAnchor,
 ) {
-  // If user has a valid GPS reading, always use real user coordinates globally
   if (userCoords.latitude != 0.0 && userCoords.longitude != 0.0) {
     return userCoords;
   }
 
-  // Fallback to active mall anchor if GPS is unavailable
   return GeodeticCoords(
     latitude: mallAnchor.latitude,
     longitude: mallAnchor.longitude,
-    height: mallAnchor.height,
+    height: userCoords.height != 0.0 ? userCoords.height : mallAnchor.height,
   );
 }
 
@@ -104,7 +102,8 @@ double calculateAccurate3DDistance(
   final p1 = geodeticToECEF(userPoint);
   final p2 = geodeticToECEF(targetPoint);
 
-  return ecefDistance(p1, p2);
+  final dist = ecefDistance(p1, p2);
+  return dist.isNaN || dist.isInfinite ? 0.0 : dist;
 }
 
 /// Calculates precise 3D geometric distance of a place/POI from the Earth ground floor (Floor 1 Entrance level)
@@ -140,7 +139,8 @@ class RealWorldSpatialMetrics {
   final double horizontalHaversineDistMeters; // d_2D
   final double elevationDeltaMeters; // Δh
   final double euclidean3DDistanceMeters; // d_3D = sqrt(d_2D² + Δh²)
-  final double distanceFromGroundMeters; // Elevation difference from Earth Ground (Floor 1 Entrance)
+  final double
+  distanceFromGroundMeters; // Elevation difference from Earth Ground (Floor 1 Entrance)
   final double estimatedWalkTimeSeconds; // d_3D / 1.4 m/s walking speed
   final double floorWidthMeters; // Floor width dimension in meters
   final double floorLengthMeters; // Floor length dimension in meters
@@ -175,7 +175,8 @@ RealWorldSpatialMetrics calculateRealWorldSpatialMetrics({
   final d2D = haversineDistance(userCoords, targetCoords);
   final floorDelta = (targetFloorNumber - userFloorNumber).toDouble();
   final deltaH =
-      floorDelta * heightPerFloorMeters + (targetCoords.height - userCoords.height);
+      floorDelta * heightPerFloorMeters +
+      (targetCoords.height - userCoords.height);
   final d3D = sqrt(d2D * d2D + deltaH * deltaH);
   final groundDist = (targetFloorNumber - 1).abs() * heightPerFloorMeters;
   final walkTime = d3D / 1.4; // 1.4 m/s nominal walking speed
@@ -204,9 +205,14 @@ RealWorldSpatialMetrics calculateSameCoordinateSpatialMetrics({
 }) {
   final d2D = haversineDistance(userCoords, poiCoords);
   // Floor elevation delta Δh derived from target vs user absolute floor height specs
-  final deltaH = poiFloorConfig.absoluteHeightMeters - userFloorConfig.absoluteHeightMeters;
+  final deltaH =
+      poiFloorConfig.absoluteHeightMeters -
+      userFloorConfig.absoluteHeightMeters;
   final d3D = sqrt(d2D * d2D + deltaH * deltaH);
-  final distanceFromGround = poiFloorConfig.absoluteHeightMeters - 45.0; // 45.0m ground base anchor
+  final distanceFromGround =
+      (poiFloorConfig.absoluteHeightMeters -
+              userFloorConfig.absoluteHeightMeters)
+          .abs();
 
   return RealWorldSpatialMetrics(
     horizontalHaversineDistMeters: d2D,

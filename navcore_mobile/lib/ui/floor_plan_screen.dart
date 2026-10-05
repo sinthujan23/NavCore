@@ -22,6 +22,8 @@ class FloorPlanScreen extends StatefulWidget {
   final Function(double, double) onSimulateMove;
   final Function(DestinationPOI)? onSelectDestination;
   final VoidCallback? onBackClicked;
+  final String userEmail;
+  final VoidCallback? onLogout;
 
   const FloorPlanScreen({
     super.key,
@@ -33,6 +35,8 @@ class FloorPlanScreen extends StatefulWidget {
     required this.onSimulateMove,
     this.onSelectDestination,
     this.onBackClicked,
+    this.userEmail = '',
+    this.onLogout,
   });
 
   @override
@@ -403,7 +407,58 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                     ),
                   ),
                 ],
-                const SizedBox(width: 84),
+                if (widget.onLogout != null) ...[
+                  const SizedBox(width: 8),
+                  GestureDetector(
+                    onTap: widget.onLogout,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: const Color(0xFFBFDBFE),
+                        ),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Color(0x14000000),
+                            blurRadius: 6,
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            LucideIcons.userCheck,
+                            size: 13,
+                            color: Color(0xFF2563EB),
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            widget.userEmail.isNotEmpty
+                                ? widget.userEmail.split('@').first
+                                : 'User',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: const Color(0xFF1E293B),
+                            ),
+                          ),
+                          const SizedBox(width: 5),
+                          const Icon(
+                            LucideIcons.logOut,
+                            size: 13,
+                            color: Color(0xFFEF4444),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

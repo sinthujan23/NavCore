@@ -566,6 +566,8 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
             _currentIndex = 1;
           });
         },
+        userEmail: _userEmail,
+        onLogout: _showLogoutConfirmationDialog,
       ),
       ARViewportScreen(
         userCoords: _userCoords,
@@ -609,6 +611,8 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
           _floorPlanKey.currentState?.clearSelection();
           setState(() => _currentIndex = 0);
         },
+        userEmail: _userEmail,
+        onLogout: _showLogoutConfirmationDialog,
       ),
       MallExplorerScreen(
         mallService: _mallDatabaseService,
@@ -622,6 +626,8 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
           _floorPlanKey.currentState?.clearSelection();
           setState(() => _currentIndex = 0);
         },
+        userEmail: _userEmail,
+        onLogout: _showLogoutConfirmationDialog,
       ),
     ];
 
@@ -727,55 +733,6 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
                                     color: Colors.white,
                                     letterSpacing: 0.5,
                                   ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        )
-                      else if (_currentRole == UserRole.user)
-                        GestureDetector(
-                          onTap: _showLogoutConfirmationDialog,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 5,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.95),
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(
-                                color: const Color(0xFFBFDBFE),
-                              ),
-                              boxShadow: const [
-                                BoxShadow(
-                                  color: Color(0x14000000),
-                                  blurRadius: 6,
-                                ),
-                              ],
-                            ),
-                            child: Row(
-                              children: [
-                                const Icon(
-                                  LucideIcons.userCheck,
-                                  size: 13,
-                                  color: Color(0xFF2563EB),
-                                ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  _userEmail.isNotEmpty
-                                      ? _userEmail.split('@').first
-                                      : 'User',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700,
-                                    color: const Color(0xFF1E293B),
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                const Icon(
-                                  LucideIcons.logOut,
-                                  size: 13,
-                                  color: Color(0xFFEF4444),
                                 ),
                               ],
                             ),
