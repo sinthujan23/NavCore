@@ -54,13 +54,15 @@ class ARViewportScreen extends StatefulWidget {
   State<ARViewportScreen> createState() => _ARViewportScreenState();
 }
 
-class _ARViewportScreenState extends State<ARViewportScreen> {
+class _ARViewportScreenState extends State<ARViewportScreen>
+    with WidgetsBindingObserver {
   final String _searchQuery = '';
   String _selectedCategory = 'All';
   final ARFloorFilterMode _floorFilterMode = ARFloorFilterMode.autoTilt;
   bool _isNavigatingActive = false;
   bool _isFavorite = false;
   bool _showGeometricTelemetryModal = false;
+  DateTime _lastRouteRecalculateTime = DateTime.now();
 
   final SensorFusionService _sensorFusion = SensorFusionService();
   final RouteService _routeService = RouteService();
@@ -100,6 +102,7 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initCamera();
     _buildingDataService.loadBuildingConfig();
 
@@ -182,6 +185,23 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
     }
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final CameraController? cameraController = _cameraController;
+    if (cameraController == null || !cameraController.value.isInitialized) {
+      return;
+    }
+
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      _isCameraInitialized = false;
+      cameraController.dispose();
+      _cameraController = null;
+    } else if (state == AppLifecycleState.resumed) {
+      _initCamera();
+    }
+  }
+
   Future<void> _initCamera() async {
     try {
       final cameras = await availableCameras();
@@ -208,6 +228,7 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _cameraController?.dispose();
     super.dispose();
   }
@@ -693,22 +714,30 @@ class _ARViewportScreenState extends State<ARViewportScreen> {
         currentWaypointIndex: 0,
       );
       if (compliance.isOffRoute) {
-        // Schedule post-frame state update to prevent build phase mutation & camera pan recalculation loops
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && _isNavigatingActive && _selectedPOI != null) {
-            final newRoute = _routeService.calculateRoute(
-              buildingId: 'mall-01',
-              userCoords: fusedPose.position,
-              currentFloor: widget.currentFloor.floorNumber,
-              destination: _selectedPOI!,
-            );
-            if (_activeRoute != newRoute) {
+        final now = DateTime.now();
+        if (now.difference(_lastRouteRecalculateTime).inSeconds >= 4) {
+          _lastRouteRecalculateTime = now;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _isNavigatingActive && _selectedPOI != null) {
+              final activeMallAnchor = widget.destinations.isNotEmpty
+                  ? widget.destinations.first.location
+                  : entranceAnchor;
+              final effectiveUser = getEffectiveUserCoords(
+                fusedPose.position,
+                activeMallAnchor,
+              );
+              final newRoute = _routeService.calculateRoute(
+                buildingId: 'mall-01',
+                userCoords: effectiveUser,
+                currentFloor: widget.currentFloor.floorNumber,
+                destination: _selectedPOI!,
+              );
               setState(() {
                 _activeRoute = newRoute;
               });
             }
-          }
-        });
+          });
+        }
       }
     }
 
@@ -2262,15 +2291,26 @@ class ARGroundPathwayPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final pitchShift = (phonePitchDegrees * 3.5).clamp(-140.0, 140.0);
+    final safeAngle =
+        (relativeAngleDegrees.isNaN || relativeAngleDegrees.isInfinite)
+            ? 0.0
+            : relativeAngleDegrees;
+    final safeDist =
+        (distanceMeters.isNaN || distanceMeters <= 0) ? 1 : distanceMeters;
+    final safePitch =
+        (phonePitchDegrees.isNaN || phonePitchDegrees.isInfinite)
+            ? 0.0
+            : phonePitchDegrees;
+
+    final pitchShift = (safePitch * 3.5).clamp(-140.0, 140.0);
     final centerBottom = Offset(size.width / 2, size.height - 110);
 
-    final normX = (relativeAngleDegrees / 30.0).clamp(-1.0, 1.0);
+    final normX = (safeAngle / 30.0).clamp(-1.0, 1.0);
     final targetX = (size.width / 2) + (normX * (size.width * 0.40));
 
     // Dynamic depth positioning for laser landing point and chevrons
-    final double distRatio = ((distanceMeters.clamp(3, 150) - 3.0) / 147.0)
-        .clamp(0.0, 1.0);
+    final double distRatio =
+        ((safeDist.clamp(3, 150) - 3.0) / 147.0).clamp(0.0, 1.0);
     final double floorDelta = (targetFloorNumber - userFloorNumber).toDouble();
     final double floorElevShift = (floorDelta * 24.0).clamp(-75.0, 75.0);
 
