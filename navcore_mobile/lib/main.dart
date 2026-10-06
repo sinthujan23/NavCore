@@ -12,6 +12,7 @@ import 'engine/pnp_engine.dart';
 import 'engine/real_sensor_service.dart';
 import 'engine/ar_sensor_engine.dart';
 import 'data/destinations.dart';
+import 'data/floor_height_model.dart';
 import 'data/mall_database_service.dart';
 
 import 'ui/welcome_screen.dart';
@@ -336,6 +337,62 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
     );
   }
 
+  void _handleAddPoi(DestinationPOI newPoi) {
+    setState(() {
+      _destinations = [newPoi, ..._destinations];
+    });
+  }
+
+  void _handleUpdatePoi(DestinationPOI updatedPoi) {
+    setState(() {
+      final index = _destinations.indexWhere((p) => p.id == updatedPoi.id);
+      if (index != -1) {
+        final newList = List<DestinationPOI>.from(_destinations);
+        newList[index] = updatedPoi;
+        _destinations = newList;
+      }
+    });
+  }
+
+  void _handleDeletePoi(String poiId) {
+    setState(() {
+      _destinations = _destinations.where((p) => p.id != poiId).toList();
+    });
+  }
+
+  void _handleFloorHeightsUpdated(List<FloorHeightData> heights) {
+    if (heights.isEmpty) return;
+    final updatedFloors = heights.map((h) {
+      String floorName = h.floorNo < 0
+          ? 'Basement B${h.floorNo.abs()}'
+          : (h.floorNo == 1 ? 'Ground Floor F1' : 'Upper Floor F${h.floorNo}');
+      final String floorId = h.floorNo < 0 ? 'B${h.floorNo.abs()}' : 'F${h.floorNo}';
+      final int stores = _destinations.where((d) => d.floorNumber == h.floorNo).length;
+      return FloorLevelConfig(
+        floorId: floorId,
+        floorNumber: h.floorNo,
+        name: floorName,
+        relativeVectorMeters: h.heightToNextM,
+        absoluteHeightMeters: h.baseAltitudeM,
+        bandMinMeters: h.baseAltitudeM - 2.5,
+        bandMaxMeters: h.baseAltitudeM + 2.5,
+        storesCount: stores,
+      );
+    }).toList();
+
+    updatedFloors.sort((a, b) => a.absoluteHeightMeters.compareTo(b.absoluteHeightMeters));
+
+    setState(() {
+      _buildingProfile = BuildingElevationProfile(
+        buildingId: _buildingProfile.buildingId,
+        name: _buildingProfile.name,
+        entranceBaseAnchorHeight: _buildingProfile.entranceBaseAnchorHeight,
+        floorGapMeters: _buildingProfile.floorGapMeters,
+        floors: updatedFloors,
+      );
+    });
+  }
+
   void _showLogoutConfirmationDialog() {
     showDialog(
       context: context,
@@ -502,6 +559,10 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
         destinations: _destinations,
         mallService: _mallDatabaseService,
         sensorService: _sensorService,
+        onAddPoi: _handleAddPoi,
+        onUpdatePoi: _handleUpdatePoi,
+        onDeletePoi: _handleDeletePoi,
+        onFloorHeightsUpdated: _handleFloorHeightsUpdated,
         onOpenNavigation: () {
           setState(() {
             _authScreenState = _isSetupComplete
@@ -583,6 +644,9 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
           _arTargetDestination = poi;
           _currentIndex = 1;
         }),
+        onClearTargetDestination: () => setState(() {
+          _arTargetDestination = null;
+        }),
         onBackClicked: () {
           _floorPlanKey.currentState?.clearSelection();
           setState(() {
@@ -602,6 +666,10 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
         onSelectFloor: _handleSelectFloor,
         userCoords: _userCoords,
         destinations: _destinations,
+        targetDestination: _arTargetDestination,
+        onClearTargetDestination: () => setState(() {
+          _arTargetDestination = null;
+        }),
         onSimulateMove: _handleSimulateMove,
         onSelectDestination: (poi) => setState(() {
           _arTargetDestination = poi;

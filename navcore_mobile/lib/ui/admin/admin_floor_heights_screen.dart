@@ -7,11 +7,15 @@ import '../../data/mall_api_service.dart';
 class AdminFloorHeightsScreen extends StatefulWidget {
   final String mallId;
   final RestMallBackendApi apiService;
+  final ValueChanged<List<FloorHeightData>>? onHeightsUpdated;
+  final ValueChanged<String>? onMallSelected;
 
   const AdminFloorHeightsScreen({
     super.key,
     this.mallId = 'mall-one-galle-face',
     required this.apiService,
+    this.onHeightsUpdated,
+    this.onMallSelected,
   });
 
   @override
@@ -19,14 +23,48 @@ class AdminFloorHeightsScreen extends StatefulWidget {
 }
 
 class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
+  late String _selectedMallId;
   List<FloorHeightData> _floors = [];
   bool _isLoading = true;
   bool _isCalculating = false;
   String? _statusMessage;
 
+  final Map<String, String> _knownMallNames = {
+    'mall-one-galle-face': 'One Galle Face Mall',
+    'mall-colombo-city-centre': 'Colombo City Centre (CCC)',
+    'mall-havelock-city': 'Havelock City Mall',
+    'mall-kandy-city-centre': 'Kandy City Centre (KCC)',
+    'mall-marino-mall': 'Marino Mall',
+  };
+
+  late List<String> _availableMallIds;
+
   @override
   void initState() {
     super.initState();
+    _selectedMallId = widget.mallId;
+    _availableMallIds = [
+      'mall-one-galle-face',
+      'mall-colombo-city-centre',
+      'mall-havelock-city',
+      'mall-kandy-city-centre',
+      'mall-marino-mall',
+    ];
+
+    if (!_availableMallIds.contains(widget.mallId)) {
+      _availableMallIds.insert(0, widget.mallId);
+    }
+
+    _loadFloorHeights();
+  }
+
+  void _onMallChanged(String? newMallId) {
+    if (newMallId == null || newMallId == _selectedMallId) return;
+    setState(() {
+      _selectedMallId = newMallId;
+      _statusMessage = null;
+    });
+    widget.onMallSelected?.call(newMallId);
     _loadFloorHeights();
   }
 
@@ -37,12 +75,13 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
     });
 
     try {
-      final list = await widget.apiService.fetchFloorHeights(widget.mallId);
+      final list = await widget.apiService.fetchFloorHeights(_selectedMallId);
       if (mounted) {
         setState(() {
           _floors = list;
           _isLoading = false;
         });
+        widget.onHeightsUpdated?.call(_floors);
       }
     } catch (e) {
       if (mounted) {
@@ -61,43 +100,21 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
     });
 
     try {
-      final updatedList = await widget.apiService.triggerFloorHeightCalculation(widget.mallId);
+      final updatedList = await widget.apiService.triggerFloorHeightCalculation(_selectedMallId);
       if (mounted) {
         setState(() {
           _floors = updatedList;
           _isCalculating = false;
-          _statusMessage = '✅ Auto-calculation completed successfully across all unlocked floors!';
+          _statusMessage = 'Auto-calculation completed successfully across all unlocked floors!';
         });
       }
     } catch (e) {
       if (mounted) {
         setState(() {
           _isCalculating = false;
-          _statusMessage = '⚠️ Auto-calculation failed: $e';
+          _statusMessage = 'Auto-calculation failed: $e';
         });
       }
-    }
-  }
-
-  Future<void> _toggleLock(FloorHeightData floor, bool newLockState) async {
-    try {
-      final updated = await widget.apiService.updateFloorHeight(
-        widget.mallId,
-        floor.floorNo,
-        isLocked: newLockState,
-      );
-
-      setState(() {
-        final idx = _floors.indexWhere((f) => f.floorNo == floor.floorNo);
-        if (idx >= 0) {
-          _floors[idx] = updated;
-        }
-      });
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to update lock state: $e')),
-      );
     }
   }
 
@@ -109,10 +126,12 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1E293B),
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Text(
           'Override Height for Floor ${floor.floorNo}',
-          style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold),
+          style: GoogleFonts.outfit(color: const Color(0xFF0F172A), fontWeight: FontWeight.bold),
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -120,24 +139,24 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
           children: [
             Text(
               'Enter manual height to next floor (meters). This will set source to "admin" and lock the floor from auto-updates.',
-              style: GoogleFonts.inter(color: const Color(0xFF94A3B8), fontSize: 13),
+              style: GoogleFonts.inter(color: const Color(0xFF64748B), fontSize: 13),
             ),
             const SizedBox(height: 16),
             TextField(
               controller: textController,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              style: GoogleFonts.inter(color: Colors.white),
+              style: GoogleFonts.inter(color: const Color(0xFF0F172A)),
               decoration: InputDecoration(
                 labelText: 'Height to Next Floor (m)',
-                labelStyle: const TextStyle(color: Colors.cyanAccent),
+                labelStyle: const TextStyle(color: Color(0xFF0D9488)),
                 suffixText: 'meters',
-                suffixStyle: const TextStyle(color: Colors.white70),
+                suffixStyle: const TextStyle(color: Color(0xFF64748B)),
                 enabledBorder: OutlineInputBorder(
-                  borderSide: const BorderSide(color: Colors.white30),
+                  borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 focusedBorder: OutlineInputBorder(
-                  borderSide: const BorderSide(color: Colors.cyanAccent),
+                  borderSide: const BorderSide(color: Color(0xFF0D9488), width: 2),
                   borderRadius: BorderRadius.circular(8),
                 ),
               ),
@@ -147,12 +166,14 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+            child: const Text('Cancel', style: TextStyle(color: Color(0xFF64748B))),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.cyanAccent.shade700,
+              backgroundColor: const Color(0xFF0D9488),
               foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
             onPressed: () async {
               final newHeight = double.tryParse(textController.text.trim());
@@ -166,7 +187,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
               Navigator.pop(ctx);
               try {
                 await widget.apiService.updateFloorHeight(
-                  widget.mallId,
+                  _selectedMallId,
                   floor.floorNo,
                   heightToNextM: newHeight,
                   isLocked: true,
@@ -188,71 +209,193 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
     );
   }
 
+  void _confirmAndDeleteFloor(FloorHeightData floor) {
+    final floorLabel = floor.floorNo < 0 ? 'B${floor.floorNo.abs()}' : 'Floor ${floor.floorNo}';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          'Delete $floorLabel?',
+          style: GoogleFonts.outfit(color: const Color(0xFF0F172A), fontWeight: FontWeight.bold),
+        ),
+        content: Text(
+          'Are you sure you want to delete $floorLabel? Base altitudes for remaining floors will automatically be recalculated.',
+          style: GoogleFonts.inter(color: const Color(0xFF64748B), fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Color(0xFF64748B))),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFEF4444),
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              try {
+                final updatedList = await widget.apiService.deleteFloor(_selectedMallId, floor.floorNo);
+                if (mounted) {
+                  setState(() {
+                    _floors = updatedList;
+                    _statusMessage = '$floorLabel deleted successfully.';
+                  });
+                  widget.onHeightsUpdated?.call(_floors);
+                }
+              } catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Error deleting floor: $e')),
+                  );
+                }
+              }
+            },
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Color _getSourceBadgeColor(String source) {
     switch (source.toLowerCase()) {
       case 'admin':
-        return Colors.purpleAccent;
+        return const Color(0xFF7E22CE);
       case 'barometer':
-        return Colors.greenAccent;
+        return const Color(0xFF15803D);
       case 'osm':
-        return Colors.lightBlueAccent;
+        return const Color(0xFF0284C7);
       case 'default':
       default:
-        return Colors.orangeAccent;
+        return const Color(0xFFC2410C);
+    }
+  }
+
+  Color _getSourceBadgeBgColor(String source) {
+    switch (source.toLowerCase()) {
+      case 'admin':
+        return const Color(0xFFF3E8FF);
+      case 'barometer':
+        return const Color(0xFFDCFCE7);
+      case 'osm':
+        return const Color(0xFFE0F2FE);
+      case 'default':
+      default:
+        return const Color(0xFFFFEDD5);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0F172A),
+      backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1E293B),
-        elevation: 2,
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
+        elevation: 0,
+        shape: const Border(
+          bottom: BorderSide(color: Color(0xFFE2E8F0), width: 1),
+        ),
         title: Text(
           'Automatic Height Between Floors',
-          style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.white),
+          style: GoogleFonts.outfit(
+            fontWeight: FontWeight.bold,
+            fontSize: 17,
+            color: const Color(0xFF0F172A),
+          ),
+          overflow: TextOverflow.ellipsis,
         ),
+        iconTheme: const IconThemeData(color: Color(0xFF0F172A)),
         actions: [
           IconButton(
-            icon: const Icon(LucideIcons.refreshCw, color: Colors.cyanAccent),
+            icon: const Icon(LucideIcons.refreshCw, color: Color(0xFF0D9488)),
             tooltip: 'Refresh Table',
             onPressed: _loadFloorHeights,
           ),
         ],
       ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Colors.cyanAccent))
+          ? const Center(child: CircularProgressIndicator(color: Color(0xFF0D9488)))
           : Padding(
               padding: const EdgeInsets.all(16.0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Header Info Card with Mall Selector Dropdown
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF1E293B),
+                      color: Colors.white,
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.white12),
+                      border: Border.all(color: const Color(0xFFE2E8F0)),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.03),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
                     ),
                     child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                'Mall ID: ${widget.mallId}',
-                                style: GoogleFonts.outfit(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.white,
+                                'SELECT MALL',
+                                style: GoogleFonts.inter(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  color: const Color(0xFF64748B),
+                                  letterSpacing: 0.5,
                                 ),
                               ),
-                              const SizedBox(height: 4),
-                              Text(
-                                'Auto-calculation derives heights using barometer pressure delta (P_lower - P_upper) * 8.3m, with OSM & default fallbacks.',
-                                style: GoogleFonts.inter(fontSize: 12, color: Colors.white60),
+                              const SizedBox(height: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF8FAFC),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: const Color(0xFFCBD5E1)),
+                                ),
+                                child: DropdownButtonHideUnderline(
+                                  child: DropdownButton<String>(
+                                    value: _selectedMallId,
+                                    isExpanded: true,
+                                    icon: const Icon(LucideIcons.chevronDown, size: 18, color: Color(0xFF0D9488)),
+                                    style: GoogleFonts.outfit(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.bold,
+                                      color: const Color(0xFF0F172A),
+                                    ),
+                                    dropdownColor: Colors.white,
+                                    items: _availableMallIds.map((mallId) {
+                                      final displayName = _knownMallNames[mallId] ?? mallId;
+                                      return DropdownMenuItem<String>(
+                                        value: mallId,
+                                        child: Text(
+                                          displayName,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: GoogleFonts.outfit(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w600,
+                                            color: const Color(0xFF0F172A),
+                                          ),
+                                        ),
+                                      );
+                                    }).toList(),
+                                    onChanged: _onMallChanged,
+                                  ),
+                                ),
                               ),
                             ],
                           ),
@@ -260,9 +403,10 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                         const SizedBox(width: 12),
                         ElevatedButton.icon(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.cyanAccent.shade700,
+                            backgroundColor: const Color(0xFF0D9488),
                             foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                            elevation: 0,
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                           ),
                           onPressed: _isCalculating ? null : _runAutoCalculation,
@@ -272,10 +416,10 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                                   height: 16,
                                   child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                                 )
-                              : const Icon(LucideIcons.calculator, size: 18),
+                              : const Icon(LucideIcons.calculator, size: 16),
                           label: Text(
                             _isCalculating ? 'Calculating...' : 'Re-run Auto-Calc',
-                            style: GoogleFonts.inter(fontWeight: FontWeight.bold),
+                            style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 13),
                           ),
                         ),
                       ],
@@ -287,102 +431,194 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                     Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: Colors.cyanAccent.withValues(alpha: 0.1),
+                        color: const Color(0xFFECFDF5),
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.cyanAccent.withValues(alpha: 0.3)),
+                        border: Border.all(color: const Color(0xFFA7F3D0)),
                       ),
-                      child: Text(
-                        _statusMessage!,
-                        style: GoogleFonts.inter(color: Colors.cyanAccent, fontSize: 13),
+                      child: Row(
+                        children: [
+                          const Icon(LucideIcons.checkCircle, size: 16, color: Color(0xFF047857)),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _statusMessage!,
+                              style: GoogleFonts.inter(
+                                color: const Color(0xFF047857),
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],
 
                   const SizedBox(height: 16),
 
+                  // Data Table Card
                   Expanded(
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.vertical,
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: DataTable(
-                          headingRowColor: WidgetStateProperty.all(const Color(0xFF1E293B)),
-                          dataRowColor: WidgetStateProperty.all(const Color(0xFF0F172A)),
-                          border: TableBorder.all(color: Colors.white12, width: 1, borderRadius: BorderRadius.circular(8)),
-                          columns: [
-                            DataColumn(label: Text('Floor', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold))),
-                            DataColumn(label: Text('Height to Next (m)', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold))),
-                            DataColumn(label: Text('Base Altitude (m)', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold))),
-                            DataColumn(label: Text('Source', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold))),
-                            DataColumn(label: Text('Confidence', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold))),
-                            DataColumn(label: Text('Locked', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold))),
-                            DataColumn(label: Text('Actions', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold))),
-                          ],
-                          rows: _floors.map((floor) {
-                            final badgeColor = _getSourceBadgeColor(floor.source);
-                            final isTopFloor = floor.heightToNextM == 0.0 && floor.floorNo == _floors.last.floorNo;
-
-                            return DataRow(
-                              cells: [
-                                DataCell(
-                                  Text(
-                                    floor.floorNo < 0 ? 'B${floor.floorNo.abs()}' : 'Floor ${floor.floorNo}',
-                                    style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w600),
-                                  ),
-                                ),
-                                DataCell(
-                                  Text(
-                                    isTopFloor ? 'N/A (Top)' : '${floor.heightToNextM.toStringAsFixed(2)} m',
-                                    style: GoogleFonts.inter(color: Colors.cyanAccent, fontWeight: FontWeight.bold),
-                                  ),
-                                ),
-                                DataCell(
-                                  Text(
-                                    '${floor.baseAltitudeM.toStringAsFixed(2)} m',
-                                    style: GoogleFonts.inter(color: Colors.white70),
-                                  ),
-                                ),
-                                DataCell(
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                    decoration: BoxDecoration(
-                                      color: badgeColor.withValues(alpha: 0.15),
-                                      border: Border.all(color: badgeColor, width: 1),
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    child: Text(
-                                      floor.source.toUpperCase(),
-                                      style: GoogleFonts.inter(
-                                        color: badgeColor,
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.bold,
-                                      ),
+                    child: Container(
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFE2E8F0)),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.03),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.vertical,
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: DataTable(
+                              columnSpacing: 28,
+                              headingRowHeight: 48,
+                              dataRowMinHeight: 52,
+                              dataRowMaxHeight: 56,
+                              headingRowColor: WidgetStateProperty.all(const Color(0xFFF1F5F9)),
+                              dataRowColor: WidgetStateProperty.all(Colors.white),
+                              border: const TableBorder(
+                                horizontalInside: BorderSide(color: Color(0xFFF1F5F9), width: 1),
+                              ),
+                              columns: [
+                                DataColumn(
+                                  label: Text(
+                                    'Floor',
+                                    style: GoogleFonts.outfit(
+                                      color: const Color(0xFF1E293B),
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13,
                                     ),
                                   ),
                                 ),
-                                DataCell(
-                                  Text(
-                                    '${(floor.confidence * 100).toStringAsFixed(0)}%',
-                                    style: GoogleFonts.inter(color: Colors.white),
+                                DataColumn(
+                                  label: Text(
+                                    'Height to Next (m)',
+                                    style: GoogleFonts.outfit(
+                                      color: const Color(0xFF1E293B),
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13,
+                                    ),
                                   ),
                                 ),
-                                DataCell(
-                                  Switch(
-                                    value: floor.isLocked,
-                                    activeTrackColor: Colors.purpleAccent,
-                                    onChanged: (val) => _toggleLock(floor, val),
+                                DataColumn(
+                                  label: Text(
+                                    'Base Altitude (m)',
+                                    style: GoogleFonts.outfit(
+                                      color: const Color(0xFF1E293B),
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13,
+                                    ),
                                   ),
                                 ),
-                                DataCell(
-                                  IconButton(
-                                    icon: const Icon(LucideIcons.edit3, size: 18, color: Colors.cyanAccent),
-                                    tooltip: 'Edit / Override Height',
-                                    onPressed: () => _showEditDialog(floor),
+                                DataColumn(
+                                  label: Text(
+                                    'Source',
+                                    style: GoogleFonts.outfit(
+                                      color: const Color(0xFF1E293B),
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ),
+                                DataColumn(
+                                  label: Text(
+                                    'Actions',
+                                    style: GoogleFonts.outfit(
+                                      color: const Color(0xFF1E293B),
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13,
+                                    ),
                                   ),
                                 ),
                               ],
-                            );
-                          }).toList(),
+                              rows: _floors.map((floor) {
+                                final badgeTextColor = _getSourceBadgeColor(floor.source);
+                                final badgeBgColor = _getSourceBadgeBgColor(floor.source);
+                                final isTopFloor = floor.heightToNextM == 0.0 && floor.floorNo == _floors.last.floorNo;
+
+                                return DataRow(
+                                  cells: [
+                                    DataCell(
+                                      Text(
+                                        floor.floorNo < 0 ? 'B${floor.floorNo.abs()}' : 'Floor ${floor.floorNo}',
+                                        style: GoogleFonts.inter(
+                                          color: const Color(0xFF0F172A),
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 13,
+                                        ),
+                                        softWrap: false,
+                                      ),
+                                    ),
+                                    DataCell(
+                                      Text(
+                                        isTopFloor ? 'N/A (Top)' : '${floor.heightToNextM.toStringAsFixed(2)} m',
+                                        style: GoogleFonts.inter(
+                                          color: const Color(0xFF0D9488),
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 13,
+                                        ),
+                                        softWrap: false,
+                                      ),
+                                    ),
+                                    DataCell(
+                                      Text(
+                                        '${floor.baseAltitudeM.toStringAsFixed(2)} m',
+                                        style: GoogleFonts.inter(
+                                          color: const Color(0xFF475569),
+                                          fontSize: 13,
+                                        ),
+                                        softWrap: false,
+                                      ),
+                                    ),
+                                    DataCell(
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: badgeBgColor,
+                                          border: Border.all(color: badgeTextColor.withValues(alpha: 0.4), width: 1),
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Text(
+                                          floor.source.toUpperCase(),
+                                          style: GoogleFonts.inter(
+                                            color: badgeTextColor,
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    DataCell(
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          IconButton(
+                                            icon: const Icon(LucideIcons.edit3, size: 18, color: Color(0xFF0D9488)),
+                                            tooltip: 'Edit / Override Height',
+                                            onPressed: () => _showEditDialog(floor),
+                                          ),
+                                          IconButton(
+                                            icon: const Icon(LucideIcons.trash2, size: 18, color: Color(0xFFEF4444)),
+                                            tooltip: 'Delete Floor',
+                                            onPressed: () => _confirmAndDeleteFloor(floor),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              }).toList(),
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -393,3 +629,4 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
     );
   }
 }
+

@@ -33,6 +33,7 @@ class ARViewportScreen extends StatefulWidget {
   final DestinationPOI? targetDestination;
   final VoidCallback? onBackClicked;
   final VoidCallback? onOpenMapsClicked;
+  final VoidCallback? onClearTargetDestination;
 
   const ARViewportScreen({
     super.key,
@@ -48,6 +49,7 @@ class ARViewportScreen extends StatefulWidget {
     this.targetDestination,
     this.onBackClicked,
     this.onOpenMapsClicked,
+    this.onClearTargetDestination,
   });
 
   @override
@@ -1493,14 +1495,17 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                             const SizedBox(width: 8),
                             // Red EXIT Button
                             GestureDetector(
-                              onTap: () => setState(() {
-                                _isNavigatingActive = false;
-                                _selectedPOI = null;
-                                _activeRoute = null;
-                              }),
+                              onTap: () {
+                                setState(() {
+                                  _isNavigatingActive = false;
+                                  _selectedPOI = null;
+                                  _activeRoute = null;
+                                });
+                                widget.onClearTargetDestination?.call();
+                              },
                               child: Container(
                                 padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
+                                  horizontal: 10,
                                   vertical: 8,
                                 ),
                                 decoration: BoxDecoration(
@@ -1530,6 +1535,43 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                                 ),
                               ),
                             ),
+                            if (widget.onOpenMapsClicked != null) ...[
+                              const SizedBox(width: 6),
+                              GestureDetector(
+                                onTap: widget.onOpenMapsClicked,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 8,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF2563EB),
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(color: Colors.white30),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(
+                                        LucideIcons.map,
+                                        color: Colors.white,
+                                        size: 12,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        '2D MAP',
+                                        style: GoogleFonts.plusJakartaSans(
+                                          color: Colors.white,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w900,
+                                          letterSpacing: 0.5,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                       ),

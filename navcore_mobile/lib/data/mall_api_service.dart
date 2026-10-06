@@ -39,6 +39,13 @@ abstract class MallBackendApi {
     double? heightToNextM,
     bool? isLocked,
   });
+  Future<List<FloorHeightData>> addFloor(
+    String mallId,
+    int floorNo,
+    double heightToNextM,
+  );
+  Future<List<FloorHeightData>> deleteFloor(String mallId, int floorNo);
+  Future<List<FloorHeightData>> resetAllFloors(String mallId);
 }
 
 /// Production REST API Implementation with Local Fallback Hook
@@ -147,6 +154,70 @@ class RestMallBackendApi implements MallBackendApi {
         .toList();
   }
 
+  List<FloorHeightData> _getOrCreateDefaultHeights(String mallId) {
+    if (_localMockHeights.containsKey(mallId) &&
+        _localMockHeights[mallId]!.isNotEmpty) {
+      return _localMockHeights[mallId]!;
+    }
+
+    final nowIso = DateTime.now().toIso8601String();
+    final defaultList = [
+      FloorHeightData(
+        mallId: mallId,
+        floorNo: -1,
+        heightToNextM: 15.0,
+        baseAltitudeM: 0.0,
+        source: 'default',
+        confidence: 0.5,
+        isLocked: false,
+        updatedAt: nowIso,
+      ),
+      FloorHeightData(
+        mallId: mallId,
+        floorNo: 1,
+        heightToNextM: 15.0,
+        baseAltitudeM: 15.0,
+        source: 'default',
+        confidence: 0.5,
+        isLocked: false,
+        updatedAt: nowIso,
+      ),
+      FloorHeightData(
+        mallId: mallId,
+        floorNo: 2,
+        heightToNextM: 15.0,
+        baseAltitudeM: 30.0,
+        source: 'default',
+        confidence: 0.5,
+        isLocked: false,
+        updatedAt: nowIso,
+      ),
+      FloorHeightData(
+        mallId: mallId,
+        floorNo: 3,
+        heightToNextM: 15.0,
+        baseAltitudeM: 45.0,
+        source: 'default',
+        confidence: 0.5,
+        isLocked: false,
+        updatedAt: nowIso,
+      ),
+      FloorHeightData(
+        mallId: mallId,
+        floorNo: 4,
+        heightToNextM: 0.0,
+        baseAltitudeM: 60.0,
+        source: 'default',
+        confidence: 0.5,
+        isLocked: false,
+        updatedAt: nowIso,
+      ),
+    ];
+
+    _localMockHeights[mallId] = defaultList;
+    return defaultList;
+  }
+
   @override
   Future<List<FloorHeightData>> fetchFloorHeights(String mallId) async {
     try {
@@ -165,7 +236,7 @@ class RestMallBackendApi implements MallBackendApi {
       // Fallback to local store on network failure
     }
 
-    return _localMockHeights[mallId] ?? [];
+    return _getOrCreateDefaultHeights(mallId);
   }
 
   @override
@@ -198,7 +269,7 @@ class RestMallBackendApi implements MallBackendApi {
       // Fallback auto-calculation simulation for offline mode
     }
 
-    final currentList = _localMockHeights[mallId] ?? [];
+    final currentList = List<FloorHeightData>.from(_getOrCreateDefaultHeights(mallId));
     final updatedList = <FloorHeightData>[];
     double cumulativeAlt = 0.0;
 
@@ -262,7 +333,7 @@ class RestMallBackendApi implements MallBackendApi {
       }
     } catch (_) {}
 
-    final currentList = _localMockHeights[mallId] ?? [];
+    final currentList = _getOrCreateDefaultHeights(mallId);
     final idx = currentList.indexWhere((f) => f.floorNo == floorNo);
     if (idx >= 0) {
       final old = currentList[idx];
@@ -287,5 +358,81 @@ class RestMallBackendApi implements MallBackendApi {
     }
 
     throw Exception('Floor $floorNo not found in mall $mallId');
+  }
+
+  @override
+  Future<List<FloorHeightData>> addFloor(
+    String mallId,
+    int floorNo,
+    double heightToNextM,
+  ) async {
+    final currentList = List<FloorHeightData>.from(
+      _getOrCreateDefaultHeights(mallId),
+    );
+    currentList.removeWhere((f) => f.floorNo == floorNo);
+    currentList.add(
+      FloorHeightData(
+        mallId: mallId,
+        floorNo: floorNo,
+        heightToNextM: heightToNextM,
+        baseAltitudeM: 0.0,
+        source: 'admin',
+        confidence: 1.0,
+        isLocked: true,
+        updatedAt: DateTime.now().toIso8601String(),
+      ),
+    );
+    currentList.sort((a, b) => a.floorNo.compareTo(b.floorNo));
+
+    double cumulativeAlt = 0.0;
+    for (int i = 0; i < currentList.length; i++) {
+      currentList[i] = currentList[i].copyWith(baseAltitudeM: cumulativeAlt);
+      cumulativeAlt += currentList[i].heightToNextM;
+    }
+
+    _localMockHeights[mallId] = currentList;
+    return currentList;
+  }
+
+  @override
+  Future<List<FloorHeightData>> deleteFloor(String mallId, int floorNo) async {
+    final currentList = List<FloorHeightData>.from(
+      _getOrCreateDefaultHeights(mallId),
+    );
+    currentList.removeWhere((f) => f.floorNo == floorNo);
+
+    double cumulativeAlt = 0.0;
+    for (int i = 0; i < currentList.length; i++) {
+      currentList[i] = currentList[i].copyWith(baseAltitudeM: cumulativeAlt);
+      cumulativeAlt += currentList[i].heightToNextM;
+    }
+
+    _localMockHeights[mallId] = currentList;
+    return currentList;
+  }
+
+  @override
+  Future<List<FloorHeightData>> resetAllFloors(String mallId) async {
+    final currentList = List<FloorHeightData>.from(
+      _getOrCreateDefaultHeights(mallId),
+    );
+    final updatedList = <FloorHeightData>[];
+    double cumulativeAlt = 0.0;
+
+    for (int i = 0; i < currentList.length; i++) {
+      final item = currentList[i];
+      final updated = item.copyWith(
+        source: 'default',
+        confidence: 0.5,
+        isLocked: false,
+        baseAltitudeM: cumulativeAlt,
+        updatedAt: DateTime.now().toIso8601String(),
+      );
+      updatedList.add(updated);
+      cumulativeAlt += updated.heightToNextM;
+    }
+
+    _localMockHeights[mallId] = updatedList;
+    return updatedList;
   }
 }

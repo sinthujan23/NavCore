@@ -21,6 +21,8 @@ class FloorPlanScreen extends StatefulWidget {
   final List<DestinationPOI> destinations;
   final Function(double, double) onSimulateMove;
   final Function(DestinationPOI)? onSelectDestination;
+  final DestinationPOI? targetDestination;
+  final VoidCallback? onClearTargetDestination;
   final VoidCallback? onBackClicked;
   final String userEmail;
   final VoidCallback? onLogout;
@@ -33,6 +35,8 @@ class FloorPlanScreen extends StatefulWidget {
     required this.userCoords,
     required this.destinations,
     required this.onSimulateMove,
+    this.targetDestination,
+    this.onClearTargetDestination,
     this.onSelectDestination,
     this.onBackClicked,
     this.userEmail = '',
@@ -73,6 +77,15 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
       vsync: this,
       duration: const Duration(milliseconds: 1400),
     )..repeat(reverse: true);
+
+    if (widget.targetDestination != null) {
+      _selectedPOI = widget.targetDestination;
+      final matchingFloor = widget.buildingProfile.floors.firstWhere(
+        (f) => f.floorNumber == widget.targetDestination!.floorNumber,
+        orElse: () => widget.currentFloor,
+      );
+      _overrideFloor = matchingFloor;
+    }
   }
 
   @override
@@ -80,6 +93,16 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
     super.didUpdateWidget(oldWidget);
     if (widget.currentFloor.floorNumber != oldWidget.currentFloor.floorNumber) {
       _overrideFloor = widget.currentFloor;
+    }
+    if (widget.targetDestination != oldWidget.targetDestination) {
+      _selectedPOI = widget.targetDestination;
+      if (widget.targetDestination != null) {
+        final matchingFloor = widget.buildingProfile.floors.firstWhere(
+          (f) => f.floorNumber == widget.targetDestination!.floorNumber,
+          orElse: () => widget.currentFloor,
+        );
+        _overrideFloor = matchingFloor;
+      }
     }
   }
 

@@ -23,6 +23,7 @@ import 'admin/admin_parking_manager_screen.dart';
 import 'admin/admin_osm_map_screen.dart';
 import 'admin/admin_floor_heights_screen.dart';
 import '../data/mall_api_service.dart';
+import '../data/floor_height_model.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   final String adminEmail;
@@ -34,6 +35,10 @@ class AdminDashboardScreen extends StatefulWidget {
   final VoidCallback onLogout;
   final Function(String mallId) onSelectActiveMall;
   final RealSensorService? sensorService;
+  final Function(DestinationPOI newPoi)? onAddPoi;
+  final Function(DestinationPOI updatedPoi)? onUpdatePoi;
+  final Function(String poiId)? onDeletePoi;
+  final Function(List<FloorHeightData> heights)? onFloorHeightsUpdated;
 
   const AdminDashboardScreen({
     super.key,
@@ -46,6 +51,10 @@ class AdminDashboardScreen extends StatefulWidget {
     required this.onLogout,
     required this.onSelectActiveMall,
     this.sensorService,
+    this.onAddPoi,
+    this.onUpdatePoi,
+    this.onDeletePoi,
+    this.onFloorHeightsUpdated,
   });
 
   @override
@@ -70,7 +79,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   double _rawPressure = 1013.25;
   double _smoothedPressure = 1013.25;
   double _kalmanVariance = 0.00012;
-  double _latencyMs = 14.0;
   int _satCount = 18;
   bool _isRealHardwareActive = false;
 
@@ -130,7 +138,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           _liveLng = widget.userCoords.longitude + (rng.nextDouble() - 0.5) * 0.00002;
           _heading = (350 + rng.nextDouble() * 20) % 360;
         }
-        _latencyMs = 12 + rng.nextDouble() * 5;
         _kalmanVariance = 0.00010 + rng.nextDouble() * 0.00004;
       });
     });
@@ -364,62 +371,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 10,
-                    height: 10,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFF10B981),
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: Color(0x6610B981),
-                          blurRadius: 8,
-                          spreadRadius: 2,
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'LIVE SYSTEM STATUS',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w900,
-                      color: const Color(0xFF0F172A),
-                      letterSpacing: 1.0,
-                    ),
-                  ),
-                ],
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF1F5F9),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: const Color(0xFFE2E8F0)),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(LucideIcons.activity, color: Color(0xFF475569), size: 12),
-                    const SizedBox(width: 4),
-                    Text(
-                      '${_latencyMs.toStringAsFixed(0)}ms delay',
-                      style: GoogleFonts.jetBrainsMono(
-                        fontSize: 11,
-                        color: const Color(0xFF475569),
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+          Text(
+            'LIVE SYSTEM STATUS',
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+              color: const Color(0xFF0F172A),
+              letterSpacing: 1.0,
+            ),
           ),
           const SizedBox(height: 12),
           // Sensor Telemetry Strip
@@ -553,6 +514,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                           setState(() {
                             _currentDestinations.insert(0, newPoi);
                           });
+                          widget.onAddPoi?.call(newPoi);
                         },
                         onUpdatePoi: (updatedPoi) {
                           setState(() {
@@ -560,11 +522,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                                 (p) => p.id == updatedPoi.id);
                             if (idx != -1) _currentDestinations[idx] = updatedPoi;
                           });
+                          widget.onUpdatePoi?.call(updatedPoi);
                         },
                         onDeletePoi: (poiId) {
                           setState(() {
                             _currentDestinations.removeWhere((p) => p.id == poiId);
                           });
+                          widget.onDeletePoi?.call(poiId);
                         },
                       ),
                     ),
@@ -615,6 +579,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 builder: (context) => AdminFloorHeightsScreen(
                   mallId: widget.buildingProfile.buildingId,
                   apiService: RestMallBackendApi(),
+                  onHeightsUpdated: (heights) {
+                    widget.onFloorHeightsUpdated?.call(heights);
+                  },
                 ),
               ),
             );
@@ -642,6 +609,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                     setState(() {
                       _currentDestinations.insert(0, importedPoi);
                     });
+                    widget.onAddPoi?.call(importedPoi);
                   },
                 ),
               ),
@@ -669,6 +637,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                     setState(() {
                       _currentDestinations.insert(0, newPoi);
                     });
+                    widget.onAddPoi?.call(newPoi);
                   },
                   onUpdatePoi: (updatedPoi) {
                     setState(() {
@@ -676,11 +645,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                           (p) => p.id == updatedPoi.id);
                       if (idx != -1) _currentDestinations[idx] = updatedPoi;
                     });
+                    widget.onUpdatePoi?.call(updatedPoi);
                   },
                   onDeletePoi: (poiId) {
                     setState(() {
                       _currentDestinations.removeWhere((p) => p.id == poiId);
                     });
+                    widget.onDeletePoi?.call(poiId);
                   },
                 ),
               ),
