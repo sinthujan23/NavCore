@@ -372,7 +372,12 @@ class _ARViewportScreenState extends State<ARViewportScreen>
     _shopMarkerManager.loadShops(widget.destinations);
 
     List<DestinationPOI> candidatePOIs;
-    if (_floorFilterMode == ARFloorFilterMode.currentFloorOnly) {
+    if (_selectedCategory != 'All' && _selectedCategory != 'ALL') {
+      // When a specific category is selected, allow discovery of matching shops across all building floors
+      candidatePOIs = widget.destinations
+          .where((poi) => _matchesCategory(poi, _selectedCategory))
+          .toList();
+    } else if (_floorFilterMode == ARFloorFilterMode.currentFloorOnly) {
       candidatePOIs = widget.destinations
           .where((poi) => poi.floorNumber == widget.currentFloor.floorNumber)
           .toList();
@@ -1628,28 +1633,28 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                     if (!_isNavigatingActive)
                       Builder(
                         builder: (context) {
-                          final allCount = candidatePOIs.length;
-                          final fashionCount = candidatePOIs
+                          final allCount = widget.destinations.length;
+                          final fashionCount = widget.destinations
                               .where((p) => _matchesCategory(p, 'Fashion'))
                               .length;
-                          final foodCount = candidatePOIs
+                          final foodCount = widget.destinations
                               .where((p) => _matchesCategory(p, 'Food'))
                               .length;
-                          final techCount = candidatePOIs
+                          final techCount = widget.destinations
                               .where((p) => _matchesCategory(p, 'Tech'))
                               .length;
-                          final entertainmentCount = candidatePOIs
+                          final entertainmentCount = widget.destinations
                               .where(
                                 (p) => _matchesCategory(p, 'Entertainment'),
                               )
                               .length;
-                          final luxuryCount = candidatePOIs
+                          final luxuryCount = widget.destinations
                               .where((p) => _matchesCategory(p, 'Luxury'))
                               .length;
-                          final servicesCount = candidatePOIs
+                          final servicesCount = widget.destinations
                               .where((p) => _matchesCategory(p, 'Services'))
                               .length;
-                          final parkingCount = candidatePOIs
+                          final parkingCount = widget.destinations
                               .where((p) => _matchesCategory(p, 'Parking'))
                               .length;
 

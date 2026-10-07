@@ -502,27 +502,27 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                   ),
                   _buildCategoryFilterChip(
                     'DINING',
-                    'Dining 🍽️',
+                    'Dining',
                     LucideIcons.utensils,
                   ),
                   _buildCategoryFilterChip(
                     'FASHION',
-                    'Fashion 👗',
+                    'Fashion',
                     LucideIcons.shoppingBag,
                   ),
                   _buildCategoryFilterChip(
                     'BEAUTY',
-                    'Beauty 💅',
+                    'Beauty',
                     LucideIcons.sparkles,
                   ),
                   _buildCategoryFilterChip(
                     'TECH',
-                    'Tech 💻',
+                    'Tech',
                     LucideIcons.laptop,
                   ),
                   _buildCategoryFilterChip(
                     'SERVICES',
-                    'Services ℹ️',
+                    'Services',
                     LucideIcons.info,
                   ),
                 ],
@@ -1504,18 +1504,18 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                 if (slot.isEVCharging)
                   _buildFeatureChip(
                     LucideIcons.zap,
-                    '⚡ 120kW EV Charger',
+                    '120kW EV Charger',
                     const Color(0xFF16A34A),
                   ),
                 if (slot.isHandicapAccessible)
                   _buildFeatureChip(
                     LucideIcons.accessibility,
-                    '♿ Handicap Bay',
+                    'Handicap Bay',
                     const Color(0xFF2563EB),
                   ),
                 _buildFeatureChip(
                   LucideIcons.radio,
-                  '🛰️ Live IoT Sensor Active',
+                  'Live IoT Sensor Active',
                   const Color(0xFF64748B),
                 ),
               ],
@@ -2667,10 +2667,10 @@ class ArchitecturalFloorPainter extends CustomPainter {
     String tag = '';
     Color tagColor = const Color(0xFF38BDF8);
     if (isEV) {
-      tag = '⚡';
+      tag = 'EV';
       tagColor = const Color(0xFF4ADE80);
     } else if (isHandicap) {
-      tag = '♿';
+      tag = 'HC';
       tagColor = const Color(0xFF60A5FA);
     }
 

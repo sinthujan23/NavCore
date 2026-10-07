@@ -313,7 +313,7 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
       ),
       body: Stack(
         children: [
-          // 🗺️ OpenStreetMap Flutter Plugin Widget
+          // OpenStreetMap Flutter Plugin Widget
           FlutterMap(
             mapController: _mapController,
             options: MapOptions(

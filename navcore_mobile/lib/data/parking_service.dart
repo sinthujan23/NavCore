@@ -46,7 +46,7 @@ class ParkingSlot {
       rating: 4.8,
       location: location,
       description:
-          '${isEVCharging ? 'EV Charger ⚡ • ' : ''}${isHandicapAccessible ? 'Handicap Accessible ♿ • ' : ''}Basement Parking Slot $id',
+          '${isEVCharging ? 'EV Charger • ' : ''}${isHandicapAccessible ? 'Handicap Accessible • ' : ''}Basement Parking Slot $id',
       openStatus: '24/7',
     );
   }
