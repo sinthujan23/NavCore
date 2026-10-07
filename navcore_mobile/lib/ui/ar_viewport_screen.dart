@@ -117,7 +117,9 @@ class _ARViewportScreenState extends State<ARViewportScreen>
       thetaDeadzone: 4.0,
       hysteresisMargin: 2.5,
     );
-    _floorPointCalculator = ARFloorPointCalculator(floorToFloorHeight: 5.0);
+    _floorPointCalculator = ARFloorPointCalculator(
+      floorToFloorHeight: defaultBuildingProfile.floorGapMeters,
+    );
     _shopMarkerManager = ARShopMarkerManager();
     _shopMarkerManager.loadShops(widget.destinations);
     final activeAnchor = widget.destinations.isNotEmpty
@@ -326,8 +328,9 @@ class _ARViewportScreenState extends State<ARViewportScreen>
         .map((f) => f.floorNumber)
         .toList();
 
-    final int resolvedFloorIndex = _tiltFloorMapper.updateFloorIndexRelative(
+    final int resolvedFloorIndex = _tiltFloorMapper.updateFloorIndexFromPitch(
       pitchDegrees: cameraPose.pitchDegrees,
+      currentFloorNumber: widget.currentFloor.floorNumber,
       validFloorNumbers: validBuildingFloors,
     );
 
@@ -453,6 +456,9 @@ class _ARViewportScreenState extends State<ARViewportScreen>
         activePOI.location,
         userFloorNumber: widget.currentFloor.floorNumber,
         targetFloorNumber: activePOI.floorNumber,
+        userAbsoluteAltitudeM: widget.currentFloor.absoluteHeightMeters,
+        targetAbsoluteAltitudeM:
+            _getFloorConfig(activePOI.floorNumber).absoluteHeightMeters,
       ).round();
 
       activeBearing = calculateBearingAngle(
@@ -482,17 +488,18 @@ class _ARViewportScreenState extends State<ARViewportScreen>
       topSafeLimit + 100.0,
     );
 
-    // 1. Sort POIs deterministically by floorNumber descending (Floor 10 down to B1), then by relAngle
-    final List<DestinationPOI>
-    sortedPOIs = List<DestinationPOI>.from(filteredPOIs)
-      ..sort((a, b) {
-        if (a.floorNumber != b.floorNumber) {
-          return b.floorNumber.compareTo(a.floorNumber);
-        }
-        final bearingA = calculateBearingAngle(effectiveUserCoords, a.location);
-        final bearingB = calculateBearingAngle(effectiveUserCoords, b.location);
-        return bearingA.compareTo(bearingB);
-      });
+    // 1. Pre-calculate bearings and spatial data for each filtered POI in a single O(N) pass
+    final poiMetadata = filteredPOIs.map((poi) {
+      final bearing = calculateBearingAngle(effectiveUserCoords, poi.location);
+      return (poi: poi, bearing: bearing);
+    }).toList();
+
+    poiMetadata.sort((a, b) {
+      if (a.poi.floorNumber != b.poi.floorNumber) {
+        return b.poi.floorNumber.compareTo(a.poi.floorNumber);
+      }
+      return a.bearing.compareTo(b.bearing);
+    });
 
     // 3D Perspective Camera Projection & Motion Tracking Engine
     final double hFovRad = (65.0 * math.pi) / 180.0;
@@ -505,8 +512,10 @@ class _ARViewportScreenState extends State<ARViewportScreen>
 
     final List<Map<String, dynamic>> rawPositioned = [];
 
-    for (int i = 0; i < sortedPOIs.length; i++) {
-      final poi = sortedPOIs[i];
+    for (int i = 0; i < poiMetadata.length; i++) {
+      final item = poiMetadata[i];
+      final poi = item.poi;
+      final bearing = item.bearing;
       final poiFloorConfig = _getFloorConfig(poi.floorNumber);
 
       final shopENU = _floorPointCalculator.calculateShopENUVector(
@@ -514,22 +523,23 @@ class _ARViewportScreenState extends State<ARViewportScreen>
         shopCoords: poi.location,
         userFloorNumber: widget.currentFloor.floorNumber,
         shopFloorNumber: poi.floorNumber,
+        userBaseAltitudeM: widget.currentFloor.absoluteHeightMeters,
+        shopBaseAltitudeM: poiFloorConfig.absoluteHeightMeters,
       );
 
       final double east = shopENU.x;
       final double north = shopENU.z;
-      final double deltaUpMeters =
-          poiFloorConfig.absoluteHeightMeters -
-          widget.currentFloor.absoluteHeightMeters;
+      final double deltaUpMeters = shopENU.y;
 
       int distM = calculateAccurate3DDistance(
         effectiveUserCoords,
         poi.location,
         userFloorNumber: widget.currentFloor.floorNumber,
         targetFloorNumber: poi.floorNumber,
+        userAbsoluteAltitudeM: widget.currentFloor.absoluteHeightMeters,
+        targetAbsoluteAltitudeM: poiFloorConfig.absoluteHeightMeters,
       ).round();
 
-      final bearing = calculateBearingAngle(effectiveUserCoords, poi.location);
       final directionStr = _getCardinalDirection(bearing);
 
       double relAngle = (bearing - fusedPose.headingDegrees);
@@ -626,60 +636,94 @@ class _ARViewportScreenState extends State<ARViewportScreen>
       });
     }
 
-    // 2. 2D Spatial Collision Avoidance Engine (positions all shops cleanly on screen)
+    // 2. Multi-Pass 2D Spatial Collision Avoidance Engine (guarantees zero overlapping cards across floors)
     const double baseCardW = 195.0;
     const double baseCardH = 80.0;
-    const double minGapX = 10.0;
-    const double minGapY = 12.0;
-    final List<Map<String, dynamic>> positionedCards = [];
+    const double minGapX = 12.0;
+    const double minGapY = 14.0;
+    final List<Map<String, dynamic>> positionedCards = List.from(rawPositioned);
 
-    for (final item in rawPositioned) {
-      double curX = item['posX'] as double;
-      double curY = item['posY'] as double;
-      final double cardScale = (item['distanceScale'] as double? ?? 1.0);
-      final double effectiveW = baseCardW * cardScale;
-      final double effectiveH = baseCardH * cardScale;
+    for (int pass = 0; pass < 5; pass++) {
+      bool hadCollision = false;
+      for (int i = 0; i < positionedCards.length; i++) {
+        final item = positionedCards[i];
+        final poiA = item['poi'] as DestinationPOI;
+        double curX = item['posX'] as double;
+        double curY = item['posY'] as double;
+        final double scaleA = (item['distanceScale'] as double? ?? 1.0);
+        final double wA = baseCardW * scaleA;
+        final double hA = baseCardH * scaleA;
 
-      curY = curY.clamp(topSafeLimit, bottomSafeLimit);
+        curY = curY.clamp(
+          topSafeLimit,
+          math.max(topSafeLimit, bottomSafeLimit - hA),
+        );
 
-      for (final existing in positionedCards) {
-        final double exX = existing['posX'] as double;
-        final double exY = existing['posY'] as double;
-        final double exScale = (existing['distanceScale'] as double? ?? 1.0);
-        final double exW = baseCardW * exScale;
-        final double exH = baseCardH * exScale;
+        for (int j = 0; j < positionedCards.length; j++) {
+          if (i == j) continue;
+          final existing = positionedCards[j];
+          final poiB = existing['poi'] as DestinationPOI;
+          final double exX = existing['posX'] as double;
+          final double exY = existing['posY'] as double;
+          final double scaleB = (existing['distanceScale'] as double? ?? 1.0);
+          final double wB = baseCardW * scaleB;
+          final double hB = baseCardH * scaleB;
 
-        final bool overlapX =
-            (curX < exX + exW + minGapX) && (curX + effectiveW + minGapX > exX);
-        final bool overlapY =
-            (curY < exY + exH + minGapY) && (curY + effectiveH + minGapY > exY);
+          final bool overlapX =
+              (curX < exX + wB + minGapX) && (curX + wA + minGapX > exX);
+          final bool overlapY =
+              (curY < exY + hB + minGapY) && (curY + hA + minGapY > exY);
 
-        if (overlapX && overlapY) {
-          final double shiftYUp = exY - effectiveH - minGapY;
-          final double shiftYDown = exY + exH + minGapY;
+          if (overlapX && overlapY) {
+            hadCollision = true;
 
-          if (shiftYUp >= topSafeLimit) {
-            curY = shiftYUp;
-          } else if (shiftYDown + effectiveH <= bottomSafeLimit) {
-            curY = shiftYDown;
-          } else {
-            final double candUp = shiftYUp.clamp(topSafeLimit, bottomSafeLimit);
-            final double candDown = shiftYDown.clamp(
+            // Floor-aware vertical collision separation: higher floor cards positioned above lower floor cards
+            if (poiA.floorNumber > poiB.floorNumber) {
+              final double newY = exY - hA - minGapY;
+              if (newY >= topSafeLimit) {
+                curY = newY;
+              } else {
+                curX = (curX >= exX)
+                    ? (exX + wB + minGapX).clamp(12.0, math.max(12.0, screenWidth - wA - 12.0))
+                    : (exX - wA - minGapX).clamp(12.0, math.max(12.0, screenWidth - wA - 12.0));
+              }
+            } else if (poiA.floorNumber < poiB.floorNumber) {
+              final double newY = exY + hB + minGapY;
+              if (newY + hA <= bottomSafeLimit) {
+                curY = newY;
+              } else {
+                curX = (curX >= exX)
+                    ? (exX + wB + minGapX).clamp(12.0, math.max(12.0, screenWidth - wA - 12.0))
+                    : (exX - wA - minGapX).clamp(12.0, math.max(12.0, screenWidth - wA - 12.0));
+              }
+            } else {
+              // Same floor collision resolution
+              final double shiftYUp = exY - hA - minGapY;
+              final double shiftYDown = exY + hB + minGapY;
+
+              if (shiftYUp >= topSafeLimit && (i % 2 == 0)) {
+                curY = shiftYUp;
+              } else if (shiftYDown + hA <= bottomSafeLimit) {
+                curY = shiftYDown;
+              } else if (shiftYUp >= topSafeLimit) {
+                curY = shiftYUp;
+              } else {
+                curX = (curX >= exX)
+                    ? (exX + wB + minGapX).clamp(12.0, math.max(12.0, screenWidth - wA - 12.0))
+                    : (exX - wA - minGapX).clamp(12.0, math.max(12.0, screenWidth - wA - 12.0));
+              }
+            }
+
+            curY = curY.clamp(
               topSafeLimit,
-              math.max(topSafeLimit, bottomSafeLimit - effectiveH),
+              math.max(topSafeLimit, bottomSafeLimit - hA),
             );
-            curY = (exY - topSafeLimit > bottomSafeLimit - exY)
-                ? candUp
-                : candDown;
+            item['posX'] = curX;
+            item['posY'] = curY;
           }
-
-          curY = curY.clamp(topSafeLimit, bottomSafeLimit);
         }
       }
-
-      item['posX'] = curX;
-      item['posY'] = curY;
-      positionedCards.add(item);
+      if (!hadCollision) break;
     }
 
     // Dynamic 3D AR Target Badge Screen Offset based on activeRelAngle & Pitch
@@ -755,6 +799,8 @@ class _ARViewportScreenState extends State<ARViewportScreen>
             floorWidthMeters: activePOIConfig.floorWidthMeters,
             floorLengthMeters: activePOIConfig.floorLengthMeters,
             ceilingHeightMeters: activePOIConfig.ceilingHeightMeters,
+            userAbsoluteAltitudeM: widget.currentFloor.absoluteHeightMeters,
+            targetAbsoluteAltitudeM: activePOIConfig.absoluteHeightMeters,
           )
         : null;
 
@@ -1433,6 +1479,8 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                         ],
                       ),
                     ),
+
+
 
                     // Top Navigation Guidance Banner (STEP 1/3 + Red EXIT Button)
                     if (activePOI != null && _isNavigatingActive)
@@ -2402,10 +2450,9 @@ class ARGroundPathwayPainter extends CustomPainter {
       ..strokeWidth = 2.0;
 
     final targetRingGlow = Paint()
-      ..color = primaryColor.withValues(alpha: 0.35)
+      ..color = primaryColor.withValues(alpha: 0.25)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 6.0
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+      ..strokeWidth = 5.0;
 
     canvas.drawOval(
       Rect.fromCenter(center: targetTop, width: 34, height: 15),
@@ -2447,10 +2494,11 @@ class ARGroundPathwayPainter extends CustomPainter {
         ..lineTo(-7 * scale, 6 * scale)
         ..close();
 
-      // Outer neon glow
+      // Outer neon glow stroke (High performance alpha layer without GPU offscreen blur)
       final glowPaint = Paint()
-        ..color = primaryColor.withValues(alpha: alpha * 0.5)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+        ..color = primaryColor.withValues(alpha: alpha * 0.35)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3.0 * scale;
 
       // Primary gradient filled sleek chevron
       final fillPaint = Paint()
@@ -2469,9 +2517,9 @@ class ARGroundPathwayPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant ARGroundPathwayPainter oldDelegate) {
-    return oldDelegate.relativeAngleDegrees != relativeAngleDegrees ||
+    return (oldDelegate.relativeAngleDegrees - relativeAngleDegrees).abs() > 0.1 ||
         oldDelegate.distanceMeters != distanceMeters ||
-        oldDelegate.phonePitchDegrees != phonePitchDegrees ||
+        (oldDelegate.phonePitchDegrees - phonePitchDegrees).abs() > 0.15 ||
         oldDelegate.isParkedVehicle != isParkedVehicle ||
         oldDelegate.userFloorNumber != userFloorNumber ||
         oldDelegate.targetFloorNumber != targetFloorNumber;

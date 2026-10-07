@@ -202,7 +202,7 @@ class RealSensorService {
       _accelY = rawY.isNaN || rawY.isInfinite ? 0.0 : rawY;
       _accelZ = rawZ.isNaN || rawZ.isInfinite ? 9.81 : rawZ;
 
-      final pitchRad = math.atan2(_accelZ, _accelY.abs());
+      final pitchRad = math.atan2(-_accelZ, _accelY.abs());
       final rawPitchDeg = pitchRad * (180.0 / math.pi);
       final safePitchDeg = rawPitchDeg.isNaN || rawPitchDeg.isInfinite ? 0.0 : rawPitchDeg;
 
@@ -210,10 +210,10 @@ class RealSensorService {
       _smoothedPitch = (_alpha * safePitchDeg) + ((1.0 - _alpha) * _smoothedPitch);
 
       PitchTiltDirection dir = PitchTiltDirection.level;
-      if (_smoothedPitch < -15.0) {
-        dir = PitchTiltDirection.down;
-      } else if (_smoothedPitch > 15.0) {
+      if (_smoothedPitch > 15.0) {
         dir = PitchTiltDirection.up;
+      } else if (_smoothedPitch < -15.0) {
+        dir = PitchTiltDirection.down;
       }
 
       final now = DateTime.now();

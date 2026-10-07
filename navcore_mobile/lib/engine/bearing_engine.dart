@@ -80,12 +80,33 @@ double calculateAccurate3DDistance(
   GeodeticCoords targetLocation, {
   int userFloorNumber = 1,
   int targetFloorNumber = 1,
-  double heightPerFloorMeters = 5.0,
+  double heightPerFloorMeters = 15.0,
+  double? userAbsoluteAltitudeM,
+  double? targetAbsoluteAltitudeM,
 }) {
-  final userEffectiveHeight =
-      userCoords.height + (userFloorNumber - 1) * heightPerFloorMeters;
-  final targetEffectiveHeight =
-      targetLocation.height + (targetFloorNumber - 1) * heightPerFloorMeters;
+  double userEffectiveHeight;
+  double targetEffectiveHeight;
+
+  if (userAbsoluteAltitudeM != null && targetAbsoluteAltitudeM != null) {
+    userEffectiveHeight = userAbsoluteAltitudeM;
+    targetEffectiveHeight = targetAbsoluteAltitudeM;
+  } else {
+    // If coords already specify absolute ellipsoidal height (> 20m), use directly;
+    // otherwise calculate based on floor gap relative to entrance base (45.0m)
+    final double userFloorOffset = userFloorNumber < 0
+        ? (userFloorNumber * heightPerFloorMeters)
+        : ((userFloorNumber - 1) * heightPerFloorMeters);
+    final double targetFloorOffset = targetFloorNumber < 0
+        ? (targetFloorNumber * heightPerFloorMeters)
+        : ((targetFloorNumber - 1) * heightPerFloorMeters);
+
+    userEffectiveHeight = userCoords.height > 20.0
+        ? userCoords.height
+        : 45.0 + userFloorOffset;
+    targetEffectiveHeight = targetLocation.height > 20.0
+        ? targetLocation.height
+        : 45.0 + targetFloorOffset;
+  }
 
   final userPoint = GeodeticCoords(
     latitude: userCoords.latitude,
@@ -113,7 +134,7 @@ double calculateDistanceFromEarthGround(
   int targetFloorNumber = 1,
   double groundElevationMeters = 45.0,
   GeodeticCoords? groundAnchorCoords,
-  double heightPerFloorMeters = 6.5,
+  double heightPerFloorMeters = 15.0,
 }) {
   final dist = (targetFloorNumber - 1).abs() * heightPerFloorMeters;
   return dist;
@@ -169,14 +190,15 @@ RealWorldSpatialMetrics calculateRealWorldSpatialMetrics({
   double floorWidthMeters = 220.0,
   double floorLengthMeters = 150.0,
   double ceilingHeightMeters = 5.5,
-  double heightPerFloorMeters = 6.5,
+  double heightPerFloorMeters = 15.0,
   double groundElevationMeters = 45.0,
+  double? userAbsoluteAltitudeM,
+  double? targetAbsoluteAltitudeM,
 }) {
   final d2D = haversineDistance(userCoords, targetCoords);
-  final floorDelta = (targetFloorNumber - userFloorNumber).toDouble();
-  final deltaH =
-      floorDelta * heightPerFloorMeters +
-      (targetCoords.height - userCoords.height);
+  final double deltaH = (userAbsoluteAltitudeM != null && targetAbsoluteAltitudeM != null)
+      ? (targetAbsoluteAltitudeM - userAbsoluteAltitudeM)
+      : ((targetFloorNumber - userFloorNumber).toDouble() * heightPerFloorMeters);
   final d3D = sqrt(d2D * d2D + deltaH * deltaH);
   final groundDist = (targetFloorNumber - 1).abs() * heightPerFloorMeters;
   final walkTime = d3D / 1.4; // 1.4 m/s nominal walking speed

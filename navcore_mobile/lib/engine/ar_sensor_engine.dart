@@ -73,11 +73,13 @@ class ARSensorEngine {
     double barometricPressureHpa = 1013.25,
   }) {
     // 1. Calculate raw pitch & roll in degrees from accelerometer
+    // Negate accelZ so pointing camera UP towards ceiling produces positive pitch (+deg),
+    // and pointing camera DOWN towards ground produces negative pitch (-deg).
     final rollRad = math.atan2(
       -accelX,
       math.sqrt(accelY * accelY + accelZ * accelZ),
     );
-    final pitchRad = math.atan2(accelZ, accelY.abs());
+    final pitchRad = math.atan2(-accelZ, accelY.abs());
 
     final rawPitchDeg = pitchRad * (180.0 / math.pi);
     final rawRollDeg = rollRad * (180.0 / math.pi);
@@ -106,10 +108,10 @@ class ARSensorEngine {
   /// Modular Function 2: detectFloor()
   /// Evaluates smoothed pitch angle against hysteresis thresholds (-15° / +15°) to compute target floor level
   PitchTiltDirection detectFloorDirection(double pitchDegrees) {
-    if (pitchDegrees < tiltDownThreshold) {
-      return PitchTiltDirection.down;
-    } else if (pitchDegrees > tiltUpThreshold) {
+    if (pitchDegrees > tiltUpThreshold) {
       return PitchTiltDirection.up;
+    } else if (pitchDegrees < tiltDownThreshold) {
+      return PitchTiltDirection.down;
     }
     return PitchTiltDirection.level;
   }

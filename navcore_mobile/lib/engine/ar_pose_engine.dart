@@ -179,6 +179,34 @@ class TiltFloorMapper {
     return _resolvedFloorIndex;
   }
 
+  /// Resolves target floor dynamically based on camera pitch motion angle relative to user's current floor
+  int updateFloorIndexFromPitch({
+    required double pitchDegrees,
+    required int currentFloorNumber,
+    required List<int> validFloorNumbers,
+  }) {
+    if (validFloorNumbers.isEmpty) return currentFloorNumber;
+
+    final sortedFloors = List<int>.from(validFloorNumbers)..sort();
+    int baseIdx = sortedFloors.indexOf(currentFloorNumber);
+    if (baseIdx < 0) {
+      baseIdx = 0;
+    }
+
+    final double theta = pitchDegrees.clamp(-90.0, 90.0);
+    int offset = 0;
+
+    if (theta > 8.0) {
+      offset = ((theta - 8.0) / 10.0).floor() + 1;
+    } else if (theta < -8.0) {
+      offset = -(((theta.abs() - 8.0) / 10.0).floor() + 1);
+    }
+
+    int targetIdx = (baseIdx + offset).clamp(0, sortedFloors.length - 1);
+    _resolvedFloorIndex = sortedFloors[targetIdx];
+    return _resolvedFloorIndex;
+  }
+
   /// Resolves target floor from ordered list of valid building floors (e.g. [-1, 1, 2, 3, 4])
   int updateFloorIndexFromList({
     required double pitchDegrees,
@@ -300,7 +328,7 @@ class ARFloorPointCalculator {
   final double
   floorToFloorHeight; // e.g. 4.5m - 15.0m vertical offset per floor
 
-  ARFloorPointCalculator({this.floorToFloorHeight = 5.0});
+  ARFloorPointCalculator({this.floorToFloorHeight = 15.0});
 
   /// Computes floor plane vertical offset for floorIndex
   double getFloorPlaneY(int floorIndex) => floorIndex * floorToFloorHeight;
@@ -432,18 +460,21 @@ class ARShopMarkerManager {
 
   /// Pitch-aware mounted marker selection:
   /// - Default: Current floor markers only.
-  /// - Camera tilt UP (> pitchThresholdDegrees, e.g. 12.0°): Show current floor AND upper floors.
+  /// - Camera tilt UP (> pitchThresholdDegrees, e.g. +8.0°): Show current floor AND upper floors.
+  /// - Camera tilt DOWN (< -pitchThresholdDegrees, e.g. -8.0°): Show current floor AND lower floors.
   List<DestinationPOI> getMountedMarkersForCamera({
     required int currentFloorNumber,
     required double cameraPitchDegrees,
-    double pitchThresholdDegrees = 12.0,
+    double pitchThresholdDegrees = 8.0,
   }) {
     final bool showUpperFloors = cameraPitchDegrees > pitchThresholdDegrees;
+    final bool showLowerFloors = cameraPitchDegrees < -pitchThresholdDegrees;
     final List<DestinationPOI> result = [];
     for (final entry in _shopsByFloor.entries) {
       for (final shop in entry.value) {
         if (shop.floorNumber == currentFloorNumber ||
-            (showUpperFloors && shop.floorNumber > currentFloorNumber)) {
+            (showUpperFloors && shop.floorNumber > currentFloorNumber) ||
+            (showLowerFloors && shop.floorNumber < currentFloorNumber)) {
           result.add(shop);
         }
       }
