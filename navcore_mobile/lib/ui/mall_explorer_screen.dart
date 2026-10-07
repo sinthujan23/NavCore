@@ -305,52 +305,92 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                         ),
                         if (widget.onLogout != null) ...[
                           const SizedBox(width: 8),
-                          GestureDetector(
-                            onTap: widget.onLogout,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 5,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(16),
-                                border: Border.all(
-                                  color: const Color(0xFFBFDBFE),
-                                ),
-                                boxShadow: const [
-                                  BoxShadow(
-                                    color: Color(0x14000000),
-                                    blurRadius: 6,
+                          Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              onTap: widget.onLogout,
+                              borderRadius: BorderRadius.circular(20),
+                              child: Container(
+                                height: 36,
+                                padding: const EdgeInsets.fromLTRB(4, 4, 8, 4),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(
+                                    color: const Color(0xFFE2E8F0),
+                                    width: 1.2,
                                   ),
-                                ],
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Icon(
-                                    LucideIcons.userCheck,
-                                    size: 13,
-                                    color: Color(0xFF2563EB),
-                                  ),
-                                  const SizedBox(width: 5),
-                                  Text(
-                                    widget.userEmail.isNotEmpty
-                                        ? widget.userEmail.split('@').first
-                                        : 'User',
-                                    style: GoogleFonts.plusJakartaSans(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w700,
-                                      color: const Color(0xFF1E293B),
+                                  boxShadow: const [
+                                    BoxShadow(
+                                      color: Color(0x0F000000),
+                                      blurRadius: 8,
+                                      offset: Offset(0, 2),
                                     ),
-                                  ),
-                                  const SizedBox(width: 5),
-                                  const Icon(
-                                    LucideIcons.logOut,
-                                    size: 13,
-                                    color: Color(0xFFEF4444),
-                                  ),
-                                ],
+                                  ],
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Container(
+                                      width: 28,
+                                      height: 28,
+                                      decoration: const BoxDecoration(
+                                        gradient: LinearGradient(
+                                          colors: [
+                                            Color(0xFF2563EB),
+                                            Color(0xFF1D4ED8),
+                                          ],
+                                          begin: Alignment.topLeft,
+                                          end: Alignment.bottomRight,
+                                        ),
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: Center(
+                                        child: Text(
+                                          (widget.userEmail.isNotEmpty
+                                                  ? widget.userEmail.split('@').first[0]
+                                                  : 'U')
+                                              .toUpperCase(),
+                                          style: GoogleFonts.plusJakartaSans(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w800,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 7),
+                                    Text(
+                                      widget.userEmail.isNotEmpty
+                                          ? '${widget.userEmail.split('@').first[0].toUpperCase()}${widget.userEmail.split('@').first.substring(1)}'
+                                          : 'User',
+                                      style: GoogleFonts.plusJakartaSans(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
+                                        color: const Color(0xFF0F172A),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Container(
+                                      width: 22,
+                                      height: 22,
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFFEF2F2),
+                                        shape: BoxShape.circle,
+                                        border: Border.all(
+                                          color: const Color(0xFFFEE2E2),
+                                        ),
+                                      ),
+                                      child: const Center(
+                                        child: Icon(
+                                          LucideIcons.logOut,
+                                          size: 11,
+                                          color: Color(0xFFEF4444),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),

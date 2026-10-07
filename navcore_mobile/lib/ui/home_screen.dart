@@ -208,66 +208,49 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ),
         ),
         const PopupMenuDivider(),
-        PopupMenuItem<int?>(
-          value: currentFloor.floorNumber,
-          child: Row(
-            children: [
-              const Icon(
-                LucideIcons.mapPin,
-                size: 16,
-                color: Color(0xFF10B981),
-              ),
-              const SizedBox(width: 10),
-              Text(
-                currentFloor.floorNumber < 0
-                    ? 'My Floor (B${currentFloor.floorNumber.abs()})'
-                    : 'My Floor (F${currentFloor.floorNumber})',
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF065F46),
-                ),
-              ),
-              if (_selectedFloorNumber == currentFloor.floorNumber) ...[
-                const Spacer(),
-                const Icon(
-                  LucideIcons.check,
-                  size: 16,
-                  color: Color(0xFF10B981),
-                ),
-              ],
-            ],
-          ),
-        ),
-        const PopupMenuDivider(),
         ...widget.buildingProfile.floors.map((floor) {
+          final isCurrentFloor = floor.floorNumber == currentFloor.floorNumber;
+          final isSelected = _selectedFloorNumber == floor.floorNumber;
+
           String floorLabelSimple;
           if (floor.floorNumber < 0) {
-            floorLabelSimple = 'Floor B${floor.floorNumber.abs()} (Basement)';
+            floorLabelSimple = isCurrentFloor
+                ? 'My Floor (B${floor.floorNumber.abs()})'
+                : 'Floor B${floor.floorNumber.abs()} (Basement)';
           } else if (floor.floorNumber == 1) {
-            floorLabelSimple = 'Floor F1 (Ground Floor)';
+            floorLabelSimple = isCurrentFloor
+                ? 'My Floor (F1)'
+                : 'Floor F1 (Ground Floor)';
           } else {
-            floorLabelSimple = 'Floor F${floor.floorNumber}';
+            floorLabelSimple = isCurrentFloor
+                ? 'My Floor (F${floor.floorNumber})'
+                : 'Floor F${floor.floorNumber}';
           }
 
-          final isSelected = _selectedFloorNumber == floor.floorNumber;
           return PopupMenuItem<int?>(
             value: floor.floorNumber,
             child: Row(
               children: [
                 Icon(
-                  LucideIcons.building,
+                  isCurrentFloor ? LucideIcons.mapPin : LucideIcons.building,
                   size: 16,
                   color: isSelected
                       ? const Color(0xFF2563EB)
-                      : const Color(0xFF64748B),
+                      : (isCurrentFloor
+                            ? const Color(0xFF10B981)
+                            : const Color(0xFF64748B)),
                 ),
                 const SizedBox(width: 10),
                 Text(
                   floorLabelSimple,
                   style: TextStyle(
                     fontSize: 13,
-                    fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                    fontWeight: isSelected || isCurrentFloor
+                        ? FontWeight.w600
+                        : FontWeight.w400,
+                    color: isCurrentFloor && !isSelected
+                        ? const Color(0xFF065F46)
+                        : null,
                   ),
                 ),
                 if (isSelected) ...[
@@ -395,98 +378,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildActiveFiltersRow() {
-    final bool hasActiveFilters =
-        _selectedCategory != 'ALL' ||
-        _selectedFloorNumber != null ||
-        _searchQuery.isNotEmpty;
 
-    if (!hasActiveFilters) return const SizedBox.shrink();
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
-      child: Wrap(
-        spacing: 6,
-        runSpacing: 6,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          const Text(
-            'Active:',
-            style: TextStyle(
-              fontSize: 11.5,
-              fontWeight: FontWeight.w700,
-              color: Color(0xFF64748B),
-            ),
-          ),
-          if (_searchQuery.isNotEmpty)
-            _buildFilterChip('Search: "$_searchQuery"', () {
-              setState(() {
-                _searchQuery = '';
-                _searchController.clear();
-              });
-            }),
-          if (_selectedCategory != 'ALL')
-            _buildFilterChip(_selectedCategory, () {
-              setState(() => _selectedCategory = 'ALL');
-            }),
-          if (_selectedFloorNumber != null)
-            _buildFilterChip(
-              _selectedFloorNumber! < 0
-                  ? 'Floor B${_selectedFloorNumber!.abs()}'
-                  : 'Floor F$_selectedFloorNumber',
-              () => setState(() => _selectedFloorNumber = null),
-            ),
-          GestureDetector(
-            onTap: _clearAllFilters,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              child: const Text(
-                'Clear All',
-                style: TextStyle(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFFDC2626),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildFilterChip(String label, VoidCallback onRemove) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-      decoration: BoxDecoration(
-        color: const Color(0xFFEFF6FF),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFBFDBFE)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            label,
-            style: const TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF1D4ED8),
-            ),
-          ),
-          const SizedBox(width: 4),
-          GestureDetector(
-            onTap: onRemove,
-            child: const Icon(
-              LucideIcons.x,
-              size: 13,
-              color: Color(0xFF2563EB),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 
   Widget _buildRealWorldStoreCard(
     DestinationPOI shop,
@@ -592,17 +484,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   void _showShopDetails(DestinationPOI shop) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => ShopDetailsScreen(
-        destination: shop,
-        userCoords: widget.userCoords,
-        onStartARNavigation: () {
-          Navigator.pop(context);
-          widget.onSelectDestination(shop);
-        },
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ShopDetailsScreen(
+          destination: shop,
+          userCoords: widget.userCoords,
+          onStartARNavigation: () {
+            Navigator.pop(context);
+            widget.onSelectDestination(shop);
+          },
+        ),
       ),
     );
   }
@@ -681,52 +573,92 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         ),
                         if (widget.onLogout != null) ...[
                           const SizedBox(width: 8),
-                          GestureDetector(
-                            onTap: widget.onLogout,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 5,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(16),
-                                border: Border.all(
-                                  color: const Color(0xFFBFDBFE),
-                                ),
-                                boxShadow: const [
-                                  BoxShadow(
-                                    color: Color(0x14000000),
-                                    blurRadius: 6,
+                          Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              onTap: widget.onLogout,
+                              borderRadius: BorderRadius.circular(20),
+                              child: Container(
+                                height: 36,
+                                padding: const EdgeInsets.fromLTRB(4, 4, 8, 4),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(
+                                    color: const Color(0xFFE2E8F0),
+                                    width: 1.2,
                                   ),
-                                ],
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Icon(
-                                    LucideIcons.userCheck,
-                                    size: 13,
-                                    color: Color(0xFF2563EB),
-                                  ),
-                                  const SizedBox(width: 5),
-                                  Text(
-                                    widget.userEmail.isNotEmpty
-                                        ? widget.userEmail.split('@').first
-                                        : 'User',
-                                    style: GoogleFonts.plusJakartaSans(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w700,
-                                      color: const Color(0xFF1E293B),
+                                  boxShadow: const [
+                                    BoxShadow(
+                                      color: Color(0x0F000000),
+                                      blurRadius: 8,
+                                      offset: Offset(0, 2),
                                     ),
-                                  ),
-                                  const SizedBox(width: 5),
-                                  const Icon(
-                                    LucideIcons.logOut,
-                                    size: 13,
-                                    color: Color(0xFFEF4444),
-                                  ),
-                                ],
+                                  ],
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Container(
+                                      width: 28,
+                                      height: 28,
+                                      decoration: const BoxDecoration(
+                                        gradient: LinearGradient(
+                                          colors: [
+                                            Color(0xFF2563EB),
+                                            Color(0xFF1D4ED8),
+                                          ],
+                                          begin: Alignment.topLeft,
+                                          end: Alignment.bottomRight,
+                                        ),
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: Center(
+                                        child: Text(
+                                          (widget.userEmail.isNotEmpty
+                                                  ? widget.userEmail.split('@').first[0]
+                                                  : 'U')
+                                              .toUpperCase(),
+                                          style: GoogleFonts.plusJakartaSans(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w800,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 7),
+                                    Text(
+                                      widget.userEmail.isNotEmpty
+                                          ? '${widget.userEmail.split('@').first[0].toUpperCase()}${widget.userEmail.split('@').first.substring(1)}'
+                                          : 'User',
+                                      style: GoogleFonts.plusJakartaSans(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
+                                        color: const Color(0xFF0F172A),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Container(
+                                      width: 22,
+                                      height: 22,
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFFEF2F2),
+                                        shape: BoxShape.circle,
+                                        border: Border.all(
+                                          color: const Color(0xFFFEE2E2),
+                                        ),
+                                      ),
+                                      child: const Center(
+                                        child: Icon(
+                                          LucideIcons.logOut,
+                                          size: 11,
+                                          color: Color(0xFFEF4444),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
@@ -830,11 +762,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                   child: const Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      _LiveStatusPulseDot(
-                                        color: Color(0xFF10B981),
-                                        size: 6.5,
-                                      ),
-                                      SizedBox(width: 7),
                                       Text(
                                         'CURRENT MALL',
                                         style: TextStyle(
@@ -874,13 +801,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                   child: const Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      _LiveStatusPulseDot(
-                                        color: Color(0xFF3B82F6),
-                                        size: 6.0,
-                                      ),
-                                      SizedBox(width: 6),
                                       Text(
-                                        ' AR READY',
+                                        'AR READY',
                                         style: TextStyle(
                                           color: Color(0xFF60A5FA),
                                           fontSize: 10.5,
@@ -1064,7 +986,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         Expanded(child: _buildCategoryDropdown()),
                       ],
                     ),
-                    _buildActiveFiltersRow(),
                   ],
                 ),
               ),
@@ -1209,8 +1130,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       child: const Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(LucideIcons.car, color: Colors.black, size: 13),
-                          SizedBox(width: 6),
                           Text(
                             'MY PARKED CAR',
                             style: TextStyle(
@@ -1242,11 +1161,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       child: const Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          _LiveStatusPulseDot(
-                            color: Color(0xFF10B981),
-                            size: 6.5,
-                          ),
-                          SizedBox(width: 7),
                           Text(
                             'PARKED',
                             style: TextStyle(
@@ -1393,78 +1307,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 }
 
-class _LiveStatusPulseDot extends StatefulWidget {
-  final Color color;
-  final double size;
-
-  const _LiveStatusPulseDot({required this.color, this.size = 6.0});
-
-  @override
-  State<_LiveStatusPulseDot> createState() => _LiveStatusPulseDotState();
-}
-
-class _LiveStatusPulseDotState extends State<_LiveStatusPulseDot>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1600),
-    )..repeat();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, child) {
-        final progress = _controller.value;
-        return Stack(
-          alignment: Alignment.center,
-          children: [
-            Transform.scale(
-              scale: 1.0 + (progress * 1.8),
-              child: Opacity(
-                opacity: (1.0 - progress).clamp(0.0, 1.0),
-                child: Container(
-                  width: widget.size,
-                  height: widget.size,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: widget.color.withValues(alpha: 0.6),
-                  ),
-                ),
-              ),
-            ),
-            Container(
-              width: widget.size,
-              height: widget.size,
-              decoration: BoxDecoration(
-                color: widget.color,
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: widget.color.withValues(alpha: 0.8),
-                    blurRadius: 4,
-                  ),
-                ],
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-}
 
 class _ParkedVehicleSonarPainter extends CustomPainter {
   final double animationValue;
@@ -1590,3 +1432,4 @@ class _AmbientGlowPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _AmbientGlowPainter oldDelegate) => false;
 }
+

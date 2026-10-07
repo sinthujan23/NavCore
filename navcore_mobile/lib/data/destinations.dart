@@ -9,6 +9,7 @@ class DestinationPOI {
   final GeodeticCoords location;
   final String description;
   final String openStatus;
+  final String? openingHours;
   final String? imageUrl;
 
   const DestinationPOI({
@@ -20,6 +21,7 @@ class DestinationPOI {
     required this.location,
     required this.description,
     required this.openStatus,
+    this.openingHours,
     this.imageUrl,
   });
 
@@ -29,6 +31,28 @@ class DestinationPOI {
       return imageUrl!;
     }
     return getFallbackShopImage(name, category);
+  }
+
+  /// Helper to return realistic opening hours (e.g. "10:00 AM - 10:00 PM")
+  String get effectiveOpeningHours {
+    if (openingHours != null && openingHours!.trim().isNotEmpty) {
+      return openingHours!;
+    }
+    final n = name.toLowerCase();
+    final c = category.toLowerCase();
+    if (openStatus == '24/7' || n.contains('ev') || n.contains('locker') || n.contains('concierge') || n.contains('valet')) {
+      return '24 Hours Open';
+    }
+    if (n.contains('keells') || n.contains('supermarket')) {
+      return '08:00 AM - 10:00 PM';
+    }
+    if (c.contains('food') || n.contains('coffee') || n.contains('tea') || n.contains('barista') || n.contains('dilmah')) {
+      return '08:30 AM - 11:00 PM';
+    }
+    if (n.contains('cinema') || n.contains('pvr') || n.contains('imax')) {
+      return '10:00 AM - 11:30 PM';
+    }
+    return '10:00 AM - 10:00 PM';
   }
 }
 

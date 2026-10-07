@@ -91,9 +91,6 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
   @override
   void didUpdateWidget(FloorPlanScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.currentFloor.floorNumber != oldWidget.currentFloor.floorNumber) {
-      _overrideFloor = widget.currentFloor;
-    }
     if (widget.targetDestination != oldWidget.targetDestination) {
       _selectedPOI = widget.targetDestination;
       if (widget.targetDestination != null) {
@@ -182,115 +179,96 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
           ],
         ),
         actions: [
-          if (!isParkingFloor)
-            InkWell(
-              onTap: () => _showFloorDirectoryModal(context, currentFloorPOIs),
-              borderRadius: BorderRadius.circular(10),
-              child: Container(
-                margin: const EdgeInsets.only(right: 12),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEFF6FF),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: const Color(0xFFBFDBFE)),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      LucideIcons.store,
-                      color: Color(0xFF2563EB),
-                      size: 14,
-                    ),
-                    const SizedBox(width: 5),
-                    Text(
-                      '${currentFloorPOIs.length} Shops',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: const Color(0xFF1E40AF),
+          if (widget.onLogout != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: widget.onLogout,
+                  borderRadius: BorderRadius.circular(20),
+                  child: Container(
+                    height: 36,
+                    padding: const EdgeInsets.fromLTRB(4, 4, 8, 4),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: const Color(0xFFE2E8F0),
+                        width: 1.2,
                       ),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x0F000000),
+                          blurRadius: 8,
+                          offset: Offset(0, 2),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-              ),
-            )
-          else
-            InkWell(
-              onTap: () {
-                if (myVehicle != null) {
-                  final parkedSlot = floorSlots.firstWhere(
-                    (s) => s.id == myVehicle.slotId,
-                    orElse: () => ParkingSlot(
-                      id: myVehicle.slotId,
-                      floorId: myVehicle.floorId,
-                      section: 'A',
-                      slotNumber: 1,
-                      status: ParkingSlotStatus.occupied,
-                      location: myVehicle.location,
-                      gridRow: 0,
-                      gridCol: 0,
-                      sensorId: '',
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 28,
+                          height: 28,
+                          decoration: const BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [
+                                Color(0xFF2563EB),
+                                Color(0xFF1D4ED8),
+                              ],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Center(
+                            child: Text(
+                              (widget.userEmail.isNotEmpty
+                                      ? widget.userEmail.split('@').first[0]
+                                      : 'U')
+                                  .toUpperCase(),
+                              style: GoogleFonts.plusJakartaSans(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 7),
+                        Text(
+                          widget.userEmail.isNotEmpty
+                              ? '${widget.userEmail.split('@').first[0].toUpperCase()}${widget.userEmail.split('@').first.substring(1)}'
+                              : 'User',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: const Color(0xFF0F172A),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(
+                          width: 22,
+                          height: 22,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFEF2F2),
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: const Color(0xFFFEE2E2),
+                            ),
+                          ),
+                          child: const Center(
+                            child: Icon(
+                              LucideIcons.logOut,
+                              size: 11,
+                              color: Color(0xFFEF4444),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                  );
-                  _showParkingSlotModal(context, parkedSlot, true);
-                } else {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'Tap any parking slot to reserve or navigate!',
-                      ),
-                      backgroundColor: Color(0xFF2563EB),
-                      behavior: SnackBarBehavior.floating,
-                    ),
-                  );
-                }
-              },
-              borderRadius: BorderRadius.circular(10),
-              child: Container(
-                margin: const EdgeInsets.only(right: 12),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: myVehicle != null
-                      ? const Color(0xFF16A34A)
-                      : const Color(0xFF0F172A),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: myVehicle != null
-                        ? const Color(0xFF86EFAC)
-                        : const Color(0xFF334155),
                   ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      myVehicle != null
-                          ? LucideIcons.car
-                          : LucideIcons.parkingCircle,
-                      color: myVehicle != null
-                          ? Colors.white
-                          : const Color(0xFF38BDF8),
-                      size: 14,
-                    ),
-                    const SizedBox(width: 5),
-                    Text(
-                      myVehicle != null
-                          ? 'Car: ${myVehicle.slotId}'
-                          : '$freeSlotsCount Free',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ],
                 ),
               ),
             ),
@@ -430,58 +408,122 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                     ),
                   ),
                 ],
-                if (widget.onLogout != null) ...[
-                  const SizedBox(width: 8),
-                  GestureDetector(
-                    onTap: widget.onLogout,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 5,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: const Color(0xFFBFDBFE),
+                if (!isParkingFloor)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 6),
+                    child: InkWell(
+                      onTap: () => _showFloorDirectoryModal(context, currentFloorPOIs),
+                      borderRadius: BorderRadius.circular(10),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
                         ),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Color(0x14000000),
-                            blurRadius: 6,
-                          ),
-                        ],
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(
-                            LucideIcons.userCheck,
-                            size: 13,
-                            color: Color(0xFF2563EB),
-                          ),
-                          const SizedBox(width: 5),
-                          Text(
-                            widget.userEmail.isNotEmpty
-                                ? widget.userEmail.split('@').first
-                                : 'User',
-                            style: GoogleFonts.plusJakartaSans(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                              color: const Color(0xFF1E293B),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFEFF6FF),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0xFFBFDBFE)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              LucideIcons.store,
+                              color: Color(0xFF2563EB),
+                              size: 14,
                             ),
+                            const SizedBox(width: 5),
+                            Text(
+                              '${currentFloorPOIs.length} Shops',
+                              style: GoogleFonts.plusJakartaSans(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: const Color(0xFF1E40AF),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  Padding(
+                    padding: const EdgeInsets.only(left: 6),
+                    child: InkWell(
+                      onTap: () {
+                        if (myVehicle != null) {
+                          final parkedSlot = floorSlots.firstWhere(
+                            (s) => s.id == myVehicle.slotId,
+                            orElse: () => ParkingSlot(
+                              id: myVehicle.slotId,
+                              floorId: myVehicle.floorId,
+                              section: 'A',
+                              slotNumber: 1,
+                              status: ParkingSlotStatus.occupied,
+                              location: myVehicle.location,
+                              gridRow: 0,
+                              gridCol: 0,
+                              sensorId: '',
+                            ),
+                          );
+                          _showParkingSlotModal(context, parkedSlot, true);
+                        } else {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Tap any parking slot to reserve or navigate!',
+                              ),
+                              backgroundColor: Color(0xFF2563EB),
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        }
+                      },
+                      borderRadius: BorderRadius.circular(10),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: myVehicle != null
+                              ? const Color(0xFF16A34A)
+                              : const Color(0xFF0F172A),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: myVehicle != null
+                                ? const Color(0xFF86EFAC)
+                                : const Color(0xFF334155),
                           ),
-                          const SizedBox(width: 5),
-                          const Icon(
-                            LucideIcons.logOut,
-                            size: 13,
-                            color: Color(0xFFEF4444),
-                          ),
-                        ],
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              myVehicle != null
+                                  ? LucideIcons.car
+                                  : LucideIcons.parkingCircle,
+                              color: myVehicle != null
+                                  ? Colors.white
+                                  : const Color(0xFF38BDF8),
+                              size: 14,
+                            ),
+                            const SizedBox(width: 5),
+                            Text(
+                              myVehicle != null
+                                  ? 'Car: ${myVehicle.slotId}'
+                                  : '$freeSlotsCount Free',
+                              style: GoogleFonts.plusJakartaSans(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
-                ],
               ],
             ),
           ),
@@ -2291,12 +2333,10 @@ class ArchitecturalFloorPainter extends CustomPainter {
     canvas.drawCircle(compassCenter, 28, compassCirclePaint);
 
     // 4. Floor Content Layout (Retail vs Basement)
-    Offset? selectedTargetDoorOffset;
-
     if (isParkingFloor) {
       _paintBasementParkingPlan(canvas, size, roomTopPadding);
     } else {
-      selectedTargetDoorOffset = _paintRetailPlan(canvas, size, roomTopPadding);
+      _paintRetailPlan(canvas, size, roomTopPadding);
     }
 
     // 5. Entrance Lobby & Elevator Hub Header
@@ -2382,18 +2422,10 @@ class ArchitecturalFloorPainter extends CustomPainter {
       textAlign: TextAlign.center,
     );
 
-    // 6. Draw Vector Pathfinding Line when POI is selected!
-    if (selectedTargetDoorOffset != null) {
-      _drawVectorWalkingRoutePath(
-        canvas,
-        size,
-        selectedTargetDoorOffset,
-        isParkingFloor,
-      );
-    }
+
   }
 
-  Offset? _paintRetailPlan(Canvas canvas, Size size, double roomTopPadding) {
+  void _paintRetailPlan(Canvas canvas, Size size, double roomTopPadding) {
     final double availableHeight = size.height - roomTopPadding - 46.0;
     final double roomH = availableHeight * 0.15;
     final double gapY = (availableHeight - (roomH * 3)) / 4;
@@ -2420,8 +2452,6 @@ class ArchitecturalFloorPainter extends CustomPainter {
       ),
     ];
 
-    Offset? selectedDoorOffset;
-
     for (int i = 0; i < roomBoxes.length; i++) {
       final rect = roomBoxes[i];
       final DestinationPOI? poi = i < currentFloorPOIs.length
@@ -2435,10 +2465,6 @@ class ArchitecturalFloorPainter extends CustomPainter {
       final isLeftWing = rect.left < size.width * 0.50;
       final doorX = isLeftWing ? rect.right : rect.left;
       final doorY = rect.top + (rect.height / 2);
-
-      if (isSelected) {
-        selectedDoorOffset = Offset(doorX, doorY);
-      }
 
       // Render Doorway Arc into Corridor
       final doorArcPaint = Paint()
@@ -2469,8 +2495,6 @@ class ArchitecturalFloorPainter extends CustomPainter {
         );
       }
     }
-
-    return selectedDoorOffset;
   }
 
   void _paintBasementParkingPlan(
@@ -2701,102 +2725,7 @@ class ArchitecturalFloorPainter extends CustomPainter {
     );
   }
 
-  void _drawVectorWalkingRoutePath(
-    Canvas canvas,
-    Size size,
-    Offset targetDoor,
-    bool isDark,
-  ) {
-    final activeMallAnchor = currentFloorPOIs.isNotEmpty
-        ? currentFloorPOIs.first.location
-        : entranceAnchor;
-    final effectiveUser = getEffectiveUserCoords(
-      userCoords,
-      activeMallAnchor,
-    );
 
-    final double centerLat = activeMallAnchor.latitude;
-    final double centerLon = activeMallAnchor.longitude;
-    const double pixelsPerDegLat = 800000.0;
-    const double pixelsPerDegLon = 800000.0;
-
-    final double deltaLat = effectiveUser.latitude - centerLat;
-    final double deltaLon = effectiveUser.longitude - centerLon;
-
-    final double rawUserX = (size.width / 2) + (deltaLon * pixelsPerDegLon);
-    final double rawUserY = (size.height / 2) - (deltaLat * pixelsPerDegLat);
-
-    final double userX = rawUserX.clamp(20.0, size.width - 20.0);
-    final double userY = rawUserY.clamp(20.0, size.height - 20.0);
-    final userPos = Offset(userX, userY);
-
-    final path = Path();
-    path.moveTo(userPos.dx, userPos.dy);
-    path.lineTo(size.width * 0.50, userPos.dy);
-    path.lineTo(size.width * 0.50, targetDoor.dy);
-    path.lineTo(targetDoor.dx, targetDoor.dy);
-
-    // Glowing Underlayer Path
-    final pathGlowPaint = Paint()
-      ..color = (isDark ? const Color(0xFF00E5FF) : const Color(0xFF2563EB))
-          .withValues(alpha: 0.25)
-      ..strokeWidth = 7.0
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-    canvas.drawPath(path, pathGlowPaint);
-
-    // Motion Dash Animated Path
-    final pathPaint = Paint()
-      ..color = isDark ? const Color(0xFF00E5FF) : const Color(0xFF2563EB)
-      ..strokeWidth = 3.2
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-
-    final double dashOffset = pulseAnimationValue * 20.0;
-
-    final pathMetrics = path.computeMetrics();
-    for (final metric in pathMetrics) {
-      double distance = dashOffset % 12.0;
-      while (distance < metric.length) {
-        final extract = metric.extractPath(
-          distance,
-          math.min(distance + 6.0, metric.length),
-        );
-        canvas.drawPath(extract, pathPaint);
-        distance += 12.0;
-      }
-
-      // Traveling Motion Light Energy Bead
-      final pulseDistance =
-          (pulseAnimationValue * metric.length) % metric.length;
-      final tangent = metric.getTangentForOffset(pulseDistance);
-      if (tangent != null) {
-        final beadGlow = Paint()
-          ..color = (isDark ? const Color(0xFF00E5FF) : const Color(0xFF2563EB))
-              .withValues(alpha: 0.7)
-          ..style = PaintingStyle.fill;
-        canvas.drawCircle(tangent.position, 7.0, beadGlow);
-
-        final beadPaint = Paint()
-          ..color = isDark ? const Color(0xFFE0F2FE) : Colors.white
-          ..style = PaintingStyle.fill;
-        canvas.drawCircle(tangent.position, 4.0, beadPaint);
-      }
-    }
-
-    // Target Doorway Radar Beacon with Animated Expanding Waves
-    final beaconDotPaint = Paint()
-      ..color = isDark ? const Color(0xFF00E5FF) : const Color(0xFF2563EB);
-    canvas.drawCircle(targetDoor, 5.5, beaconDotPaint);
-
-    final beaconRingRadius = 6.0 + (pulseAnimationValue * 9.0);
-    final beaconRingPaint = Paint()
-      ..color = (isDark ? const Color(0xFF00E5FF) : const Color(0xFF2563EB))
-          .withValues(alpha: (1.0 - pulseAnimationValue).clamp(0.0, 1.0))
-      ..strokeWidth = 1.8
-      ..style = PaintingStyle.stroke;
-    canvas.drawCircle(targetDoor, beaconRingRadius, beaconRingPaint);
-  }
 
   RoomCategoryProfile _getProfileForCategory(String category) {
     final cat = category.toUpperCase();

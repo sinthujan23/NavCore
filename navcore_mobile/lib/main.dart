@@ -183,7 +183,7 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
             _userCoords = GeodeticCoords(
               latitude: _userCoords.latitude,
               longitude: _userCoords.longitude,
-              height: calculatedHeight,
+              height: _userSelectedFloorHeight ?? calculatedHeight,
             );
             _kalmanFilter.setPosition(_userCoords);
 
@@ -631,6 +631,7 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
         onLogout: _showLogoutConfirmationDialog,
       ),
       ARViewportScreen(
+        isActive: _currentIndex == 1,
         userCoords: _userCoords,
         currentFloor: currentFloor,
         destinations: _destinations,
