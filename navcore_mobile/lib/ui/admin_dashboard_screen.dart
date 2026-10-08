@@ -454,7 +454,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        // Executive Stat Widgets (2x2 Grid)
+        // Executive Stat Widgets
         Row(
           children: [
             Expanded(
@@ -481,19 +481,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               ),
             ),
             const SizedBox(width: 12),
-            Expanded(
-              child: _buildModernMetricCard(
-                title: 'AR Markers',
-                value: '$_markerCount Active',
-                badgeText: 'QR & Position Pins',
-                onTap: _openMarkerConfigModal,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
             Expanded(
               child: _buildModernMetricCard(
                 title: 'Stores & Shops',
@@ -536,7 +523,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 },
               ),
             ),
-            const SizedBox(width: 12),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
             Expanded(
               child: _buildModernMetricCard(
                 title: 'Parking Slots',
@@ -552,6 +543,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 },
               ),
             ),
+            const SizedBox(width: 12),
+            const Expanded(child: SizedBox()),
           ],
         ),
 
@@ -662,29 +655,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         const SizedBox(height: 10),
 
         _buildQuickActionCard(
-          title: 'Manage Buildings & Malls',
-          badge: 'Current Mall',
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => AdminVenueManagerScreen(
-                  mallService: widget.mallService,
-                  onSelectActiveMall: widget.onSelectActiveMall,
-                  userCoords: GeodeticCoords(
-                    latitude: _liveLat,
-                    longitude: _liveLng,
-                    height: _liveHeight,
-                  ),
-                ),
-              ),
-            );
-          },
-        ),
-
-        const SizedBox(height: 10),
-
-        _buildQuickActionCard(
           title: 'Manage Parking & Spots',
           badge: 'Basement B1-B3',
           onTap: () {
@@ -695,14 +665,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               ),
             );
           },
-        ),
-
-        const SizedBox(height: 10),
-
-        _buildQuickActionCard(
-          title: 'Manage AR Scan Markers',
-          badge: '$_markerCount QR Markers',
-          onTap: _openMarkerConfigModal,
         ),
 
         const SizedBox(height: 16),
