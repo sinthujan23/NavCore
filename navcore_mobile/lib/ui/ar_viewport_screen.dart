@@ -14,7 +14,6 @@ import '../engine/ar_sensor_engine.dart';
 import '../engine/sensor_fusion_service.dart';
 import '../engine/route_service.dart';
 import '../engine/off_route_service.dart';
-import '../engine/vertical_transition_service.dart';
 import '../engine/ar_pose_engine.dart';
 import '../data/building_data_service.dart';
 import 'theme/app_theme.dart';
@@ -72,8 +71,7 @@ class _ARViewportScreenState extends State<ARViewportScreen>
   final SensorFusionService _sensorFusion = SensorFusionService();
   final RouteService _routeService = RouteService();
   final OffRouteService _offRouteService = OffRouteService();
-  final VerticalTransitionService _transitionService =
-      VerticalTransitionService();
+
   final BuildingDataService _buildingDataService = BuildingDataService();
 
   late final TiltFloorMapper _tiltFloorMapper;
@@ -497,8 +495,9 @@ class _ARViewportScreenState extends State<ARViewportScreen>
         userFloorNumber: widget.currentFloor.floorNumber,
         targetFloorNumber: activePOI.floorNumber,
         userAbsoluteAltitudeM: widget.currentFloor.absoluteHeightMeters,
-        targetAbsoluteAltitudeM:
-            _getFloorConfig(activePOI.floorNumber).absoluteHeightMeters,
+        targetAbsoluteAltitudeM: _getFloorConfig(
+          activePOI.floorNumber,
+        ).absoluteHeightMeters,
       ).round();
 
       activeBearing = calculateBearingAngle(
@@ -653,7 +652,10 @@ class _ARViewportScreenState extends State<ARViewportScreen>
       );
       final double posY = rawScreenY.clamp(
         topSafeLimit,
-        math.max(topSafeLimit, bottomSafeLimit - (cardTotalVisualHeight * distanceScaleFactor)),
+        math.max(
+          topSafeLimit,
+          bottomSafeLimit - (cardTotalVisualHeight * distanceScaleFactor),
+        ),
       );
 
       rawPositioned.add({
@@ -721,8 +723,14 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                 curY = newY;
               } else {
                 curX = (curX >= exX)
-                    ? (exX + wB + minGapX).clamp(12.0, math.max(12.0, screenWidth - wA - 12.0))
-                    : (exX - wA - minGapX).clamp(12.0, math.max(12.0, screenWidth - wA - 12.0));
+                    ? (exX + wB + minGapX).clamp(
+                        12.0,
+                        math.max(12.0, screenWidth - wA - 12.0),
+                      )
+                    : (exX - wA - minGapX).clamp(
+                        12.0,
+                        math.max(12.0, screenWidth - wA - 12.0),
+                      );
               }
             } else if (poiA.floorNumber < poiB.floorNumber) {
               final double newY = exY + hB + minGapY;
@@ -730,8 +738,14 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                 curY = newY;
               } else {
                 curX = (curX >= exX)
-                    ? (exX + wB + minGapX).clamp(12.0, math.max(12.0, screenWidth - wA - 12.0))
-                    : (exX - wA - minGapX).clamp(12.0, math.max(12.0, screenWidth - wA - 12.0));
+                    ? (exX + wB + minGapX).clamp(
+                        12.0,
+                        math.max(12.0, screenWidth - wA - 12.0),
+                      )
+                    : (exX - wA - minGapX).clamp(
+                        12.0,
+                        math.max(12.0, screenWidth - wA - 12.0),
+                      );
               }
             } else {
               final double shiftYUp = exY - hA - minGapY;
@@ -745,8 +759,14 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                 curY = shiftYUp;
               } else {
                 curX = (curX >= exX)
-                    ? (exX + wB + minGapX).clamp(12.0, math.max(12.0, screenWidth - wA - 12.0))
-                    : (exX - wA - minGapX).clamp(12.0, math.max(12.0, screenWidth - wA - 12.0));
+                    ? (exX + wB + minGapX).clamp(
+                        12.0,
+                        math.max(12.0, screenWidth - wA - 12.0),
+                      )
+                    : (exX - wA - minGapX).clamp(
+                        12.0,
+                        math.max(12.0, screenWidth - wA - 12.0),
+                      );
               }
             }
 
@@ -794,24 +814,24 @@ class _ARViewportScreenState extends State<ARViewportScreen>
     }
 
     // Dynamic 3D AR Target Badge Screen Offset anchored directly above ground target ring
-    final safeAngle =
-        (activeRelAngle.isNaN || activeRelAngle.isInfinite)
-            ? 0.0
-            : activeRelAngle;
-    final safeDist =
-        (activeDistM.isNaN || activeDistM <= 0) ? 1 : activeDistM;
+    final safeAngle = (activeRelAngle.isNaN || activeRelAngle.isInfinite)
+        ? 0.0
+        : activeRelAngle;
+    final safeDist = (activeDistM.isNaN || activeDistM <= 0) ? 1 : activeDistM;
     final safePitch =
         (widget.phonePitchDegrees.isNaN || widget.phonePitchDegrees.isInfinite)
-            ? 0.0
-            : widget.phonePitchDegrees;
+        ? 0.0
+        : widget.phonePitchDegrees;
 
     final pitchShift = (safePitch * 3.5).clamp(-140.0, 140.0);
     final normTargetX = (safeAngle / 30.0).clamp(-1.0, 1.0);
     final targetBadgePosX =
         (screenWidth / 2) + (normTargetX * (screenWidth * 0.40));
 
-    final double distRatio =
-        ((safeDist.clamp(3, 150) - 3.0) / 147.0).clamp(0.0, 1.0);
+    final double distRatio = ((safeDist.clamp(3, 150) - 3.0) / 147.0).clamp(
+      0.0,
+      1.0,
+    );
     final double floorDelta = activePOI != null
         ? (activePOI.floorNumber - widget.currentFloor.floorNumber).toDouble()
         : 0.0;
@@ -899,28 +919,6 @@ class _ARViewportScreenState extends State<ARViewportScreen>
             targetAbsoluteAltitudeM: activePOIConfig.absoluteHeightMeters,
           )
         : null;
-
-    int cleanDistM = activeDistM;
-
-    // Guidance text generation based on floor relation, vertical transitions, and turn action
-    String guidanceText =
-        '$turnActionStr • Walk $cleanDistM m to ${activePOI?.name ?? ''}';
-    if (activePOI != null &&
-        activePOI.floorNumber != widget.currentFloor.floorNumber) {
-      final transitionType =
-          activePOI.floorNumber > widget.currentFloor.floorNumber
-          ? WaypointType.escalator
-          : WaypointType.elevator;
-
-      final transitionUpdate = _transitionService.evaluateTransitionStep(
-        distanceToTransitionMeters: activeDistM.toDouble(),
-        transitionType: transitionType,
-        currentFloor: widget.currentFloor.floorNumber,
-        targetFloor: activePOI.floorNumber,
-      );
-      guidanceText =
-          '${transitionUpdate.instructionTitle} • ${transitionUpdate.instructionSubtitle}';
-    }
 
     return Scaffold(
       backgroundColor: const Color(0xFF030712),
@@ -1474,7 +1472,7 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Top Bar Actions (Back + Geometry Metrics Toggle)
+                    // Top Bar Actions (Back + EXIT + 2D MAP + Dev Geometry Metrics Toggle)
                     Padding(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 14,
@@ -1502,141 +1500,8 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                                 ),
                               ),
                             ),
-                          ValueListenableBuilder<bool>(
-                            valueListenable: DeveloperModeNotifier.instance,
-                            builder: (context, isDevMode, child) {
-                              if (!isDevMode) return const SizedBox.shrink();
-                              return Row(
-                                children: [
-                                  const Spacer(),
-                                  GestureDetector(
-                                    onTap: () {
-                                      setState(() {
-                                        _showGeometricTelemetryModal =
-                                            !_showGeometricTelemetryModal;
-                                      });
-                                    },
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 12,
-                                        vertical: 6,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: _showGeometricTelemetryModal
-                                            ? const Color(0xFF0284C7)
-                                            : const Color(0xEE0F172A),
-                                        borderRadius: BorderRadius.circular(20),
-                                        border: Border.all(
-                                          color: _showGeometricTelemetryModal
-                                              ? const Color(0xFF38BDF8)
-                                              : const Color(0xFF334155),
-                                        ),
-                                        boxShadow: const [
-                                          BoxShadow(
-                                            color: Color(0x440284C7),
-                                            blurRadius: 8,
-                                          ),
-                                        ],
-                                      ),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          const Icon(
-                                            LucideIcons.ruler,
-                                            color: Color(0xFF38BDF8),
-                                            size: 13,
-                                          ),
-                                          const SizedBox(width: 5),
-                                          Text(
-                                            'FLOOR REAL DISTANCE & GEOMETRY',
-                                            style: GoogleFonts.plusJakartaSans(
-                                              color: Colors.white,
-                                              fontSize: 10,
-                                              fontWeight: FontWeight.w900,
-                                              letterSpacing: 0.5,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 4),
-                                          Icon(
-                                            _showGeometricTelemetryModal
-                                                ? LucideIcons.chevronUp
-                                                : LucideIcons.chevronDown,
-                                            color: Colors.white70,
-                                            size: 12,
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              );
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
-
-
-
-                    // Top Navigation Guidance Banner (STEP 1/3 + Red EXIT Button)
-                    if (activePOI != null && _isNavigatingActive)
-                      Padding(
-                        padding: const EdgeInsets.only(
-                          left: 14,
-                          right: 14,
-                          top: 4,
-                          bottom: 6,
-                        ),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 8,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xEE032830),
-                                  borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(
-                                    color: const Color(
-                                      0xFF00E5FF,
-                                    ).withValues(alpha: 0.6),
-                                    width: 1.2,
-                                  ),
-                                  boxShadow: const [
-                                    BoxShadow(
-                                      color: Color(0x4400E5FF),
-                                      blurRadius: 8,
-                                    ),
-                                  ],
-                                ),
-                                child: Row(
-                                  children: [
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Text(
-                                            guidanceText,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: GoogleFonts.plusJakartaSans(
-                                              color: Colors.white,
-                                              fontSize: 10,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
+                          const Spacer(),
+                          if (activePOI != null && _isNavigatingActive) ...[
                             // Red EXIT Button
                             GestureDetector(
                               onTap: () {
@@ -1717,8 +1582,80 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                               ),
                             ],
                           ],
-                        ),
+                          ValueListenableBuilder<bool>(
+                            valueListenable: DeveloperModeNotifier.instance,
+                            builder: (context, isDevMode, child) {
+                              if (!isDevMode) return const SizedBox.shrink();
+                              return Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const SizedBox(width: 6),
+                                  GestureDetector(
+                                    onTap: () {
+                                      setState(() {
+                                        _showGeometricTelemetryModal =
+                                            !_showGeometricTelemetryModal;
+                                      });
+                                    },
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 6,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: _showGeometricTelemetryModal
+                                            ? const Color(0xFF0284C7)
+                                            : const Color(0xEE0F172A),
+                                        borderRadius: BorderRadius.circular(20),
+                                        border: Border.all(
+                                          color: _showGeometricTelemetryModal
+                                              ? const Color(0xFF38BDF8)
+                                              : const Color(0xFF334155),
+                                        ),
+                                        boxShadow: const [
+                                          BoxShadow(
+                                            color: Color(0x440284C7),
+                                            blurRadius: 8,
+                                          ),
+                                        ],
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          const Icon(
+                                            LucideIcons.ruler,
+                                            color: Color(0xFF38BDF8),
+                                            size: 13,
+                                          ),
+                                          const SizedBox(width: 5),
+                                          Text(
+                                            'FLOOR REAL DISTANCE & GEOMETRY',
+                                            style: GoogleFonts.plusJakartaSans(
+                                              color: Colors.white,
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.w900,
+                                              letterSpacing: 0.5,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Icon(
+                                            _showGeometricTelemetryModal
+                                                ? LucideIcons.chevronUp
+                                                : LucideIcons.chevronDown,
+                                            color: Colors.white70,
+                                            size: 12,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                        ],
                       ),
+                    ),
 
                     // Top Category Filter Chips Bar (when not navigating)
                     if (!_isNavigatingActive)
@@ -2484,14 +2421,14 @@ class ARGroundPathwayPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final safeAngle =
         (relativeAngleDegrees.isNaN || relativeAngleDegrees.isInfinite)
-            ? 0.0
-            : relativeAngleDegrees;
-    final safeDist =
-        (distanceMeters.isNaN || distanceMeters <= 0) ? 1 : distanceMeters;
-    final safePitch =
-        (phonePitchDegrees.isNaN || phonePitchDegrees.isInfinite)
-            ? 0.0
-            : phonePitchDegrees;
+        ? 0.0
+        : relativeAngleDegrees;
+    final safeDist = (distanceMeters.isNaN || distanceMeters <= 0)
+        ? 1
+        : distanceMeters;
+    final safePitch = (phonePitchDegrees.isNaN || phonePitchDegrees.isInfinite)
+        ? 0.0
+        : phonePitchDegrees;
 
     final pitchShift = (safePitch * 3.5).clamp(-140.0, 140.0);
     final centerBottom = Offset(size.width / 2, size.height - 110);
@@ -2500,8 +2437,10 @@ class ARGroundPathwayPainter extends CustomPainter {
     final targetX = (size.width / 2) + (normX * (size.width * 0.40));
 
     // Dynamic depth positioning for laser landing point and chevrons
-    final double distRatio =
-        ((safeDist.clamp(3, 150) - 3.0) / 147.0).clamp(0.0, 1.0);
+    final double distRatio = ((safeDist.clamp(3, 150) - 3.0) / 147.0).clamp(
+      0.0,
+      1.0,
+    );
     final double floorDelta = (targetFloorNumber - userFloorNumber).toDouble();
     final double floorElevShift = (floorDelta * 24.0).clamp(-75.0, 75.0);
 
@@ -2618,7 +2557,8 @@ class ARGroundPathwayPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant ARGroundPathwayPainter oldDelegate) {
-    return (oldDelegate.relativeAngleDegrees - relativeAngleDegrees).abs() > 0.1 ||
+    return (oldDelegate.relativeAngleDegrees - relativeAngleDegrees).abs() >
+            0.1 ||
         oldDelegate.distanceMeters != distanceMeters ||
         (oldDelegate.phonePitchDegrees - phonePitchDegrees).abs() > 0.15 ||
         oldDelegate.isParkedVehicle != isParkedVehicle ||
