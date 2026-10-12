@@ -149,37 +149,132 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     }
   }
 
-  Widget _buildServerStatusBadge() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: _isServerOnline ? const Color(0xFFF0FDF4) : const Color(0xFFFEF2F2),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: _isServerOnline ? const Color(0xFFBBF7D0) : const Color(0xFFFECACA),
+  void _showServerConfigDialog() async {
+    final currentUrl = await ApiService.instance.getBaseUrl();
+    final controller = TextEditingController(text: currentUrl);
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            const Icon(LucideIcons.server, color: Color(0xFF2563EB), size: 20),
+            const SizedBox(width: 8),
+            Text(
+              'Backend Server Connection',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
         ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 6,
-            height: 6,
-            decoration: BoxDecoration(
-              color: _isServerOnline ? const Color(0xFF16A34A) : const Color(0xFFDC2626),
-              shape: BoxShape.circle,
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Live REST API endpoint for venue management:',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 12.5,
+                color: const Color(0xFF64748B),
+              ),
             ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              style: GoogleFonts.jetBrainsMono(fontSize: 13),
+              decoration: InputDecoration(
+                hintText: 'https://nexnav.hashnate.com/api',
+                filled: true,
+                fillColor: const Color(0xFFF8FAFC),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              '• Production Cloud: https://nexnav.hashnate.com/api\n• Local / Emulator: http://10.0.2.2:5000/api',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 11,
+                color: const Color(0xFF94A3B8),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              await ApiService.instance.resetToDefaultBaseUrl();
+              await _checkServer();
+            },
+            child: const Text('Reset Default'),
           ),
-          const SizedBox(width: 5),
-          Text(
-            _isServerOnline ? 'Backend API: Online' : 'Backend API: Offline',
-            style: GoogleFonts.plusJakartaSans(
-              fontSize: 10,
-              fontWeight: FontWeight.w700,
-              color: _isServerOnline ? const Color(0xFF15803D) : const Color(0xFFB91C1C),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2563EB),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
             ),
+            onPressed: () async {
+              Navigator.pop(context);
+              await ApiService.instance.setCustomBaseUrl(controller.text.trim());
+              await _checkServer();
+            },
+            child: const Text('Save & Reconnect'),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildServerStatusBadge() {
+    return InkWell(
+      onTap: _showServerConfigDialog,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: _isServerOnline ? const Color(0xFFF0FDF4) : const Color(0xFFFEF2F2),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: _isServerOnline ? const Color(0xFFBBF7D0) : const Color(0xFFFECACA),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(
+                color: _isServerOnline ? const Color(0xFF16A34A) : const Color(0xFFDC2626),
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: 5),
+            Text(
+              _isServerOnline ? 'Backend API: Online' : 'Backend API: Offline',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: _isServerOnline ? const Color(0xFF15803D) : const Color(0xFFB91C1C),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

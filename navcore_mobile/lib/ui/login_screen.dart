@@ -98,7 +98,7 @@ class _LoginScreenState extends State<LoginScreen> {
               controller: controller,
               style: GoogleFonts.jetBrainsMono(fontSize: 13),
               decoration: InputDecoration(
-                hintText: 'http://10.0.2.2:5000/api',
+                hintText: 'https://nexnav.hashnate.com/api',
                 filled: true,
                 fillColor: const Color(0xFFF8FAFC),
                 border: OutlineInputBorder(
@@ -109,7 +109,7 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
             const SizedBox(height: 10),
             Text(
-              '• Android Emulator: http://10.0.2.2:5000/api\n• Desktop / adb reverse: http://localhost:5000/api\n• Physical Device: http://<PC_LAN_IP>:5000/api',
+              '• Production Cloud: https://nexnav.hashnate.com/api\n• Emulator: http://10.0.2.2:5000/api\n• Local PC: http://<PC_LAN_IP>:5000/api',
               style: GoogleFonts.plusJakartaSans(
                 fontSize: 11,
                 color: const Color(0xFF94A3B8),
@@ -118,6 +118,14 @@ class _LoginScreenState extends State<LoginScreen> {
           ],
         ),
         actions: [
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              await ApiService.instance.resetToDefaultBaseUrl();
+              await _checkServerConnection();
+            },
+            child: const Text('Reset Default'),
+          ),
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('Cancel'),

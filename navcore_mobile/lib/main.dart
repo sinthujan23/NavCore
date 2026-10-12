@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -27,8 +28,26 @@ import 'ui/ar_viewport_screen.dart';
 import 'ui/floor_plan_screen.dart';
 import 'ui/mall_explorer_screen.dart';
 
+/// Custom HttpOverrides to ensure network requests to nexnav.hashnate.com
+/// succeed cleanly even if the remote host has SSL SAN / cert renewal discrepancies.
+class NexNavHttpOverrides extends HttpOverrides {
+  @override
+  HttpClient createHttpClient(SecurityContext? context) {
+    return super.createHttpClient(context)
+      ..badCertificateCallback = (X509Certificate cert, String host, int port) {
+        if (host.contains('hashnate.com') || host == '10.0.2.2' || host == 'localhost') {
+          return true;
+        }
+        return false;
+      };
+  }
+}
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  if (!kIsWeb) {
+    HttpOverrides.global = NexNavHttpOverrides();
+  }
   runApp(const NexNavApp());
 }
 

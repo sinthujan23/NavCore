@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -37,17 +36,26 @@ class ApiService {
   static const String _userEmailKey = 'nexnav_user_email';
   static const String _customBaseUrlKey = 'nexnav_custom_base_url';
 
-  // In Android Emulator, host computer is 10.0.2.2. In iOS / desktop / web, it's localhost.
-  static String get defaultBaseUrl {
-    if (!kIsWeb) {
-      try {
-        if (Platform.isAndroid) {
-          return 'http://10.0.2.2:5000/api';
-        }
-      } catch (_) {}
+  static const String productionServerUrl = 'https://nexnav.hashnate.com/api';
+
+  /// Normalizes any input URL to ensure proper protocol and /api postfix
+  static String normalizeUrl(String input) {
+    var url = input.trim();
+    if (url.isEmpty) return productionServerUrl;
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = 'https://$url';
     }
-    return 'http://localhost:5000/api';
+    while (url.endsWith('/')) {
+      url = url.substring(0, url.length - 1);
+    }
+    if (!url.endsWith('/api')) {
+      url = '$url/api';
+    }
+    return url;
   }
+
+  // Primary backend URL is the cloud server (nexnav.hashnate.com)
+  static String get defaultBaseUrl => productionServerUrl;
 
   String? _cachedBaseUrl;
 
@@ -56,23 +64,25 @@ class ApiService {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getString(_customBaseUrlKey);
     if (saved != null && saved.isNotEmpty) {
-      _cachedBaseUrl = saved.trim();
+      _cachedBaseUrl = normalizeUrl(saved);
       return _cachedBaseUrl!;
     }
 
-    // Auto-detect reachable host: emulator (10.0.2.2), localhost, LAN
-    final candidates = <String>{
-      defaultBaseUrl,
-      'http://10.0.2.2:5000/api',
-      'http://localhost:5000/api',
-      'http://127.0.0.1:5000/api',
-    };
+    // Auto-probe reachable host: Cloud Production (nexnav.hashnate.com), emulator, local host
+    final candidates = <String>[
+      productionServerUrl,
+      if (!kIsWeb) ...[
+        'http://10.0.2.2:5000/api',
+        'http://localhost:5000/api',
+        'http://127.0.0.1:5000/api',
+      ],
+    ];
 
     for (final candidate in candidates) {
       try {
         final res = await http
             .get(Uri.parse('$candidate/health'))
-            .timeout(const Duration(milliseconds: 900));
+            .timeout(const Duration(milliseconds: 1200));
         if (res.statusCode == 200) {
           _cachedBaseUrl = candidate;
           return _cachedBaseUrl!;
@@ -89,7 +99,7 @@ class ApiService {
       final baseUrl = await getBaseUrl();
       final res = await http
           .get(Uri.parse('$baseUrl/health'))
-          .timeout(const Duration(seconds: 2));
+          .timeout(const Duration(seconds: 3));
       return res.statusCode == 200;
     } catch (_) {
       return false;
@@ -97,9 +107,15 @@ class ApiService {
   }
 
   Future<void> setCustomBaseUrl(String url) async {
-    _cachedBaseUrl = url.trim();
+    _cachedBaseUrl = normalizeUrl(url);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_customBaseUrlKey, _cachedBaseUrl!);
+  }
+
+  Future<void> resetToDefaultBaseUrl() async {
+    _cachedBaseUrl = productionServerUrl;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_customBaseUrlKey);
   }
 
   Future<Map<String, String>> _headers() async {
