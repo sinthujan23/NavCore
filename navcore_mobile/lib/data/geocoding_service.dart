@@ -22,16 +22,16 @@ class ReverseGeocodeResult {
     required this.latitude,
     required this.longitude,
     required this.groundAltitude,
-    this.floorGap = 4.5,
-    this.floorCount = 5,
-    this.venueType = 'Shopping & Retail Complex',
+    this.floorGap = 0.0,
+    this.floorCount = 0,
+    this.venueType = 'Indoor Venue',
   });
 }
 
 class GeocodingService {
   /// Reverse geocodes coordinates to real venue details using free OpenStreetMap Nominatim.
-  /// Automatically resolves Place Name, City, Country, Venue ID, calibrated ground altitude,
-  /// and calculates real architectural floor gaps based on the location and building taxonomy.
+  /// Automatically resolves Place Name, City, Country, Venue ID, and calibrated ground altitude.
+  /// Floor counts and floor gaps are NOT fabricated and remain 0 unless explicitly configured.
   static Future<ReverseGeocodeResult> reverseGeocode(
     double latitude,
     double longitude, {
@@ -111,14 +111,11 @@ class GeocodingService {
             .replaceAll(RegExp(r'^-|-$'), '');
         final suggestedId = cleanSlug.isNotEmpty ? 'mall-$cleanSlug' : '';
 
-        // ------------------------------------------------------------------
-        // Dynamic Floor Gap Calculation based on Location & Architectural Taxonomy
-        // ------------------------------------------------------------------
-        double calculatedFloorGap = 4.5;
-        int calculatedFloorCount = 5;
-        String venueType = 'Commercial Complex';
+        // Only parse real architectural tags if explicitly available in OSM
+        double calculatedFloorGap = 0.0;
+        int calculatedFloorCount = 0;
+        String venueType = 'Indoor Venue';
 
-        // 1. Direct OpenStreetMap architectural tags if available
         if (extratags['height'] != null && extratags['building:levels'] != null) {
           final rawH = double.tryParse(
               extratags['height'].toString().replaceAll(RegExp(r'[^0-9.]'), ''));
@@ -126,68 +123,13 @@ class GeocodingService {
               extratags['building:levels'].toString().replaceAll(RegExp(r'[^0-9]'), ''));
           if (rawH != null && rawL != null && rawL > 0 && rawH > rawL) {
             calculatedFloorGap = double.parse((rawH / rawL).toStringAsFixed(1));
-            calculatedFloorCount = rawL.clamp(1, 10);
+            calculatedFloorCount = rawL.clamp(0, 50);
           }
         } else if (extratags['building:levels'] != null) {
           final rawL = int.tryParse(
               extratags['building:levels'].toString().replaceAll(RegExp(r'[^0-9]'), ''));
           if (rawL != null && rawL > 0) {
-            calculatedFloorCount = rawL.clamp(1, 10);
-          }
-        }
-
-        // 2. Architectural inference from venue place metadata & categories
-        final suburb = (address['suburb'] ?? '').toString();
-        final placeLower =
-            '$placeName $suburb $city ${data['category'] ?? ''} ${data['type'] ?? ''}'
-                .toLowerCase();
-
-        if (placeLower.contains('airport') ||
-            placeLower.contains('terminal') ||
-            placeLower.contains('station')) {
-          calculatedFloorGap = 5.5;
-          calculatedFloorCount = 4;
-          venueType = 'Transit Hub / Concourse';
-        } else if (placeLower.contains('mall') ||
-            placeLower.contains('atrium') ||
-            placeLower.contains('galleria') ||
-            placeLower.contains('plaza')) {
-          calculatedFloorGap = 4.8;
-          calculatedFloorCount = 5;
-          venueType = 'Premier Retail Mall';
-        } else if (placeLower.contains('supermarket') ||
-            placeLower.contains('store') ||
-            placeLower.contains('market') ||
-            placeLower.contains('bazaar')) {
-          calculatedFloorGap = 4.2;
-          calculatedFloorCount = 3;
-          venueType = 'Commercial Marketplace';
-        } else if (placeLower.contains('tower') ||
-            placeLower.contains('office') ||
-            placeLower.contains('corporate') ||
-            placeLower.contains('tech')) {
-          calculatedFloorGap = 3.8;
-          calculatedFloorCount = 7;
-          venueType = 'Corporate Office Tower';
-        } else if (placeLower.contains('park') || placeLower.contains('garage')) {
-          calculatedFloorGap = 3.2;
-          calculatedFloorCount = 4;
-          venueType = 'Multi-Level Structure';
-        } else {
-          // Standard regional architectural standards
-          if ((latitude - 6.927).abs() < 0.20 && (longitude - 79.86).abs() < 0.20) {
-            calculatedFloorGap = 4.8;
-            calculatedFloorCount = 5;
-            venueType = 'Urban Retail Complex';
-          } else if ((latitude - 8.58).abs() < 0.25 &&
-              (longitude - 81.22).abs() < 0.25) {
-            calculatedFloorGap = 4.5;
-            calculatedFloorCount = 4;
-            venueType = 'Coastal Commercial Center';
-          } else {
-            calculatedFloorGap = 4.5;
-            calculatedFloorCount = 5;
-            venueType = 'Shopping & Retail Complex';
+            calculatedFloorCount = rawL.clamp(0, 50);
           }
         }
 
@@ -208,7 +150,7 @@ class GeocodingService {
       debugPrint('[GeocodingService] Reverse geocode network fallback: $e');
     }
 
-    // Offline / Network Fallback based on coordinate proximities
+    // Offline / Network Fallback (does not add fake floors or gaps)
     return _fallbackGeocode(latitude, longitude, calibratedAlt);
   }
 
@@ -219,41 +161,20 @@ class GeocodingService {
   ) {
     String city = 'Local City';
     String country = 'Sri Lanka';
-    double fallbackFloorGap = 4.5;
-    int fallbackFloorCount = 5;
-    String fallbackVenueType = 'Commercial Mall';
 
-    // Sri Lanka regions
+    // Sri Lanka regions for city name lookup only
     if ((lat - 8.58).abs() < 0.35 && (lon - 81.22).abs() < 0.35) {
       city = 'Trincomalee';
-      fallbackFloorGap = 4.5;
-      fallbackFloorCount = 4;
-      fallbackVenueType = 'Coastal Commercial Center';
     } else if ((lat - 6.927).abs() < 0.25 && (lon - 79.86).abs() < 0.25) {
       city = 'Colombo';
-      fallbackFloorGap = 4.8;
-      fallbackFloorCount = 6;
-      fallbackVenueType = 'Premier Shopping Mall';
     } else if ((lat - 7.29).abs() < 0.25 && (lon - 80.63).abs() < 0.25) {
       city = 'Kandy';
-      fallbackFloorGap = 4.5;
-      fallbackFloorCount = 5;
-      fallbackVenueType = 'Multi-Tier Mall';
     } else if ((lat - 6.05).abs() < 0.25 && (lon - 80.21).abs() < 0.25) {
       city = 'Galle';
-      fallbackFloorGap = 4.2;
-      fallbackFloorCount = 3;
-      fallbackVenueType = 'Historic Commercial Center';
     } else if ((lat - 9.66).abs() < 0.25 && (lon - 80.01).abs() < 0.25) {
       city = 'Jaffna';
-      fallbackFloorGap = 4.2;
-      fallbackFloorCount = 4;
-      fallbackVenueType = 'Regional Commercial Mall';
     } else {
       city = 'Trincomalee';
-      fallbackFloorGap = 4.5;
-      fallbackFloorCount = 5;
-      fallbackVenueType = 'Indoor Navigation Complex';
     }
 
     return ReverseGeocodeResult(
@@ -264,9 +185,9 @@ class GeocodingService {
       latitude: lat,
       longitude: lon,
       groundAltitude: calibratedAlt,
-      floorGap: fallbackFloorGap,
-      floorCount: fallbackFloorCount,
-      venueType: fallbackVenueType,
+      floorGap: 0.0,
+      floorCount: 0,
+      venueType: 'Indoor Venue',
     );
   }
 }

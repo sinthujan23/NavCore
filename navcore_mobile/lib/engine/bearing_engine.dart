@@ -57,74 +57,61 @@ CompassBearingBadge classifyCompassBadge(double bearingDeg) {
 }
 
 /// Resolves localized user coordinates relative to active indoor mall coordinate anchor.
-/// Uses user GPS when within valid proximity, or anchors to the Earth ground floor entrance anchor.
+/// Uses user GPS when within valid proximity (< 300m), or anchors to venue entrance (~11m South)
+/// so that shops appear at natural indoor viewing distance in AR view during testing.
 GeodeticCoords getEffectiveUserCoords(
   GeodeticCoords userCoords,
-  GeodeticCoords mallAnchor,
-) {
-  if (userCoords.latitude != 0.0 && userCoords.longitude != 0.0) {
+  GeodeticCoords mallAnchor, {
+  double maxProximityMeters = 300.0,
+}) {
+  final hasGps = userCoords.latitude != 0.0 && userCoords.longitude != 0.0;
+  final hasAnchor = mallAnchor.latitude != 0.0 && mallAnchor.longitude != 0.0;
+
+  if (hasGps && hasAnchor) {
+    final dist = haversineDistance(userCoords, mallAnchor);
+    if (dist <= maxProximityMeters) {
+      // User is physically near/inside the venue: use real live GPS coordinates
+      return userCoords;
+    }
+  } else if (hasGps && !hasAnchor) {
     return userCoords;
   }
 
+  // Outdoor testing fallback / uncalibrated GPS (> 300m away):
+  // Place user ~11m South of the shops anchor facing North towards shops
+  final anchorLat = hasAnchor ? mallAnchor.latitude : 8.4877;
+  final anchorLon = hasAnchor ? mallAnchor.longitude : 81.173736;
   return GeodeticCoords(
-    latitude: mallAnchor.latitude,
-    longitude: mallAnchor.longitude,
-    height: userCoords.height != 0.0 ? userCoords.height : mallAnchor.height,
+    latitude: anchorLat - 0.00010, // ~11 meters South
+    longitude: anchorLon,
+    height: (userCoords.height != 0.0) ? userCoords.height : mallAnchor.height,
   );
 }
 
-/// Calculates accurate 3D spatial distance in meters incorporating WGS-84 ECEF
-/// Cartesian Euclidean geometry and floor elevation differences relative to Earth ground floor.
+/// Calculates accurate 3D spatial distance in meters incorporating horizontal
+/// Haversine geometry and floor elevation differences.
 double calculateAccurate3DDistance(
   GeodeticCoords userCoords,
   GeodeticCoords targetLocation, {
   int userFloorNumber = 1,
   int targetFloorNumber = 1,
-  double heightPerFloorMeters = 15.0,
+  double heightPerFloorMeters = 4.5,
   double? userAbsoluteAltitudeM,
   double? targetAbsoluteAltitudeM,
 }) {
-  double userEffectiveHeight;
-  double targetEffectiveHeight;
+  final double hDist = haversineDistance(userCoords, targetLocation);
 
+  double elevationDelta;
   if (userAbsoluteAltitudeM != null && targetAbsoluteAltitudeM != null) {
-    userEffectiveHeight = userAbsoluteAltitudeM;
-    targetEffectiveHeight = targetAbsoluteAltitudeM;
+    elevationDelta = (targetAbsoluteAltitudeM - userAbsoluteAltitudeM).abs();
+  } else if (targetLocation.height != 0.0 && userCoords.height != 0.0 &&
+             (targetLocation.height - userCoords.height).abs() < 50.0) {
+    elevationDelta = (targetLocation.height - userCoords.height).abs();
   } else {
-    // If coords already specify absolute ellipsoidal height (> 20m), use directly;
-    // otherwise calculate based on floor gap relative to entrance base (45.0m)
-    final double userFloorOffset = userFloorNumber < 0
-        ? (userFloorNumber * heightPerFloorMeters)
-        : ((userFloorNumber - 1) * heightPerFloorMeters);
-    final double targetFloorOffset = targetFloorNumber < 0
-        ? (targetFloorNumber * heightPerFloorMeters)
-        : ((targetFloorNumber - 1) * heightPerFloorMeters);
-
-    userEffectiveHeight = userCoords.height > 20.0
-        ? userCoords.height
-        : 45.0 + userFloorOffset;
-    targetEffectiveHeight = targetLocation.height > 20.0
-        ? targetLocation.height
-        : 45.0 + targetFloorOffset;
+    elevationDelta = ((targetFloorNumber - userFloorNumber) * heightPerFloorMeters).abs();
   }
 
-  final userPoint = GeodeticCoords(
-    latitude: userCoords.latitude,
-    longitude: userCoords.longitude,
-    height: userEffectiveHeight,
-  );
-
-  final targetPoint = GeodeticCoords(
-    latitude: targetLocation.latitude,
-    longitude: targetLocation.longitude,
-    height: targetEffectiveHeight,
-  );
-
-  final p1 = geodeticToECEF(userPoint);
-  final p2 = geodeticToECEF(targetPoint);
-
-  final dist = ecefDistance(p1, p2);
-  return dist.isNaN || dist.isInfinite ? 0.0 : dist;
+  return sqrt(hDist * hDist + elevationDelta * elevationDelta);
 }
 
 /// Calculates precise 3D geometric distance of a place/POI from the Earth ground floor (Floor 1 Entrance level)
@@ -196,9 +183,11 @@ RealWorldSpatialMetrics calculateRealWorldSpatialMetrics({
   double? targetAbsoluteAltitudeM,
 }) {
   final d2D = haversineDistance(userCoords, targetCoords);
-  final double deltaH = (userAbsoluteAltitudeM != null && targetAbsoluteAltitudeM != null)
+  final double deltaH =
+      (userAbsoluteAltitudeM != null && targetAbsoluteAltitudeM != null)
       ? (targetAbsoluteAltitudeM - userAbsoluteAltitudeM)
-      : ((targetFloorNumber - userFloorNumber).toDouble() * heightPerFloorMeters);
+      : ((targetFloorNumber - userFloorNumber).toDouble() *
+            heightPerFloorMeters);
   final d3D = sqrt(d2D * d2D + deltaH * deltaH);
   final groundDist = (targetFloorNumber - 1).abs() * heightPerFloorMeters;
   final walkTime = d3D / 1.4; // 1.4 m/s nominal walking speed

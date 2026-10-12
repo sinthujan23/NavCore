@@ -12,6 +12,80 @@ router.get('/:mallId/slots', (req, res) => {
 });
 
 /**
+ * POST /api/parking/:mallId/slots
+ * Creates a single parking slot
+ */
+router.post('/:mallId/slots', (req, res) => {
+  const mallId = req.params.mallId;
+  const body = req.body;
+  const newSlot = {
+    id: body.id || `slot-${Date.now()}`,
+    mallId,
+    floorId: body.floorId || 'GF',
+    section: body.section || 'A',
+    slotNumber: Number(body.slotNumber) || 1,
+    status: body.status || 'free',
+    latitude: Number(body.latitude) || 0.0,
+    longitude: Number(body.longitude) || 0.0,
+    height: Number(body.height) || 0.0,
+    gridRow: Number(body.gridRow) || 0,
+    gridCol: Number(body.gridCol) || 0,
+    isEVCharging: Boolean(body.isEVCharging),
+    isHandicapAccessible: Boolean(body.isHandicapAccessible),
+    sensorId: body.sensorId || `SNS-${body.floorId || 'GF'}-${body.section || 'A'}${body.slotNumber || 1}`,
+    createdAt: new Date().toISOString()
+  };
+
+  db.push('parkingSlots', newSlot);
+  return res.status(201).json(newSlot);
+});
+
+/**
+ * POST /api/parking/:mallId/slots/bulk
+ * Creates multiple parking slots (e.g., adding a panel/row of bays)
+ */
+router.post('/:mallId/slots/bulk', (req, res) => {
+  const mallId = req.params.mallId;
+  const slotsList = req.body.slots || [];
+  const added = [];
+  for (const s of slotsList) {
+    const newSlot = {
+      id: s.id || `slot-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      mallId,
+      floorId: s.floorId || 'GF',
+      section: s.section || 'A',
+      slotNumber: Number(s.slotNumber) || 1,
+      status: s.status || 'free',
+      latitude: Number(s.latitude) || 0.0,
+      longitude: Number(s.longitude) || 0.0,
+      height: Number(s.height) || 0.0,
+      gridRow: Number(s.gridRow) || 0,
+      gridCol: Number(s.gridCol) || 0,
+      isEVCharging: Boolean(s.isEVCharging),
+      isHandicapAccessible: Boolean(s.isHandicapAccessible),
+      sensorId: s.sensorId || `SNS-${s.floorId || 'GF'}-${s.section || 'A'}${s.slotNumber || 1}`,
+      createdAt: new Date().toISOString()
+    };
+    db.push('parkingSlots', newSlot);
+    added.push(newSlot);
+  }
+  return res.status(201).json(added);
+});
+
+/**
+ * DELETE /api/parking/slots/:id
+ * Deletes a parking slot
+ */
+router.delete('/slots/:id', (req, res) => {
+  const slotId = req.params.id;
+  const removed = db.remove('parkingSlots', s => s.id === slotId);
+  if (!removed) {
+    return res.status(404).json({ error: 'Parking slot not found' });
+  }
+  return res.json({ message: 'Parking slot deleted successfully' });
+});
+
+/**
  * PUT /api/parking/slots/:id
  * Updates parking slot occupancy status
  */
@@ -31,6 +105,7 @@ router.put('/slots/:id', (req, res) => {
 
   return res.json(updated);
 });
+
 
 /**
  * GET /api/parking/:mallId/vehicle/:userId

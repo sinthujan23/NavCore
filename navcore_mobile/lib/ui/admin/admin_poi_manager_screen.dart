@@ -55,8 +55,23 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
   @override
   void initState() {
     super.initState();
-    _poiList = List.from(widget.destinations);
+    _poiList = _deduplicatePois(widget.destinations);
     _loadDestinationsFromDatabase();
+  }
+
+  List<DestinationPOI> _deduplicatePois(List<DestinationPOI> list) {
+    final seen = <String>{};
+    final seenIds = <String>{};
+    final result = <DestinationPOI>[];
+    for (final p in list) {
+      final key = '${p.name.trim().toLowerCase()}#${p.floorNumber}#${p.mallId ?? ''}';
+      if (!seen.contains(key) && !seenIds.contains(p.id)) {
+        seen.add(key);
+        seenIds.add(p.id);
+        result.add(p);
+      }
+    }
+    return result;
   }
 
   Future<void> _loadDestinationsFromDatabase() async {
@@ -66,7 +81,9 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
       if (mounted) {
         setState(() {
           if (list.isNotEmpty) {
-            _poiList = list;
+            _poiList = _deduplicatePois(list);
+          } else {
+            _poiList = _deduplicatePois(_poiList);
           }
           _isLoadingPois = false;
         });
@@ -127,8 +144,11 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
               await ApiService.instance.updateDestination(savedPoi);
               widget.onUpdatePoi(savedPoi);
             } else {
+              final key = '${savedPoi.name.trim().toLowerCase()}#${savedPoi.floorNumber}#${savedPoi.mallId ?? ''}';
               setState(() {
+                _poiList.removeWhere((p) => p.id == savedPoi.id || '${p.name.trim().toLowerCase()}#${p.floorNumber}#${p.mallId ?? ''}' == key);
                 _poiList.insert(0, savedPoi);
+                _poiList = _deduplicatePois(_poiList);
               });
               final targetMallId =
                   savedPoi.mallId ??
@@ -141,7 +161,7 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
               );
               widget.onAddPoi(savedPoi);
             }
-            _loadDestinationsFromDatabase();
+            await _loadDestinationsFromDatabase();
           },
         ),
       ),
@@ -208,12 +228,13 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
             ),
             onPressed: () async {
               Navigator.pop(ctx);
+              final key = '${poi.name.trim().toLowerCase()}#${poi.floorNumber}#${poi.mallId ?? ''}';
               setState(() {
-                _poiList.removeWhere((p) => p.id == poi.id);
+                _poiList.removeWhere((p) => p.id == poi.id || '${p.name.trim().toLowerCase()}#${p.floorNumber}#${p.mallId ?? ''}' == key);
               });
               await ApiService.instance.deleteDestination(poi.id);
               widget.onDeletePoi(poi.id);
-              _loadDestinationsFromDatabase();
+              await _loadDestinationsFromDatabase();
               // ignore: use_build_context_synchronously
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
@@ -479,9 +500,7 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
           Expanded(
             child: _isLoadingPois && _poiList.isEmpty
                 ? const Center(
-                    child: CircularProgressIndicator(
-                      color: Color(0xFF2563EB),
-                    ),
+                    child: CircularProgressIndicator(color: Color(0xFF2563EB)),
                   )
                 : RefreshIndicator(
                     onRefresh: _loadDestinationsFromDatabase,
@@ -497,72 +516,81 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
                                   right: 24,
                                 ),
                                 child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Container(
-                            width: 64,
-                            height: 64,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFF1F5F9),
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: const Color(0xFFE2E8F0),
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Container(
+                                      width: 64,
+                                      height: 64,
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFF1F5F9),
+                                        shape: BoxShape.circle,
+                                        border: Border.all(
+                                          color: const Color(0xFFE2E8F0),
+                                        ),
+                                      ),
+                                      child: const Icon(
+                                        LucideIcons.searchX,
+                                        color: Color(0xFF94A3B8),
+                                        size: 28,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 14),
+                                    Text(
+                                      'No matching stores found',
+                                      style: GoogleFonts.plusJakartaSans(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.bold,
+                                        color: const Color(0xFF0F172A),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      'Try adjusting your search terms or select another category filter.',
+                                      textAlign: TextAlign.center,
+                                      style: GoogleFonts.plusJakartaSans(
+                                        fontSize: 12.5,
+                                        color: const Color(0xFF64748B),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 16),
+                                    OutlinedButton.icon(
+                                      style: OutlinedButton.styleFrom(
+                                        foregroundColor: const Color(
+                                          0xFF2563EB,
+                                        ),
+                                        side: const BorderSide(
+                                          color: Color(0xFFBFDBFE),
+                                        ),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                        ),
+                                      ),
+                                      onPressed: () {
+                                        setState(() {
+                                          _searchController.clear();
+                                          _searchQuery = '';
+                                          _selectedCategory = 'ALL';
+                                        });
+                                      },
+                                      icon: const Icon(
+                                        LucideIcons.refreshCw,
+                                        size: 14,
+                                      ),
+                                      label: Text(
+                                        'Clear Filters',
+                                        style: GoogleFonts.plusJakartaSans(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
-                            child: const Icon(
-                              LucideIcons.searchX,
-                              color: Color(0xFF94A3B8),
-                              size: 28,
-                            ),
-                          ),
-                          const SizedBox(height: 14),
-                          Text(
-                            'No matching stores found',
-                            style: GoogleFonts.plusJakartaSans(
-                              fontSize: 15,
-                              fontWeight: FontWeight.bold,
-                              color: const Color(0xFF0F172A),
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            'Try adjusting your search terms or select another category filter.',
-                            textAlign: TextAlign.center,
-                            style: GoogleFonts.plusJakartaSans(
-                              fontSize: 12.5,
-                              color: const Color(0xFF64748B),
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          OutlinedButton.icon(
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: const Color(0xFF2563EB),
-                              side: const BorderSide(color: Color(0xFFBFDBFE)),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                            onPressed: () {
-                              setState(() {
-                                _searchController.clear();
-                                _searchQuery = '';
-                                _selectedCategory = 'ALL';
-                              });
-                            },
-                            icon: const Icon(LucideIcons.refreshCw, size: 14),
-                            label: Text(
-                              'Clear Filters',
-                              style: GoogleFonts.plusJakartaSans(
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                )
+                            ],
+                          )
                         : ListView.builder(
                             physics: const AlwaysScrollableScrollPhysics(),
                             padding: const EdgeInsets.symmetric(
@@ -570,215 +598,261 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
                               vertical: 14,
                             ),
                             itemCount: filtered.length,
-                    itemBuilder: (context, idx) {
-                      final poi = filtered[idx];
-                      final isBasement = poi.floorNumber < 0;
+                            itemBuilder: (context, idx) {
+                              final poi = filtered[idx];
+                              final isBasement = poi.floorNumber < 0;
 
-                      return Container(
-                        margin: const EdgeInsets.only(bottom: 12),
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(18),
-                          border: Border.all(color: const Color(0xFFE2E8F0)),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Color(0x060F172A),
-                              blurRadius: 10,
-                              offset: Offset(0, 3),
-                            ),
-                          ],
-                        ),
-                        child: Row(
-                          children: [
-                            // Floor Indicator Badge
-                            Container(
-                              width: 48,
-                              height: 48,
-                              decoration: BoxDecoration(
-                                color: isBasement
-                                    ? const Color(0xFFF3E8FF)
-                                    : const Color(0xFFEFF6FF),
-                                borderRadius: BorderRadius.circular(14),
-                                border: Border.all(
-                                  color: isBasement
-                                      ? const Color(0xFFE9D5FF)
-                                      : const Color(0xFFDBEAFE),
-                                ),
-                              ),
-                              child: Center(
-                                child: Text(
-                                  isBasement
-                                      ? 'B${poi.floorNumber.abs()}'
-                                      : 'F${poi.floorNumber}',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontWeight: FontWeight.w900,
-                                    color: isBasement
-                                        ? const Color(0xFF7E22CE)
-                                        : const Color(0xFF1D4ED8),
-                                    fontSize: 14,
+                              return Container(
+                                margin: const EdgeInsets.only(bottom: 12),
+                                padding: const EdgeInsets.all(14),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(18),
+                                  border: Border.all(
+                                    color: const Color(0xFFE2E8F0),
                                   ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 14),
-
-                            // Store Details
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Flexible(
-                                        child: Text(
-                                          poi.name,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: GoogleFonts.plusJakartaSans(
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.w800,
-                                            color: const Color(0xFF0F172A),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 3),
-                                  Row(
-                                    children: [
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 6,
-                                          vertical: 2,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFFF1F5F9),
-                                          borderRadius: BorderRadius.circular(
-                                            6,
-                                          ),
-                                        ),
-                                        child: Text(
-                                          poi.category,
-                                          style: GoogleFonts.plusJakartaSans(
-                                            fontSize: 9.5,
-                                            fontWeight: FontWeight.w700,
-                                            color: const Color(0xFF475569),
-                                          ),
-                                        ),
-                                      ),
-                                      if (poi.mallId != null &&
-                                          poi.mallId!.isNotEmpty) ...[
-                                        const SizedBox(width: 6),
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 6,
-                                            vertical: 2,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: const Color(0xFFEFF6FF),
-                                            borderRadius: BorderRadius.circular(
-                                              6,
-                                            ),
-                                            border: Border.all(
-                                              color: const Color(0xFFDBEAFE),
-                                            ),
-                                          ),
-                                          child: Text(
-                                            (widget.mallService?.catalog ?? [])
-                                                    .where(
-                                                      (m) => m.id == poi.mallId,
-                                                    )
-                                                    .firstOrNull
-                                                    ?.name ??
-                                                poi.mallId!
-                                                    .replaceFirst('mall-', '')
-                                                    .toUpperCase(),
-                                            style: GoogleFonts.plusJakartaSans(
-                                              fontSize: 9.5,
-                                              fontWeight: FontWeight.w700,
-                                              color: const Color(0xFF2563EB),
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                      const SizedBox(width: 8),
-                                      const Icon(
-                                        LucideIcons.star,
-                                        size: 12,
-                                        color: Color(0xFFD97706),
-                                      ),
-                                      const SizedBox(width: 3),
-                                      Text(
-                                        '${poi.rating}',
-                                        style: GoogleFonts.plusJakartaSans(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w700,
-                                          color: const Color(0xFF64748B),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    '${poi.location.latitude.toStringAsFixed(5)}°N, ${poi.location.longitude.toStringAsFixed(5)}°E • Alt: ${poi.location.height.toStringAsFixed(1)}m',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: GoogleFonts.jetBrainsMono(
-                                      fontSize: 10,
-                                      color: const Color(0xFF94A3B8),
+                                  boxShadow: const [
+                                    BoxShadow(
+                                      color: Color(0x060F172A),
+                                      blurRadius: 10,
+                                      offset: Offset(0, 3),
                                     ),
-                                  ),
-                                ],
-                              ),
-                            ),
+                                  ],
+                                ),
+                                child: Row(
+                                  children: [
+                                    // Floor Indicator Badge
+                                    Container(
+                                      width: 48,
+                                      height: 48,
+                                      decoration: BoxDecoration(
+                                        color: isBasement
+                                            ? const Color(0xFFF3E8FF)
+                                            : const Color(0xFFEFF6FF),
+                                        borderRadius: BorderRadius.circular(14),
+                                        border: Border.all(
+                                          color: isBasement
+                                              ? const Color(0xFFE9D5FF)
+                                              : const Color(0xFFDBEAFE),
+                                        ),
+                                      ),
+                                      child: Center(
+                                        child: Text(
+                                          isBasement
+                                              ? 'B${poi.floorNumber.abs()}'
+                                              : 'F${poi.floorNumber}',
+                                          style: GoogleFonts.plusJakartaSans(
+                                            fontWeight: FontWeight.w900,
+                                            color: isBasement
+                                                ? const Color(0xFF7E22CE)
+                                                : const Color(0xFF1D4ED8),
+                                            fontSize: 14,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 14),
 
-                            // Action Buttons
-                            InkWell(
-                              onTap: () => _openAddEditPoiScreen(poi),
-                              borderRadius: BorderRadius.circular(10),
-                              child: Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFEFF6FF),
-                                  borderRadius: BorderRadius.circular(10),
-                                  border: Border.all(
-                                    color: const Color(0xFFBFDBFE),
-                                  ),
+                                    // Store Details
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Flexible(
+                                                child: Text(
+                                                  poi.name,
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style:
+                                                      GoogleFonts.plusJakartaSans(
+                                                        fontSize: 14,
+                                                        fontWeight:
+                                                            FontWeight.w800,
+                                                        color: const Color(
+                                                          0xFF0F172A,
+                                                        ),
+                                                      ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 3),
+                                          Wrap(
+                                            spacing: 5,
+                                            runSpacing: 3,
+                                            crossAxisAlignment:
+                                                WrapCrossAlignment.center,
+                                            children: [
+                                              Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 5,
+                                                      vertical: 2,
+                                                    ),
+                                                decoration: BoxDecoration(
+                                                  color: const Color(
+                                                    0xFFF1F5F9,
+                                                  ),
+                                                  borderRadius:
+                                                      BorderRadius.circular(6),
+                                                ),
+                                                child: Text(
+                                                  poi.category,
+                                                  style:
+                                                      GoogleFonts.plusJakartaSans(
+                                                        fontSize: 9.0,
+                                                        fontWeight:
+                                                            FontWeight.w700,
+                                                        color: const Color(
+                                                          0xFF475569,
+                                                        ),
+                                                      ),
+                                                ),
+                                              ),
+                                              if (poi.mallId != null &&
+                                                  poi.mallId!.isNotEmpty)
+                                                Container(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                        horizontal: 5,
+                                                        vertical: 2,
+                                                      ),
+                                                  decoration: BoxDecoration(
+                                                    color: const Color(
+                                                      0xFFEFF6FF,
+                                                    ),
+                                                    borderRadius:
+                                                      BorderRadius.circular(
+                                                        6,
+                                                      ),
+                                                    border: Border.all(
+                                                      color: const Color(
+                                                        0xFFDBEAFE,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  child: Text(
+                                                    (widget
+                                                                    .mallService
+                                                                    ?.catalog ??
+                                                                [])
+                                                            .where(
+                                                              (m) =>
+                                                                  m.id ==
+                                                                  poi.mallId,
+                                                            )
+                                                            .firstOrNull
+                                                            ?.name ??
+                                                        poi.mallId!
+                                                            .replaceFirst(
+                                                              'mall-',
+                                                              '',
+                                                            )
+                                                            .toUpperCase(),
+                                                    style:
+                                                      GoogleFonts.plusJakartaSans(
+                                                        fontSize: 9.0,
+                                                        fontWeight:
+                                                            FontWeight.w700,
+                                                        color: const Color(
+                                                          0xFF2563EB,
+                                                        ),
+                                                      ),
+                                                  ),
+                                                ),
+                                              Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  const Icon(
+                                                    LucideIcons.star,
+                                                    size: 11,
+                                                    color: Color(0xFFD97706),
+                                                  ),
+                                                  const SizedBox(width: 2),
+                                                  Text(
+                                                    '${poi.rating}',
+                                                    style:
+                                                      GoogleFonts.plusJakartaSans(
+                                                        fontSize: 10.5,
+                                                        fontWeight:
+                                                            FontWeight.w700,
+                                                        color: const Color(
+                                                          0xFF64748B,
+                                                        ),
+                                                      ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            '${poi.location.latitude.toStringAsFixed(5)}°N, ${poi.location.longitude.toStringAsFixed(5)}°E • Alt: ${poi.location.height.toStringAsFixed(1)}m',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: GoogleFonts.jetBrainsMono(
+                                              fontSize: 10,
+                                              color: const Color(0xFF94A3B8),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+
+                                    // Action Buttons
+                                    InkWell(
+                                      onTap: () => _openAddEditPoiScreen(poi),
+                                      borderRadius: BorderRadius.circular(10),
+                                      child: Container(
+                                        padding: const EdgeInsets.all(8),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFEFF6FF),
+                                          borderRadius: BorderRadius.circular(
+                                            10,
+                                          ),
+                                          border: Border.all(
+                                            color: const Color(0xFFBFDBFE),
+                                          ),
+                                        ),
+                                        child: const Icon(
+                                          LucideIcons.pencil,
+                                          size: 15,
+                                          color: Color(0xFF2563EB),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    InkWell(
+                                      onTap: () => _confirmDeletePoi(poi),
+                                      borderRadius: BorderRadius.circular(10),
+                                      child: Container(
+                                        padding: const EdgeInsets.all(8),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFFEF2F2),
+                                          borderRadius: BorderRadius.circular(
+                                            10,
+                                          ),
+                                          border: Border.all(
+                                            color: const Color(0xFFFECACA),
+                                          ),
+                                        ),
+                                        child: const Icon(
+                                          LucideIcons.trash2,
+                                          size: 15,
+                                          color: Color(0xFFEF4444),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                                child: const Icon(
-                                  LucideIcons.pencil,
-                                  size: 15,
-                                  color: Color(0xFF2563EB),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            InkWell(
-                              onTap: () => _confirmDeletePoi(poi),
-                              borderRadius: BorderRadius.circular(10),
-                              child: Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFFEF2F2),
-                                  borderRadius: BorderRadius.circular(10),
-                                  border: Border.all(
-                                    color: const Color(0xFFFECACA),
-                                  ),
-                                ),
-                                child: const Icon(
-                                  LucideIcons.trash2,
-                                  size: 15,
-                                  color: Color(0xFFEF4444),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
+                              );
+                            },
+                          ),
                   ),
-                ),
           ),
         ],
       ),
@@ -1749,7 +1823,7 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text(
-                          'Target Mall / Building Venue',
+                          'Target Mall Name',
                           style: GoogleFonts.plusJakartaSans(
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
@@ -1764,7 +1838,7 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
                               (_malls.isNotEmpty ? _malls.first : null);
                           if (curMall == null) return const SizedBox.shrink();
                           return Text(
-                            '${curMall.city} • ${curMall.floorCount} Floors',
+                            '${curMall.floorCount} Floors',
                             style: GoogleFonts.plusJakartaSans(
                               fontSize: 10.5,
                               fontWeight: FontWeight.w600,
@@ -1887,7 +1961,7 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
                               children: [
                                 Expanded(
                                   child: Text(
-                                    '${m.name} (${m.city})',
+                                    m.name.isNotEmpty ? m.name : 'Unnamed Mall',
                                     overflow: TextOverflow.ellipsis,
                                     style: GoogleFonts.plusJakartaSans(
                                       fontSize: 12.5,
@@ -2018,12 +2092,20 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
                           final List<int> floorOptions = [
                             if (maxFlr >= 3) -2,
                             -1,
+                            0,
                             ...List.generate(maxFlr, (i) => i + 1),
                           ];
                           if (!floorOptions.contains(_floorNumber)) {
                             floorOptions.add(_floorNumber);
-                            floorOptions.sort();
                           }
+                          final uniqueFloors = floorOptions.toSet().toList()
+                            ..sort();
+                          final int safeSelectedFloor =
+                              uniqueFloors.contains(_floorNumber)
+                              ? _floorNumber
+                              : (uniqueFloors.contains(0)
+                                    ? 0
+                                    : uniqueFloors.first);
 
                           return Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2039,9 +2121,9 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
                               const SizedBox(height: 6),
                               DropdownButtonFormField<int>(
                                 key: ValueKey(
-                                  'floor-picker-$_selectedMallId-$_floorNumber',
+                                  'floor-picker-$_selectedMallId-$safeSelectedFloor',
                                 ),
-                                initialValue: _floorNumber,
+                                initialValue: safeSelectedFloor,
                                 isExpanded: true,
                                 dropdownColor: Colors.white,
                                 style: GoogleFonts.plusJakartaSans(
@@ -2069,11 +2151,15 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
                                     ),
                                   ),
                                 ),
-                                items: floorOptions.map((f) {
+                                items: uniqueFloors.map((f) {
                                   return DropdownMenuItem(
                                     value: f,
                                     child: Text(
-                                      f < 0 ? 'B${f.abs()}' : 'Floor $f',
+                                      f < 0
+                                          ? 'B${f.abs()}'
+                                          : (f == 0
+                                                ? 'Ground Floor (0)'
+                                                : 'Floor $f'),
                                     ),
                                   );
                                 }).toList(),

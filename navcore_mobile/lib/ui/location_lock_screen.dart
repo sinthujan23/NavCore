@@ -60,12 +60,33 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
       height: 0.0,
     );
 
-    // Step 2: Detect Nearest Mall
-    _detectedMall = widget.mallService.findNearestMall(_acquiredCoords!);
+    // Step 2: Detect Mall within 500m of User's Current Location
+    final mallsWithin500m = await widget.mallService.getMallsWithinRadius(
+      _acquiredCoords!,
+      radiusMeters: 500.0,
+    );
+
+    if (mallsWithin500m.isNotEmpty) {
+      _detectedMall = mallsWithin500m.first;
+      final distM = widget.mallService.calculateDistanceToMall(
+        _acquiredCoords!,
+        _detectedMall!,
+      );
+      _statusText = 'Found ${_detectedMall!.name} (${distM.toInt()}m away, within 500m)!';
+    } else {
+      _detectedMall = widget.mallService.findNearestMall(_acquiredCoords!);
+      final distM = widget.mallService.calculateDistanceToMall(
+        _acquiredCoords!,
+        _detectedMall!,
+      );
+      final hasGps = _acquiredCoords!.latitude != 0.0 && _acquiredCoords!.longitude != 0.0;
+      _statusText = hasGps
+          ? 'Nearest: ${_detectedMall!.name} (${distM < 1000 ? "${distM.toInt()}m" : "${(distM / 1000).toStringAsFixed(1)}km"} away)'
+          : 'Connected to ${_detectedMall!.name}!';
+    }
 
     setState(() {
       _currentStep = 2;
-      _statusText = 'Connected to ${_detectedMall!.name}!';
     });
     await Future.delayed(const Duration(milliseconds: 600));
 

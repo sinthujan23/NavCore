@@ -8,6 +8,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import 'engine/ecef_engine.dart';
+import 'engine/bearing_engine.dart';
 import 'engine/floor_tracker.dart';
 import 'engine/kalman_filter.dart';
 import 'engine/pnp_engine.dart';
@@ -35,7 +36,9 @@ class NexNavHttpOverrides extends HttpOverrides {
   HttpClient createHttpClient(SecurityContext? context) {
     return super.createHttpClient(context)
       ..badCertificateCallback = (X509Certificate cert, String host, int port) {
-        if (host.contains('hashnate.com') || host == '10.0.2.2' || host == 'localhost') {
+        if (host.contains('hashnate.com') ||
+            host == '10.0.2.2' ||
+            host == 'localhost') {
           return true;
         }
         return false;
@@ -223,6 +226,22 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
     }
   }
 
+  List<DestinationPOI> _deduplicateDestinations(List<DestinationPOI> list) {
+    final seen = <String>{};
+    final seenIds = <String>{};
+    final result = <DestinationPOI>[];
+    for (final p in list) {
+      final key =
+          '${p.name.trim().toLowerCase()}#${p.floorNumber}#${p.mallId ?? ''}';
+      if (!seen.contains(key) && !seenIds.contains(p.id)) {
+        seen.add(key);
+        seenIds.add(p.id);
+        result.add(p);
+      }
+    }
+    return result;
+  }
+
   Future<void> _loadActiveMallPackage(String mallId) async {
     final pkg = await _mallDatabaseService.loadMallPackage(
       mallId,
@@ -231,7 +250,7 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
     if (mounted) {
       setState(() {
         _buildingProfile = pkg.profile;
-        _destinations = pkg.destinations;
+        _destinations = _deduplicateDestinations(pkg.destinations);
         _entranceMarkers = pkg.entranceMarkers;
       });
     }
@@ -268,16 +287,69 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
       final malls = await ApiService.instance.fetchMalls();
       if (malls.isNotEmpty) {
         final savedActiveId = prefs.getString('NexNav_active_mall_id');
-        final activeMall = malls.firstWhere(
-          (m) => m.id == savedActiveId,
-          orElse: () => malls.first,
-        );
+        MallMetadata activeMall;
+
+        final hasGps = _userCoords.latitude != 0.0 && _userCoords.longitude != 0.0;
+        if (hasGps) {
+          // Check for malls within 500m of the user's current GPS location
+          final mallsWithin500m = malls.where((m) {
+            final dist = haversineDistance(
+              _userCoords,
+              GeodeticCoords(
+                latitude: m.latitude,
+                longitude: m.longitude,
+                height: _userCoords.height,
+              ),
+            );
+            return dist <= 500.0;
+          }).toList();
+
+          if (mallsWithin500m.isNotEmpty) {
+            mallsWithin500m.sort((a, b) {
+              final distA = haversineDistance(_userCoords, GeodeticCoords(latitude: a.latitude, longitude: a.longitude, height: _userCoords.height));
+              final distB = haversineDistance(_userCoords, GeodeticCoords(latitude: b.latitude, longitude: b.longitude, height: _userCoords.height));
+              return distA.compareTo(distB);
+            });
+            activeMall = mallsWithin500m.first;
+            await prefs.setString('NexNav_active_mall_id', activeMall.id);
+          } else {
+            activeMall = malls.firstWhere(
+              (m) => m.id == savedActiveId,
+              orElse: () => malls.first,
+            );
+          }
+        } else {
+          activeMall = malls.firstWhere(
+            (m) => m.id == savedActiveId,
+            orElse: () => malls.first,
+          );
+        }
+
         await _loadActiveMallPackage(activeMall.id);
+        if (_destinations.isEmpty) {
+          final liveDestinations = await ApiService.instance.fetchDestinations(
+            mallId: activeMall.id,
+          );
+          final fallbackDestinations = liveDestinations.isNotEmpty
+              ? liveDestinations
+              : await ApiService.instance.fetchDestinations();
+          final filteredForMall = fallbackDestinations.where((p) {
+            if (p.mallId != null && p.mallId!.isNotEmpty) {
+              return p.mallId == activeMall.id;
+            }
+            return true;
+          }).toList();
+          if (mounted && filteredForMall.isNotEmpty) {
+            setState(() {
+              _destinations = _deduplicateDestinations(filteredForMall);
+            });
+          }
+        }
       } else {
         final liveDestinations = await ApiService.instance.fetchDestinations();
         if (mounted && liveDestinations.isNotEmpty) {
           setState(() {
-            _destinations = liveDestinations;
+            _destinations = _deduplicateDestinations(liveDestinations);
           });
         }
       }
@@ -401,17 +473,19 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
   }
 
   void _handleAddPoi(DestinationPOI newPoi) async {
+    final key =
+        '${newPoi.name.trim().toLowerCase()}#${newPoi.floorNumber}#${newPoi.mallId ?? ''}';
     setState(() {
-      _destinations = [newPoi, ..._destinations];
+      _destinations = [
+        newPoi,
+        ..._destinations.where(
+          (p) =>
+              p.id != newPoi.id &&
+              '${p.name.trim().toLowerCase()}#${p.floorNumber}#${p.mallId ?? ''}' !=
+                  key,
+        ),
+      ];
     });
-    final targetMall = (newPoi.mallId != null && newPoi.mallId!.isNotEmpty)
-        ? newPoi.mallId!
-        : (_buildingProfile.buildingId.isNotEmpty
-            ? _buildingProfile.buildingId
-            : (_mallDatabaseService.catalog.isNotEmpty
-                ? _mallDatabaseService.catalog.first.id
-                : 'mall-default'));
-    await ApiService.instance.createDestination(newPoi, mallId: targetMall);
     if (_buildingProfile.buildingId.isNotEmpty) {
       await _loadActiveMallPackage(_buildingProfile.buildingId);
     }

@@ -855,6 +855,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                   activeMallAnchor,
                                 );
                                 final isInside = distM < 80.0;
+                                final isWithin500m = distM <= 500.0;
                                 return Row(
                                   children: [
                                     Container(
@@ -865,27 +866,39 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                       decoration: BoxDecoration(
                                         color: isInside
                                             ? const Color(0xFF10B981).withValues(alpha: 0.25)
-                                            : const Color(0xFF3B82F6).withValues(alpha: 0.25),
+                                            : (isWithin500m
+                                                ? const Color(0xFF059669).withValues(alpha: 0.25)
+                                                : const Color(0xFF3B82F6).withValues(alpha: 0.25)),
                                         borderRadius: BorderRadius.circular(8),
                                         border: Border.all(
                                           color: isInside
                                               ? const Color(0xFF34D399).withValues(alpha: 0.5)
-                                              : const Color(0xFF60A5FA).withValues(alpha: 0.5),
+                                              : (isWithin500m
+                                                  ? const Color(0xFF10B981).withValues(alpha: 0.5)
+                                                  : const Color(0xFF60A5FA).withValues(alpha: 0.5)),
                                         ),
                                       ),
                                       child: Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
                                           Icon(
-                                            isInside ? LucideIcons.mapPin : LucideIcons.navigation,
+                                            isInside
+                                                ? LucideIcons.mapPin
+                                                : (isWithin500m ? LucideIcons.radar : LucideIcons.navigation),
                                             size: 11,
-                                            color: isInside ? const Color(0xFF34D399) : const Color(0xFF93C5FD),
+                                            color: isInside
+                                                ? const Color(0xFF34D399)
+                                                : (isWithin500m
+                                                    ? const Color(0xFF34D399)
+                                                    : const Color(0xFF93C5FD)),
                                           ),
                                           const SizedBox(width: 4),
                                           Text(
                                             isInside
                                                 ? 'Inside Venue • Floor ${currentFloor.name}'
-                                                : '${distM < 1000 ? "${distM.toInt()}m" : "${(distM / 1000).toStringAsFixed(1)}km"} away • Floor ${currentFloor.name}',
+                                                : (isWithin500m
+                                                    ? 'Within 500m (${distM.toInt()}m) • Floor ${currentFloor.name}'
+                                                    : '${(distM / 1000).toStringAsFixed(1)}km away • Floor ${currentFloor.name}'),
                                             style: GoogleFonts.plusJakartaSans(
                                               fontSize: 10.5,
                                               fontWeight: FontWeight.w700,

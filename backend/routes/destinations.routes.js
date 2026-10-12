@@ -34,7 +34,18 @@ router.get('/', (req, res) => {
     );
   }
 
-  return res.json(results);
+  // Deduplicate before returning
+  const seen = new Set();
+  const deduped = [];
+  for (const d of results) {
+    const key = `${(d.name || '').trim().toLowerCase()}#${d.floorNumber}#${d.mallId || ''}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(d);
+    }
+  }
+
+  return res.json(deduped);
 });
 
 /**
@@ -61,13 +72,42 @@ router.post('/', requireAdmin, (req, res) => {
 
   const malls = db.get('malls');
   const targetMallId = body.mallId || (malls.length > 0 ? malls[0].id : 'mall-default');
+  const targetFloor = body.floorNumber !== undefined ? Number(body.floorNumber) : 1;
+
+  // Prevent duplicate creation: check by id or (mallId + trimmed lowercased name + floorNumber)
+  const existing = db.find('destinations', d =>
+    (body.id && d.id === body.id) ||
+    (d.mallId === targetMallId &&
+      (d.name || '').trim().toLowerCase() === (body.name || '').trim().toLowerCase() &&
+      Number(d.floorNumber) === targetFloor)
+  );
+
+  if (existing) {
+    const updated = db.update(
+      'destinations',
+      d => d.id === existing.id,
+      d => ({
+        ...d,
+        name: body.name,
+        category: body.category || d.category,
+        rating: body.rating !== undefined ? Number(body.rating) : d.rating,
+        latitude: Number(body.latitude),
+        longitude: Number(body.longitude),
+        height: body.height !== undefined ? Number(body.height) : d.height,
+        description: body.description || d.description,
+        openStatus: body.openStatus || d.openStatus,
+        openingHours: body.openingHours || d.openingHours,
+      })
+    );
+    return res.status(200).json(updated || existing);
+  }
 
   const newPoi = {
     id: body.id || `poi-${Date.now()}`,
     mallId: targetMallId,
     name: body.name,
     category: body.category || 'SERVICES',
-    floorNumber: body.floorNumber !== undefined ? Number(body.floorNumber) : 1,
+    floorNumber: targetFloor,
     rating: body.rating !== undefined ? Number(body.rating) : 4.8,
     latitude: Number(body.latitude),
     longitude: Number(body.longitude),

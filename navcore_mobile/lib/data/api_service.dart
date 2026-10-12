@@ -60,37 +60,26 @@ class ApiService {
   String? _cachedBaseUrl;
 
   Future<String> getBaseUrl() async {
-    if (_cachedBaseUrl != null) return _cachedBaseUrl!;
+    if (_cachedBaseUrl != null &&
+        !_cachedBaseUrl!.contains('10.0.2.2') &&
+        !_cachedBaseUrl!.contains('localhost') &&
+        !_cachedBaseUrl!.contains('127.0.0.1')) {
+      return _cachedBaseUrl!;
+    }
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getString(_customBaseUrlKey);
-    if (saved != null && saved.isNotEmpty) {
+    if (saved != null &&
+        saved.isNotEmpty &&
+        !saved.contains('10.0.2.2') &&
+        !saved.contains('localhost') &&
+        !saved.contains('127.0.0.1')) {
       _cachedBaseUrl = normalizeUrl(saved);
       return _cachedBaseUrl!;
     }
 
-    // Auto-probe reachable host: Cloud Production (nexnav.hashnate.com), emulator, local host
-    final candidates = <String>[
-      productionServerUrl,
-      if (!kIsWeb) ...[
-        'http://10.0.2.2:5000/api',
-        'http://localhost:5000/api',
-        'http://127.0.0.1:5000/api',
-      ],
-    ];
-
-    for (final candidate in candidates) {
-      try {
-        final res = await http
-            .get(Uri.parse('$candidate/health'))
-            .timeout(const Duration(milliseconds: 1200));
-        if (res.statusCode == 200) {
-          _cachedBaseUrl = candidate;
-          return _cachedBaseUrl!;
-        }
-      } catch (_) {}
-    }
-
-    _cachedBaseUrl = defaultBaseUrl;
+    // Connect directly to the production cloud backend (nexnav.hashnate.com)
+    _cachedBaseUrl = productionServerUrl;
+    await prefs.setString(_customBaseUrlKey, productionServerUrl);
     return _cachedBaseUrl!;
   }
 
@@ -99,7 +88,7 @@ class ApiService {
       final baseUrl = await getBaseUrl();
       final res = await http
           .get(Uri.parse('$baseUrl/health'))
-          .timeout(const Duration(seconds: 3));
+          .timeout(const Duration(seconds: 8));
       return res.statusCode == 200;
     } catch (_) {
       return false;
@@ -194,11 +183,7 @@ class ApiService {
       await prefs.setString(_userRoleKey, role);
       await prefs.setString(_userEmailKey, cleanEmail);
 
-      return AuthResult(
-        isSuccess: true,
-        email: cleanEmail,
-        role: role,
-      );
+      return AuthResult(isSuccess: true, email: cleanEmail, role: role);
     }
   }
 
@@ -223,7 +208,7 @@ class ApiService {
       final baseUrl = await getBaseUrl();
       final response = await http
           .get(Uri.parse('$baseUrl/malls'), headers: await _headers())
-          .timeout(const Duration(seconds: 5));
+          .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final List list = jsonDecode(response.body);
@@ -236,7 +221,8 @@ class ApiService {
             latitude: (item['latitude'] as num).toDouble(),
             longitude: (item['longitude'] as num).toDouble(),
             floorCount: (item['floorCount'] as num?)?.toInt() ?? 5,
-            packageSizeBytesMB: (item['packageSizeBytesMB'] as num?)?.toDouble() ?? 14.0,
+            packageSizeBytesMB:
+                (item['packageSizeBytesMB'] as num?)?.toDouble() ?? 14.0,
             category: item['category'] ?? 'Shopping Mall',
             rating: item['rating'] ?? '4.8 ★',
             isDownloaded: item['isDownloaded'] ?? true,
@@ -249,7 +235,9 @@ class ApiService {
         await prefs.setString('cache_malls_catalog', response.body);
         return malls;
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[ApiService] fetchMalls error: $e');
+    }
 
     // Read from local cache if offline
     final prefs = await SharedPreferences.getInstance();
@@ -265,7 +253,8 @@ class ApiService {
           latitude: (item['latitude'] as num).toDouble(),
           longitude: (item['longitude'] as num).toDouble(),
           floorCount: (item['floorCount'] as num?)?.toInt() ?? 5,
-          packageSizeBytesMB: (item['packageSizeBytesMB'] as num?)?.toDouble() ?? 14.0,
+          packageSizeBytesMB:
+              (item['packageSizeBytesMB'] as num?)?.toDouble() ?? 14.0,
           category: item['category'] ?? 'Shopping Mall',
           rating: item['rating'] ?? '4.8 ★',
         );
@@ -355,7 +344,10 @@ class ApiService {
     try {
       final baseUrl = await getBaseUrl();
       final response = await http
-          .get(Uri.parse('$baseUrl/malls/$mallId/package'), headers: await _headers())
+          .get(
+            Uri.parse('$baseUrl/malls/$mallId/package'),
+            headers: await _headers(),
+          )
           .timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200) {
@@ -373,7 +365,8 @@ class ApiService {
           latitude: (metaJson['latitude'] as num).toDouble(),
           longitude: (metaJson['longitude'] as num).toDouble(),
           floorCount: (metaJson['floorCount'] as num?)?.toInt() ?? 5,
-          packageSizeBytesMB: (metaJson['packageSizeBytesMB'] as num?)?.toDouble() ?? 14.0,
+          packageSizeBytesMB:
+              (metaJson['packageSizeBytesMB'] as num?)?.toDouble() ?? 14.0,
           category: metaJson['category'] ?? 'Shopping Mall',
           rating: metaJson['rating'] ?? '4.8 ★',
         );
@@ -383,8 +376,10 @@ class ApiService {
             floorId: f['floorId'] ?? 'F1',
             floorNumber: (f['floorNumber'] as num?)?.toInt() ?? 1,
             name: f['name'] ?? 'Floor',
-            relativeVectorMeters: (f['relativeVectorMeters'] as num?)?.toDouble() ?? 4.5,
-            absoluteHeightMeters: (f['absoluteHeightMeters'] as num?)?.toDouble() ?? 15.0,
+            relativeVectorMeters:
+                (f['relativeVectorMeters'] as num?)?.toDouble() ?? 4.5,
+            absoluteHeightMeters:
+                (f['absoluteHeightMeters'] as num?)?.toDouble() ?? 15.0,
             bandMinMeters: (f['bandMinMeters'] as num?)?.toDouble() ?? 12.5,
             bandMaxMeters: (f['bandMaxMeters'] as num?)?.toDouble() ?? 17.5,
             storesCount: (f['storesCount'] as num?)?.toInt() ?? 0,
@@ -394,12 +389,17 @@ class ApiService {
         final profile = BuildingElevationProfile(
           buildingId: profJson['buildingId'] ?? mallId,
           name: profJson['name'] ?? metadata.name,
-          entranceBaseAnchorHeight: (profJson['entranceBaseAnchorHeight'] as num?)?.toDouble() ?? 45.0,
-          floorGapMeters: (profJson['floorGapMeters'] as num?)?.toDouble() ?? 4.5,
+          entranceBaseAnchorHeight:
+              (profJson['entranceBaseAnchorHeight'] as num?)?.toDouble() ??
+              45.0,
+          floorGapMeters:
+              (profJson['floorGapMeters'] as num?)?.toDouble() ?? 4.5,
           floors: floorsList,
         );
 
-        final destinations = destJson.map((d) => DestinationPOI.fromJson(d)).toList();
+        final destinations = destJson
+            .map((d) => DestinationPOI.fromJson(d))
+            .toList();
 
         final entranceMarkers = markJson.map((m) {
           return EntranceMarkerNode(
@@ -409,8 +409,10 @@ class ApiService {
             latitude: (m['latitude'] as num).toDouble(),
             longitude: (m['longitude'] as num).toDouble(),
             baseHeight: (m['baseHeight'] as num?)?.toDouble() ?? 45.0,
-            physicalWidthMeters: (m['physicalWidthMeters'] as num?)?.toDouble() ?? 0.20,
-            physicalHeightMeters: (m['physicalHeightMeters'] as num?)?.toDouble() ?? 0.20,
+            physicalWidthMeters:
+                (m['physicalWidthMeters'] as num?)?.toDouble() ?? 0.20,
+            physicalHeightMeters:
+                (m['physicalHeightMeters'] as num?)?.toDouble() ?? 0.20,
           );
         }).toList();
 
@@ -423,6 +425,80 @@ class ApiService {
           profile: profile,
           destinations: destinations,
           entranceMarkers: entranceMarkers,
+        );
+      }
+    } catch (e) {
+      debugPrint('[ApiService] fetchMallPackage error: $e');
+    }
+
+    // Try reading cached mall package if offline or error
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cached = prefs.getString('cache_package_$mallId');
+      if (cached != null) {
+        final data = jsonDecode(cached);
+        final metaJson = data['metadata'];
+        final profJson = data['profile'];
+        final List destJson = data['destinations'] ?? [];
+        final List markJson = data['entranceMarkers'] ?? [];
+
+        final metadata = MallMetadata(
+          id: metaJson['id'],
+          name: metaJson['name'],
+          city: metaJson['city'] ?? 'Trincomalee',
+          country: metaJson['country'] ?? 'Sri Lanka',
+          latitude: (metaJson['latitude'] as num).toDouble(),
+          longitude: (metaJson['longitude'] as num).toDouble(),
+          floorCount: (metaJson['floorCount'] as num?)?.toInt() ?? 1,
+          packageSizeBytesMB:
+              (metaJson['packageSizeBytesMB'] as num?)?.toDouble() ?? 4.8,
+          category: metaJson['category'] ?? 'Shopping Mall',
+          rating: metaJson['rating'] ?? '4.8 ★',
+        );
+
+        final floorsList = (profJson['floors'] as List? ?? []).map((f) {
+          return FloorLevelConfig(
+            floorId: f['floorId'] ?? 'F1',
+            floorNumber: (f['floorNumber'] as num?)?.toInt() ?? 1,
+            name: f['name'] ?? 'Floor',
+            relativeVectorMeters:
+                (f['relativeVectorMeters'] as num?)?.toDouble() ?? 4.5,
+            absoluteHeightMeters:
+                (f['absoluteHeightMeters'] as num?)?.toDouble() ?? 15.0,
+            bandMinMeters: (f['bandMinMeters'] as num?)?.toDouble() ?? 12.5,
+            bandMaxMeters: (f['bandMaxMeters'] as num?)?.toDouble() ?? 17.5,
+            storesCount: (f['storesCount'] as num?)?.toInt() ?? 0,
+          );
+        }).toList();
+
+        final profile = BuildingElevationProfile(
+          buildingId: profJson['buildingId'] ?? mallId,
+          name: profJson['name'] ?? metadata.name,
+          entranceBaseAnchorHeight:
+              (profJson['entranceBaseAnchorHeight'] as num?)?.toDouble() ?? 0.0,
+          floorGapMeters:
+              (profJson['floorGapMeters'] as num?)?.toDouble() ?? 4.5,
+          floors: floorsList,
+        );
+
+        return FullMallPackage(
+          metadata: metadata,
+          profile: profile,
+          destinations: destJson.map((d) => DestinationPOI.fromJson(d)).toList(),
+          entranceMarkers: markJson.map((m) {
+            return EntranceMarkerNode(
+              markerId: m['markerId'] ?? 'mrk-01',
+              buildingId: m['buildingId'] ?? mallId,
+              name: m['name'] ?? 'Main Entrance',
+              latitude: (m['latitude'] as num).toDouble(),
+              longitude: (m['longitude'] as num).toDouble(),
+              baseHeight: (m['baseHeight'] as num?)?.toDouble() ?? 45.0,
+              physicalWidthMeters:
+                  (m['physicalWidthMeters'] as num?)?.toDouble() ?? 0.20,
+              physicalHeightMeters:
+                  (m['physicalHeightMeters'] as num?)?.toDouble() ?? 0.20,
+            );
+          }).toList(),
         );
       }
     } catch (_) {}
@@ -443,21 +519,52 @@ class ApiService {
       final baseUrl = await getBaseUrl();
       final queryParams = <String, String>{};
       if (mallId != null) queryParams['mallId'] = mallId;
-      if (floorNumber != null) queryParams['floorNumber'] = floorNumber.toString();
+      if (floorNumber != null) {
+        queryParams['floorNumber'] = floorNumber.toString();
+      }
       if (search != null) queryParams['search'] = search;
 
-      final uri = Uri.parse('$baseUrl/destinations').replace(queryParameters: queryParams.isEmpty ? null : queryParams);
-      final response = await http.get(uri, headers: await _headers()).timeout(const Duration(seconds: 5));
+      final uri = Uri.parse(
+        '$baseUrl/destinations',
+      ).replace(queryParameters: queryParams.isEmpty ? null : queryParams);
+      final response = await http
+          .get(uri, headers: await _headers())
+          .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final List list = jsonDecode(response.body);
+        final pois = list.map((json) => DestinationPOI.fromJson(json)).toList();
+
+        // Cache destinations locally for offline resilient AR loading
+        final prefs = await SharedPreferences.getInstance();
+        final cacheKey = mallId != null ? 'cache_destinations_$mallId' : 'cache_all_destinations';
+        await prefs.setString(cacheKey, response.body);
+        await prefs.setString('cache_all_destinations', response.body);
+
+        return pois;
+      }
+    } catch (e) {
+      debugPrint('[ApiService] fetchDestinations error: $e');
+    }
+
+    // Read from local cache if offline or network error
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cacheKey = mallId != null ? 'cache_destinations_$mallId' : 'cache_all_destinations';
+      final cached = prefs.getString(cacheKey) ?? prefs.getString('cache_all_destinations');
+      if (cached != null) {
+        final List list = jsonDecode(cached);
         return list.map((json) => DestinationPOI.fromJson(json)).toList();
       }
     } catch (_) {}
+
     return [];
   }
 
-  Future<bool> createDestination(DestinationPOI poi, {String mallId = 'mall-one-galle-face'}) async {
+  Future<bool> createDestination(
+    DestinationPOI poi, {
+    String mallId = 'mall-one-galle-face',
+  }) async {
     try {
       final baseUrl = await getBaseUrl();
       final body = poi.toJson();
@@ -564,10 +671,7 @@ class ApiService {
           .post(
             Uri.parse('$baseUrl/floors/$mallId/calculate'),
             headers: await _headers(),
-            body: jsonEncode({
-              'latitude': lat ?? 0.0,
-              'longitude': lon ?? 0.0,
-            }),
+            body: jsonEncode({'latitude': lat ?? 0.0, 'longitude': lon ?? 0.0}),
           )
           .timeout(const Duration(seconds: 5));
 
@@ -649,7 +753,10 @@ class ApiService {
     try {
       final baseUrl = await getBaseUrl();
       final response = await http
-          .get(Uri.parse('$baseUrl/parking/$mallId/slots'), headers: await _headers())
+          .get(
+            Uri.parse('$baseUrl/parking/$mallId/slots'),
+            headers: await _headers(),
+          )
           .timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200) {
@@ -660,7 +767,62 @@ class ApiService {
     return [];
   }
 
-  Future<bool> saveVehicleLocation(MyVehicleLocation vehicle, {String mallId = 'mall-one-galle-face'}) async {
+  Future<bool> createParkingSlot(String mallId, ParkingSlot slot) async {
+    try {
+      final baseUrl = await getBaseUrl();
+      final body = slot.toJson();
+      body['mallId'] = mallId;
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/parking/$mallId/slots'),
+            headers: await _headers(),
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 5));
+      return response.statusCode == 201 || response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> createParkingSlotsBulk(
+    String mallId,
+    List<ParkingSlot> slots,
+  ) async {
+    try {
+      final baseUrl = await getBaseUrl();
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/parking/$mallId/slots/bulk'),
+            headers: await _headers(),
+            body: jsonEncode({'slots': slots.map((s) => s.toJson()).toList()}),
+          )
+          .timeout(const Duration(seconds: 8));
+      return response.statusCode == 201 || response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> deleteParkingSlot(String slotId) async {
+    try {
+      final baseUrl = await getBaseUrl();
+      final response = await http
+          .delete(
+            Uri.parse('$baseUrl/parking/slots/$slotId'),
+            headers: await _headers(),
+          )
+          .timeout(const Duration(seconds: 5));
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> saveVehicleLocation(
+    MyVehicleLocation vehicle, {
+    String mallId = 'mall-one-galle-face',
+  }) async {
     try {
       final baseUrl = await getBaseUrl();
       final response = await http
@@ -676,11 +838,17 @@ class ApiService {
     }
   }
 
-  Future<MyVehicleLocation?> fetchMyVehicle(String mallId, String userId) async {
+  Future<MyVehicleLocation?> fetchMyVehicle(
+    String mallId,
+    String userId,
+  ) async {
     try {
       final baseUrl = await getBaseUrl();
       final response = await http
-          .get(Uri.parse('$baseUrl/parking/$mallId/vehicle/$userId'), headers: await _headers())
+          .get(
+            Uri.parse('$baseUrl/parking/$mallId/vehicle/$userId'),
+            headers: await _headers(),
+          )
           .timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200) {

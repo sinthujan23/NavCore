@@ -152,7 +152,9 @@ class _AdminVenueManagerScreenState extends State<AdminVenueManagerScreen> {
               if (mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: Text('Venue "${mall.name}" deleted from database.'),
+                    content: Text(
+                      'Venue "${mall.name}" deleted from database.',
+                    ),
                     backgroundColor: const Color(0xFFEF4444),
                     behavior: SnackBarBehavior.floating,
                   ),
@@ -650,7 +652,7 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
       text: initialAlt.toStringAsFixed(1),
     );
     _floorGapController = TextEditingController(text: '4.5');
-    _floorCount = v?.floorCount ?? 5;
+    _floorCount = (v != null && v.floorCount > 0) ? v.floorCount : 5;
 
     if (v != null) {
       _userEditedId = true;
@@ -882,8 +884,12 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
             if (mounted) {
               setState(() {
                 _heightController.text = geo.groundAltitude.toStringAsFixed(1);
-                _floorGapController.text = geo.floorGap.toStringAsFixed(1);
-                _floorCount = geo.floorCount;
+                _floorGapController.text = geo.floorGap > 0
+                    ? geo.floorGap.toStringAsFixed(1)
+                    : '4.5';
+                if (geo.floorCount > 0) {
+                  _floorCount = geo.floorCount;
+                }
                 if (!_userEditedId &&
                     _nameController.text.trim().isEmpty &&
                     geo.placeName.isNotEmpty) {
@@ -1146,8 +1152,12 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
           _latController.text = finalCoords.latitude.toStringAsFixed(6);
           _lngController.text = finalCoords.longitude.toStringAsFixed(6);
           _heightController.text = geo.groundAltitude.toStringAsFixed(1);
-          _floorGapController.text = geo.floorGap.toStringAsFixed(1);
-          _floorCount = geo.floorCount;
+          _floorGapController.text = geo.floorGap > 0
+              ? geo.floorGap.toStringAsFixed(1)
+              : '4.5';
+          if (geo.floorCount > 0) {
+            _floorCount = geo.floorCount;
+          }
 
           if (!_userEditedId &&
               _nameController.text.trim().isEmpty &&
@@ -1622,9 +1632,13 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
                                         _heightController.text = geo
                                             .groundAltitude
                                             .toStringAsFixed(1);
-                                        _floorGapController.text = geo.floorGap
-                                            .toStringAsFixed(1);
-                                        _floorCount = geo.floorCount;
+                                        _floorGapController.text =
+                                            geo.floorGap > 0
+                                            ? geo.floorGap.toStringAsFixed(1)
+                                            : '4.5';
+                                        if (geo.floorCount > 0) {
+                                          _floorCount = geo.floorCount;
+                                        }
                                       });
                                     }
                                   });
@@ -1809,47 +1823,64 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
                             ),
                           ),
                           const SizedBox(height: 6),
-                          DropdownButtonFormField<int>(
-                            initialValue: _floorCount,
-                            isExpanded: true,
-                            dropdownColor: Colors.white,
-                            style: GoogleFonts.plusJakartaSans(
-                              fontSize: 12.5,
-                              fontWeight: FontWeight.w600,
-                              color: const Color(0xFF0F172A),
-                            ),
-                            decoration: InputDecoration(
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 12,
-                              ),
-                              filled: true,
-                              fillColor: const Color(0xFFF8FAFC),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(14),
-                                borderSide: const BorderSide(
-                                  color: Color(0xFFE2E8F0),
-                                ),
-                              ),
-                              enabledBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(14),
-                                borderSide: const BorderSide(
-                                  color: Color(0xFFE2E8F0),
-                                ),
-                              ),
-                            ),
-                            items: List.generate(10, (i) => i + 1).map((f) {
-                              return DropdownMenuItem(
-                                value: f,
-                                child: Text('$f Lvl'),
+                          Builder(
+                            builder: (context) {
+                              final int safeFloorCount = (_floorCount < 1)
+                                  ? 1
+                                  : _floorCount;
+                              final int maxLevels = math.max(
+                                10,
+                                safeFloorCount,
                               );
-                            }).toList(),
-                            onChanged: (val) {
-                              if (val != null) {
-                                setState(() {
-                                  _floorCount = val;
-                                });
-                              }
+                              final floorList = List.generate(
+                                maxLevels,
+                                (i) => i + 1,
+                              );
+
+                              return DropdownButtonFormField<int>(
+                                key: ValueKey('venue-floors-$safeFloorCount'),
+                                initialValue: safeFloorCount,
+                                isExpanded: true,
+                                dropdownColor: Colors.white,
+                                style: GoogleFonts.plusJakartaSans(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: const Color(0xFF0F172A),
+                                ),
+                                decoration: InputDecoration(
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 12,
+                                  ),
+                                  filled: true,
+                                  fillColor: const Color(0xFFF8FAFC),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(14),
+                                    borderSide: const BorderSide(
+                                      color: Color(0xFFE2E8F0),
+                                    ),
+                                  ),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(14),
+                                    borderSide: const BorderSide(
+                                      color: Color(0xFFE2E8F0),
+                                    ),
+                                  ),
+                                ),
+                                items: floorList.map((f) {
+                                  return DropdownMenuItem(
+                                    value: f,
+                                    child: Text('$f Lvl'),
+                                  );
+                                }).toList(),
+                                onChanged: (val) {
+                                  if (val != null) {
+                                    setState(() {
+                                      _floorCount = val;
+                                    });
+                                  }
+                                },
+                              );
                             },
                           ),
                         ],

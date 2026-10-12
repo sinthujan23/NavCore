@@ -32,6 +32,7 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
   bool _isLoading = true;
   String _searchQuery = '';
   String _selectedCityFilter = 'ALL';
+  bool _filterWithin500mOnly = true;
   final Map<String, double> _downloadProgress = {};
   final TextEditingController _searchController = TextEditingController();
 
@@ -162,6 +163,24 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final hasGps = widget.userCoords != null &&
+        widget.userCoords!.latitude != 0.0 &&
+        widget.userCoords!.longitude != 0.0;
+
+    final mallsWithin500mCount = hasGps
+        ? _malls.where((m) {
+            final dist = haversineDistance(
+              widget.userCoords!,
+              GeodeticCoords(
+                latitude: m.latitude,
+                longitude: m.longitude,
+                height: widget.userCoords!.height,
+              ),
+            );
+            return dist <= 500.0;
+          }).length
+        : 0;
+
     final filtered = _malls.where((m) {
       final q = _searchQuery.toLowerCase();
       final matchesQuery =
@@ -171,6 +190,19 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
       final matchesCity =
           _selectedCityFilter == 'ALL' ||
           m.city.toUpperCase().contains(_selectedCityFilter);
+
+      if (_filterWithin500mOnly && hasGps) {
+        final dist = haversineDistance(
+          widget.userCoords!,
+          GeodeticCoords(
+            latitude: m.latitude,
+            longitude: m.longitude,
+            height: widget.userCoords!.height,
+          ),
+        );
+        if (dist > 500.0) return false;
+      }
+
       return matchesQuery && matchesCity;
     }).toList();
 
@@ -469,6 +501,119 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
 
                     const SizedBox(height: 12),
 
+                    // Proximity 500m Filter Mode Toggle
+                    Row(
+                      children: [
+                        GestureDetector(
+                          onTap: () => setState(() => _filterWithin500mOnly = true),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 11,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: _filterWithin500mOnly
+                                  ? const Color(0xFF059669)
+                                  : Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: _filterWithin500mOnly
+                                    ? const Color(0xFF059669)
+                                    : const Color(0xFFE2E8F0),
+                              ),
+                              boxShadow: _filterWithin500mOnly
+                                  ? const [
+                                      BoxShadow(
+                                        color: Color(0x33059669),
+                                        blurRadius: 8,
+                                        offset: Offset(0, 2),
+                                      ),
+                                    ]
+                                  : null,
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  LucideIcons.radar,
+                                  size: 13,
+                                  color: _filterWithin500mOnly
+                                      ? Colors.white
+                                      : const Color(0xFF059669),
+                                ),
+                                const SizedBox(width: 5),
+                                Text(
+                                  'Within 500m ($mallsWithin500mCount)',
+                                  style: TextStyle(
+                                    fontSize: 11.5,
+                                    fontWeight: FontWeight.bold,
+                                    color: _filterWithin500mOnly
+                                        ? Colors.white
+                                        : const Color(0xFF0F172A),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: () => setState(() => _filterWithin500mOnly = false),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 11,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: !_filterWithin500mOnly
+                                  ? const Color(0xFF2563EB)
+                                  : Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: !_filterWithin500mOnly
+                                    ? const Color(0xFF2563EB)
+                                    : const Color(0xFFE2E8F0),
+                              ),
+                              boxShadow: !_filterWithin500mOnly
+                                  ? const [
+                                      BoxShadow(
+                                        color: Color(0x332563EB),
+                                        blurRadius: 8,
+                                        offset: Offset(0, 2),
+                                      ),
+                                    ]
+                                  : null,
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  LucideIcons.globe,
+                                  size: 13,
+                                  color: !_filterWithin500mOnly
+                                      ? Colors.white
+                                      : const Color(0xFF64748B),
+                                ),
+                                const SizedBox(width: 5),
+                                Text(
+                                  'All Malls (${_malls.length})',
+                                  style: TextStyle(
+                                    fontSize: 11.5,
+                                    fontWeight: FontWeight.bold,
+                                    color: !_filterWithin500mOnly
+                                        ? Colors.white
+                                        : const Color(0xFF0F172A),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 10),
+
                     // City Filter Chips
                     Row(
                       children: [
@@ -573,14 +718,16 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                     ),
                     child: Column(
                       children: [
-                        const Icon(
-                          LucideIcons.map,
+                        Icon(
+                          _filterWithin500mOnly ? LucideIcons.radar : LucideIcons.map,
                           size: 40,
-                          color: Color(0xFF94A3B8),
+                          color: const Color(0xFF2563EB),
                         ),
                         const SizedBox(height: 12),
                         Text(
-                          'No mall map found',
+                          _filterWithin500mOnly
+                              ? 'No malls within 500m of your location'
+                              : 'No mall map found',
                           style: GoogleFonts.plusJakartaSans(
                             fontSize: 15,
                             fontWeight: FontWeight.w700,
@@ -588,26 +735,44 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                           ),
                         ),
                         const SizedBox(height: 4),
-                        const Text(
-                          'Try searching another city or clearing your search query',
+                        Text(
+                          _filterWithin500mOnly
+                              ? (hasGps
+                                  ? 'GPS: ${widget.userCoords!.latitude.toStringAsFixed(4)}, ${widget.userCoords!.longitude.toStringAsFixed(4)}. Tap below to explore all available venues.'
+                                  : 'Acquiring GPS location...')
+                              : 'Try searching another city or clearing your search query',
                           textAlign: TextAlign.center,
-                          style: TextStyle(
+                          style: const TextStyle(
                             fontSize: 12.5,
                             color: Color(0xFF64748B),
                           ),
                         ),
                         const SizedBox(height: 16),
-                        OutlinedButton.icon(
-                          onPressed: () {
-                            setState(() {
-                              _searchQuery = '';
-                              _searchController.clear();
-                              _selectedCityFilter = 'ALL';
-                            });
-                          },
-                          icon: const Icon(LucideIcons.rotateCcw, size: 14),
-                          label: const Text('Reset Search'),
-                        ),
+                        if (_filterWithin500mOnly)
+                          ElevatedButton.icon(
+                            onPressed: () => setState(() => _filterWithin500mOnly = false),
+                            icon: const Icon(LucideIcons.globe, size: 14),
+                            label: const Text('Explore All Malls'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF2563EB),
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                          )
+                        else
+                          OutlinedButton.icon(
+                            onPressed: () {
+                              setState(() {
+                                _searchQuery = '';
+                                _searchController.clear();
+                                _selectedCityFilter = 'ALL';
+                              });
+                            },
+                            icon: const Icon(LucideIcons.rotateCcw, size: 14),
+                            label: const Text('Reset Search'),
+                          ),
                       ],
                     ),
                   ),
@@ -811,20 +976,35 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                                         vertical: 2,
                                       ),
                                       decoration: BoxDecoration(
-                                        color: const Color(
-                                          0xFF2563EB,
-                                        ).withValues(alpha: 0.85),
+                                        color: (distKm * 1000 <= 500.0)
+                                            ? const Color(0xFF059669)
+                                            : const Color(
+                                                0xFF2563EB,
+                                              ).withValues(alpha: 0.85),
                                         borderRadius: BorderRadius.circular(6),
                                       ),
-                                      child: Text(
-                                        distKm < 1.0
-                                            ? '${(distKm * 1000).toInt()}m away'
-                                            : '${distKm.toStringAsFixed(1)}km away',
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 9.5,
-                                          fontWeight: FontWeight.w700,
-                                        ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          if (distKm * 1000 <= 500.0) ...[
+                                            const Icon(
+                                              LucideIcons.check,
+                                              size: 9,
+                                              color: Colors.white,
+                                            ),
+                                            const SizedBox(width: 3),
+                                          ],
+                                          Text(
+                                            distKm < 1.0
+                                                ? '${(distKm * 1000).toInt()}m away'
+                                                : '${distKm.toStringAsFixed(1)}km away',
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 9.5,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
                                   ),

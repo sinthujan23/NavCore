@@ -23,7 +23,6 @@ import 'admin/admin_venue_manager_screen.dart';
 import 'admin/admin_parking_manager_screen.dart';
 import 'admin/admin_osm_map_screen.dart';
 import 'admin/admin_floor_heights_screen.dart';
-import '../data/api_service.dart';
 import '../data/mall_api_service.dart';
 import '../data/floor_height_model.dart';
 
@@ -83,13 +82,22 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   final double _kalmanVariance = 0.0001;
   int _satCount = 0;
   bool _isRealHardwareActive = false;
-  bool _isServerOnline = false;
 
   @override
   void initState() {
     super.initState();
-    _checkServer();
-    _currentDestinations = List.from(widget.destinations);
+    final seen = <String>{};
+    final seenIds = <String>{};
+    final deduped = <DestinationPOI>[];
+    for (final p in widget.destinations) {
+      final key = '${p.name.trim().toLowerCase()}#${p.floorNumber}#${p.mallId ?? ''}';
+      if (!seen.contains(key) && !seenIds.contains(p.id)) {
+        seen.add(key);
+        seenIds.add(p.id);
+        deduped.add(p);
+      }
+    }
+    _currentDestinations = deduped;
     _tabController = TabController(length: 3, vsync: this);
     _liveLat = widget.userCoords.latitude;
     _liveLng = widget.userCoords.longitude;
@@ -138,145 +146,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       if (!mounted) return;
       setState(() {});
     });
-  }
-
-  Future<void> _checkServer() async {
-    final online = await ApiService.instance.checkServerHealth();
-    if (mounted) {
-      setState(() {
-        _isServerOnline = online;
-      });
-    }
-  }
-
-  void _showServerConfigDialog() async {
-    final currentUrl = await ApiService.instance.getBaseUrl();
-    final controller = TextEditingController(text: currentUrl);
-
-    if (!mounted) return;
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(
-          children: [
-            const Icon(LucideIcons.server, color: Color(0xFF2563EB), size: 20),
-            const SizedBox(width: 8),
-            Text(
-              'Backend Server Connection',
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Live REST API endpoint for venue management:',
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 12.5,
-                color: const Color(0xFF64748B),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: controller,
-              style: GoogleFonts.jetBrainsMono(fontSize: 13),
-              decoration: InputDecoration(
-                hintText: 'https://nexnav.hashnate.com/api',
-                filled: true,
-                fillColor: const Color(0xFFF8FAFC),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-                ),
-              ),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              '• Production Cloud: https://nexnav.hashnate.com/api\n• Local / Emulator: http://10.0.2.2:5000/api',
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 11,
-                color: const Color(0xFF94A3B8),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(context);
-              await ApiService.instance.resetToDefaultBaseUrl();
-              await _checkServer();
-            },
-            child: const Text('Reset Default'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF2563EB),
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-            onPressed: () async {
-              Navigator.pop(context);
-              await ApiService.instance.setCustomBaseUrl(controller.text.trim());
-              await _checkServer();
-            },
-            child: const Text('Save & Reconnect'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildServerStatusBadge() {
-    return InkWell(
-      onTap: _showServerConfigDialog,
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: _isServerOnline ? const Color(0xFFF0FDF4) : const Color(0xFFFEF2F2),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: _isServerOnline ? const Color(0xFFBBF7D0) : const Color(0xFFFECACA),
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 6,
-              height: 6,
-              decoration: BoxDecoration(
-                color: _isServerOnline ? const Color(0xFF16A34A) : const Color(0xFFDC2626),
-                shape: BoxShape.circle,
-              ),
-            ),
-            const SizedBox(width: 5),
-            Text(
-              _isServerOnline ? 'Backend API: Online' : 'Backend API: Offline',
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
-                color: _isServerOnline ? const Color(0xFF15803D) : const Color(0xFFB91C1C),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
 
@@ -510,20 +379,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'LIVE SYSTEM STATUS',
-                style: GoogleFonts.plusJakartaSans(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w900,
-                  color: const Color(0xFF0F172A),
-                  letterSpacing: 1.0,
-                ),
-              ),
-              _buildServerStatusBadge(),
-            ],
+          Text(
+            'LIVE SYSTEM STATUS',
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+              color: const Color(0xFF0F172A),
+              letterSpacing: 1.0,
+            ),
           ),
           const SizedBox(height: 12),
           // Sensor Telemetry Strip
@@ -672,7 +535,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                           height: _liveHeight,
                         ),
                         onAddPoi: (newPoi) {
+                          final key = '${newPoi.name.trim().toLowerCase()}#${newPoi.floorNumber}#${newPoi.mallId ?? ''}';
                           setState(() {
+                            _currentDestinations.removeWhere((p) => p.id == newPoi.id || '${p.name.trim().toLowerCase()}#${p.floorNumber}#${p.mallId ?? ''}' == key);
                             _currentDestinations.insert(0, newPoi);
                           });
                           widget.onAddPoi?.call(newPoi);
@@ -794,7 +659,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                     height: _liveHeight,
                   ),
                   onAddPoi: (newPoi) {
+                    final key = '${newPoi.name.trim().toLowerCase()}#${newPoi.floorNumber}#${newPoi.mallId ?? ''}';
                     setState(() {
+                      _currentDestinations.removeWhere((p) => p.id == newPoi.id || '${p.name.trim().toLowerCase()}#${p.floorNumber}#${p.mallId ?? ''}' == key);
                       _currentDestinations.insert(0, newPoi);
                     });
                     widget.onAddPoi?.call(newPoi);

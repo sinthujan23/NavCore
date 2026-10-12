@@ -72,7 +72,7 @@ final defaultBuildingProfile = BuildingElevationProfile(
   buildingId: '',
   name: '',
   entranceBaseAnchorHeight: 0.0,
-  floorGapMeters: 4.5,
+  floorGapMeters: 0.0,
   floors: const [],
 );
 

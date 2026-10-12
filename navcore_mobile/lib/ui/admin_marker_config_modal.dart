@@ -33,8 +33,10 @@ class _AdminMarkerConfigModalState extends State<AdminMarkerConfigModal> {
     super.initState();
     _markerIdController = TextEditingController();
     _nameController = TextEditingController();
-    final hasLat = widget.initialCoords != null && widget.initialCoords!.latitude != 0.0;
-    final hasLng = widget.initialCoords != null && widget.initialCoords!.longitude != 0.0;
+    final hasLat =
+        widget.initialCoords != null && widget.initialCoords!.latitude != 0.0;
+    final hasLng =
+        widget.initialCoords != null && widget.initialCoords!.longitude != 0.0;
     final rawAlt = widget.initialCoords?.height ?? 0.0;
     final normalizedAlt = (rawAlt < 0.0 || rawAlt > 4000.0) ? 0.0 : rawAlt;
 
@@ -105,16 +107,36 @@ class _AdminMarkerConfigModalState extends State<AdminMarkerConfigModal> {
                 ],
               ),
               const SizedBox(height: 16),
-              
-              _buildTextField('Marker ID Code', _markerIdController, hintText: 'e.g. REF-01'),
+
+              _buildTextField(
+                'Marker ID Code',
+                _markerIdController,
+                hintText: 'e.g. REF-01',
+              ),
               const SizedBox(height: 10),
-              _buildTextField('Marker Name / Physical Location', _nameController, hintText: 'e.g. Main Entrance Gate'),
+              _buildTextField(
+                'Marker Name / Physical Location',
+                _nameController,
+                hintText: 'e.g. Main Entrance Gate',
+              ),
               const SizedBox(height: 10),
               Row(
                 children: [
-                  Expanded(child: _buildTextField('Latitude (°N)', _latController, hintText: '0.000000')),
+                  Expanded(
+                    child: _buildTextField(
+                      'Latitude (°N)',
+                      _latController,
+                      hintText: '0.000000',
+                    ),
+                  ),
                   const SizedBox(width: 10),
-                  Expanded(child: _buildTextField('Longitude (°E)', _lngController, hintText: '0.000000')),
+                  Expanded(
+                    child: _buildTextField(
+                      'Longitude (°E)',
+                      _lngController,
+                      hintText: '0.000000',
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 10),
@@ -141,51 +163,88 @@ class _AdminMarkerConfigModalState extends State<AdminMarkerConfigModal> {
                           ),
                         ),
                         const SizedBox(height: 4),
-                        DropdownButtonFormField<int>(
-                          initialValue: _selectedFloor,
-                          isExpanded: true,
-                          dropdownColor: Colors.white,
-                          style: GoogleFonts.plusJakartaSans(
-                            color: const Color(0xFF0F172A),
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
-                          decoration: InputDecoration(
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 10,
-                            ),
-                            filled: true,
-                            fillColor: const Color(0xFFF8FAFC),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-                            ),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: const BorderSide(color: Color(0xFF2563EB), width: 1.5),
-                            ),
-                          ),
-                          items: List.generate(10, (idx) {
-                            return DropdownMenuItem(
-                              value: idx + 1,
-                              child: Text('Floor ${idx + 1}', style: const TextStyle(color: Color(0xFF0F172A))),
-                            );
-                          }),
-                          onChanged: (val) {
-                            if (val != null) {
-                              setState(() {
-                                _selectedFloor = val;
-                                final base = (widget.initialCoords != null && widget.initialCoords!.height > 0.0 && widget.initialCoords!.height < 4000.0)
-                                    ? widget.initialCoords!.height
-                                    : 0.0;
-                                _heightController.text = (base + (val - 1) * 4.5).toStringAsFixed(1);
-                              });
+                        Builder(
+                          builder: (context) {
+                            final floorList = [
+                              0,
+                              ...List.generate(10, (idx) => idx + 1),
+                            ];
+                            if (!floorList.contains(_selectedFloor)) {
+                              floorList.add(_selectedFloor);
                             }
+                            final uniqueFloors = floorList.toSet().toList()
+                              ..sort();
+                            final safeFloor =
+                                uniqueFloors.contains(_selectedFloor)
+                                ? _selectedFloor
+                                : uniqueFloors.first;
+
+                            return DropdownButtonFormField<int>(
+                              key: ValueKey('marker-floor-$safeFloor'),
+                              initialValue: safeFloor,
+                              isExpanded: true,
+                              dropdownColor: Colors.white,
+                              style: GoogleFonts.plusJakartaSans(
+                                color: const Color(0xFF0F172A),
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              decoration: InputDecoration(
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 10,
+                                ),
+                                filled: true,
+                                fillColor: const Color(0xFFF8FAFC),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: const BorderSide(
+                                    color: Color(0xFFE2E8F0),
+                                  ),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: const BorderSide(
+                                    color: Color(0xFFE2E8F0),
+                                  ),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: const BorderSide(
+                                    color: Color(0xFF2563EB),
+                                    width: 1.5,
+                                  ),
+                                ),
+                              ),
+                              items: uniqueFloors.map((f) {
+                                return DropdownMenuItem(
+                                  value: f,
+                                  child: Text(
+                                    f == 0 ? 'Ground Floor (0)' : 'Floor $f',
+                                    style: const TextStyle(
+                                      color: Color(0xFF0F172A),
+                                    ),
+                                  ),
+                                );
+                              }).toList(),
+                              onChanged: (val) {
+                                if (val != null) {
+                                  setState(() {
+                                    _selectedFloor = val;
+                                    final base =
+                                        (widget.initialCoords != null &&
+                                            widget.initialCoords!.height >
+                                                0.0 &&
+                                            widget.initialCoords!.height <
+                                                4000.0)
+                                        ? widget.initialCoords!.height
+                                        : 0.0;
+                                    _heightController.text =
+                                        (base + (val * 4.5)).toStringAsFixed(1);
+                                  });
+                                }
+                              },
+                            );
                           },
                         ),
                       ],
@@ -212,10 +271,17 @@ class _AdminMarkerConfigModalState extends State<AdminMarkerConfigModal> {
                       floorNumber: _selectedFloor,
                       position: GeodeticCoords(
                         latitude:
-                            double.tryParse(_latController.text) ?? widget.initialCoords?.latitude ?? 0.0,
+                            double.tryParse(_latController.text) ??
+                            widget.initialCoords?.latitude ??
+                            0.0,
                         longitude:
-                            double.tryParse(_lngController.text) ?? widget.initialCoords?.longitude ?? 0.0,
-                        height: double.tryParse(_heightController.text) ?? widget.initialCoords?.height ?? 0.0,
+                            double.tryParse(_lngController.text) ??
+                            widget.initialCoords?.longitude ??
+                            0.0,
+                        height:
+                            double.tryParse(_heightController.text) ??
+                            widget.initialCoords?.height ??
+                            0.0,
                       ),
                       physicalWidthMeters: _physicalWidth,
                       physicalHeightMeters: _physicalWidth,
@@ -247,7 +313,11 @@ class _AdminMarkerConfigModalState extends State<AdminMarkerConfigModal> {
     );
   }
 
-  Widget _buildTextField(String label, TextEditingController controller, {String? hintText}) {
+  Widget _buildTextField(
+    String label,
+    TextEditingController controller, {
+    String? hintText,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -289,7 +359,10 @@ class _AdminMarkerConfigModalState extends State<AdminMarkerConfigModal> {
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: Color(0xFF2563EB), width: 1.5),
+              borderSide: const BorderSide(
+                color: Color(0xFF2563EB),
+                width: 1.5,
+              ),
             ),
           ),
           validator: (val) =>

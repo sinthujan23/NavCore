@@ -4,6 +4,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:camera/camera.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../engine/ecef_engine.dart';
 import '../engine/bearing_engine.dart';
@@ -16,6 +17,7 @@ import '../engine/route_service.dart';
 import '../engine/off_route_service.dart';
 import '../engine/ar_pose_engine.dart';
 import '../data/building_data_service.dart';
+import '../data/api_service.dart';
 import 'theme/app_theme.dart';
 
 enum ARFloorFilterMode { autoTilt, currentFloorOnly, allFloors }
@@ -62,11 +64,15 @@ class _ARViewportScreenState extends State<ARViewportScreen>
     with WidgetsBindingObserver {
   final String _searchQuery = '';
   String _selectedCategory = 'All';
-  final ARFloorFilterMode _floorFilterMode = ARFloorFilterMode.autoTilt;
+  final ARFloorFilterMode _floorFilterMode = ARFloorFilterMode.allFloors;
+  int? _selectedFloorNumber;
   bool _isNavigatingActive = false;
   bool _isFavorite = false;
   bool _showGeometricTelemetryModal = false;
   DateTime _lastRouteRecalculateTime = DateTime.now();
+
+  List<DestinationPOI> _liveDestinations = [];
+  bool _isLoadingBackend = false;
 
   final SensorFusionService _sensorFusion = SensorFusionService();
   final RouteService _routeService = RouteService();
@@ -96,10 +102,72 @@ class _ARViewportScreenState extends State<ARViewportScreen>
     return 'Follow AR path';
   }
 
+  List<DestinationPOI> _deduplicateDestinations(List<DestinationPOI> list) {
+    final seen = <String>{};
+    final result = <DestinationPOI>[];
+    for (final p in list) {
+      final key = '${p.id}#${p.name.trim().toLowerCase()}#${p.floorNumber}';
+      if (!seen.contains(key)) {
+        seen.add(key);
+        result.add(p);
+      }
+    }
+    return result;
+  }
+
+  Future<void> _fetchLiveDestinations() async {
+    if (_isLoadingBackend) return;
+    setState(() => _isLoadingBackend = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final activeMallId = prefs.getString('NexNav_active_mall_id') ??
+          (widget.destinations.isNotEmpty && widget.destinations.first.mallId != null
+              ? widget.destinations.first.mallId!
+              : 'mall');
+
+      final fetched = await ApiService.instance.fetchDestinations(mallId: activeMallId);
+      final mallShops = fetched.where((p) => p.mallId == null || p.mallId == activeMallId).toList();
+      if (mallShops.isNotEmpty && mounted) {
+        setState(() {
+          _liveDestinations = _deduplicateDestinations(mallShops);
+          _shopMarkerManager.loadShops(_liveDestinations);
+        });
+        return;
+      }
+
+      final pkg = await ApiService.instance.fetchMallPackage(activeMallId);
+      if (pkg != null && pkg.destinations.isNotEmpty && mounted) {
+        setState(() {
+          _liveDestinations = _deduplicateDestinations(pkg.destinations);
+          _shopMarkerManager.loadShops(_liveDestinations);
+        });
+      }
+    } catch (e) {
+      debugPrint('[ARViewportScreen] Live fetch error: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingBackend = false);
+      }
+    }
+  }
+
   FloorLevelConfig _getFloorConfig(int floorNumber) {
-    return defaultBuildingProfile.floors.firstWhere(
-      (f) => f.floorNumber == floorNumber,
-      orElse: () => widget.currentFloor,
+    if (floorNumber == widget.currentFloor.floorNumber) {
+      return widget.currentFloor;
+    }
+    final delta = (floorNumber - widget.currentFloor.floorNumber);
+    return FloorLevelConfig(
+      floorId: 'F$floorNumber',
+      floorNumber: floorNumber,
+      name: floorNumber == 0 ? 'Ground Floor (F0)' : 'Floor $floorNumber',
+      relativeVectorMeters: delta * 4.5,
+      absoluteHeightMeters:
+          widget.currentFloor.absoluteHeightMeters + (delta * 4.5),
+      bandMinMeters: widget.currentFloor.bandMinMeters + (delta * 4.5),
+      bandMaxMeters: widget.currentFloor.bandMaxMeters + (delta * 4.5),
+      storesCount: _liveDestinations
+          .where((d) => d.floorNumber == floorNumber)
+          .length,
     );
   }
 
@@ -109,6 +177,8 @@ class _ARViewportScreenState extends State<ARViewportScreen>
     WidgetsBinding.instance.addObserver(this);
     _initCamera();
     _buildingDataService.loadBuildingConfig();
+
+    _liveDestinations = _deduplicateDestinations(widget.destinations);
 
     final initialFloorIdx = widget.currentFloor.floorNumber < 0
         ? 0
@@ -120,13 +190,20 @@ class _ARViewportScreenState extends State<ARViewportScreen>
       hysteresisMargin: 2.5,
     );
     _floorPointCalculator = ARFloorPointCalculator(
-      floorToFloorHeight: defaultBuildingProfile.floorGapMeters,
+      floorToFloorHeight: defaultBuildingProfile.floorGapMeters > 0
+          ? defaultBuildingProfile.floorGapMeters
+          : 4.5,
     );
     _shopMarkerManager = ARShopMarkerManager();
-    _shopMarkerManager.loadShops(widget.destinations);
-    final activeAnchor = widget.destinations.isNotEmpty
-        ? widget.destinations.first.location
-        : widget.userCoords;
+    _shopMarkerManager.loadShops(_liveDestinations);
+
+    _fetchLiveDestinations();
+
+    final activeAnchor = _liveDestinations.isNotEmpty
+        ? _liveDestinations.first.location
+        : (widget.destinations.isNotEmpty
+              ? widget.destinations.first.location
+              : widget.userCoords);
     final effectiveUser = getEffectiveUserCoords(
       widget.userCoords,
       activeAnchor,
@@ -162,8 +239,14 @@ class _ARViewportScreenState extends State<ARViewportScreen>
         widget.userCoords != oldWidget.userCoords ||
         widget.destinations != oldWidget.destinations ||
         widget.currentFloor != oldWidget.currentFloor) {
-      final activeAnchor = widget.destinations.isNotEmpty
-          ? widget.destinations.first.location
+      if (widget.destinations.isNotEmpty) {
+        _liveDestinations = _deduplicateDestinations(widget.destinations);
+      }
+      final allDestinations = _liveDestinations.isNotEmpty
+          ? _liveDestinations
+          : widget.destinations;
+      final activeAnchor = allDestinations.isNotEmpty
+          ? allDestinations.first.location
           : widget.userCoords;
       final effectiveUser = getEffectiveUserCoords(
         widget.userCoords,
@@ -171,7 +254,7 @@ class _ARViewportScreenState extends State<ARViewportScreen>
       );
 
       setState(() {
-        _shopMarkerManager.loadShops(widget.destinations);
+        _shopMarkerManager.loadShops(allDestinations);
         if (widget.targetDestination != oldWidget.targetDestination) {
           _selectedPOI = widget.targetDestination;
           _isNavigatingActive = widget.targetDestination != null;
@@ -324,9 +407,14 @@ class _ARViewportScreenState extends State<ARViewportScreen>
 
   @override
   Widget build(BuildContext context) {
+    // Prefer live database destinations from nexnav.hashnate.com, falling back to widget.destinations
+    final List<DestinationPOI> allDestinations = _liveDestinations.isNotEmpty
+        ? _liveDestinations
+        : widget.destinations;
+
     // Real-world dynamic mall anchor fallback (anchors user position to active Sri Lanka mall)
-    final activeMallAnchor = widget.destinations.isNotEmpty
-        ? widget.destinations.first.location
+    final activeMallAnchor = allDestinations.isNotEmpty
+        ? allDestinations.first.location
         : widget.userCoords;
 
     final effectiveUserCoords = getEffectiveUserCoords(
@@ -402,16 +490,16 @@ class _ARViewportScreenState extends State<ARViewportScreen>
     );
 
     // 4. Shop marker filtering based on pitch-selected floor & target floor length bounds
-    _shopMarkerManager.loadShops(widget.destinations);
+    _shopMarkerManager.loadShops(allDestinations);
 
     List<DestinationPOI> candidatePOIs;
     if (_selectedCategory != 'All' && _selectedCategory != 'ALL') {
       // When a specific category is selected, allow discovery of matching shops across all building floors
-      candidatePOIs = widget.destinations
+      candidatePOIs = allDestinations
           .where((poi) => _matchesCategory(poi, _selectedCategory))
           .toList();
     } else if (_floorFilterMode == ARFloorFilterMode.currentFloorOnly) {
-      candidatePOIs = widget.destinations
+      candidatePOIs = allDestinations
           .where((poi) => poi.floorNumber == widget.currentFloor.floorNumber)
           .toList();
     } else if (_floorFilterMode == ARFloorFilterMode.autoTilt) {
@@ -419,18 +507,18 @@ class _ARViewportScreenState extends State<ARViewportScreen>
       final int targetFloorNumber = resolvedFloorIndex;
 
       // Filter strictly to shops on the pitch-resolved floor based on camera motion
-      candidatePOIs = widget.destinations.where((poi) {
+      candidatePOIs = allDestinations.where((poi) {
         if (_selectedPOI != null && poi.id == _selectedPOI!.id) return true;
         return poi.floorNumber == targetFloorNumber;
       }).toList();
 
       // Fallback: If pitch floor has no configured shops, fallback to current floor
       if (candidatePOIs.isEmpty) {
-        candidatePOIs = widget.destinations.where((poi) {
+        candidatePOIs = allDestinations.where((poi) {
           return poi.floorNumber == widget.currentFloor.floorNumber;
         }).toList();
-        if (candidatePOIs.isEmpty && widget.destinations.isNotEmpty) {
-          candidatePOIs = [widget.destinations.first];
+        if (candidatePOIs.isEmpty && allDestinations.isNotEmpty) {
+          candidatePOIs = [allDestinations.first];
         }
       }
 
@@ -439,7 +527,7 @@ class _ARViewportScreenState extends State<ARViewportScreen>
         candidatePOIs.add(_selectedPOI!);
       }
     } else {
-      candidatePOIs = widget.destinations;
+      candidatePOIs = allDestinations;
     }
 
     final filteredPOIs = candidatePOIs.where((poi) {
@@ -462,6 +550,11 @@ class _ARViewportScreenState extends State<ARViewportScreen>
             poi.category.toUpperCase().contains('PARK')) {
           return false;
         }
+      }
+
+      if (_selectedFloorNumber != null &&
+          poi.floorNumber != _selectedFloorNumber) {
+        return false;
       }
 
       return matchesSearch && _matchesCategory(poi, _selectedCategory);
@@ -1257,28 +1350,7 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             GestureDetector(
-                              onTap: () {
-                                final activeMallAnchor =
-                                    widget.destinations.isNotEmpty
-                                    ? widget.destinations.first.location
-                                    : widget.userCoords;
-                                final effectiveUser = getEffectiveUserCoords(
-                                  widget.userCoords,
-                                  activeMallAnchor,
-                                );
-                                setState(() {
-                                  _selectedPOI = poi;
-                                  _isNavigatingActive = true;
-                                  _activeRoute = _routeService.calculateRoute(
-                                    buildingId: 'mall-01',
-                                    userCoords: effectiveUser,
-                                    currentFloor:
-                                        widget.currentFloor.floorNumber,
-                                    destination: poi,
-                                  );
-                                });
-                                widget.onSelectDestination(poi);
-                              },
+                              onTap: () => _selectAndNavigate(poi),
                               child: Container(
                                 width: 195,
                                 padding: const EdgeInsets.all(10),
@@ -1450,6 +1522,8 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                 }).toList(),
               ),
             ),
+
+
 
           // 5. Top Controls & Navigation Guidance HUD Banner
           Positioned(
@@ -1657,32 +1731,34 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                       ),
                     ),
 
+
+
                     // Top Category Filter Chips Bar (when not navigating)
                     if (!_isNavigatingActive)
                       Builder(
                         builder: (context) {
-                          final allCount = widget.destinations.length;
-                          final fashionCount = widget.destinations
+                          final allCount = allDestinations.length;
+                          final fashionCount = allDestinations
                               .where((p) => _matchesCategory(p, 'Fashion'))
                               .length;
-                          final foodCount = widget.destinations
+                          final foodCount = allDestinations
                               .where((p) => _matchesCategory(p, 'Food'))
                               .length;
-                          final techCount = widget.destinations
+                          final techCount = allDestinations
                               .where((p) => _matchesCategory(p, 'Tech'))
                               .length;
-                          final entertainmentCount = widget.destinations
+                          final entertainmentCount = allDestinations
                               .where(
                                 (p) => _matchesCategory(p, 'Entertainment'),
                               )
                               .length;
-                          final luxuryCount = widget.destinations
+                          final luxuryCount = allDestinations
                               .where((p) => _matchesCategory(p, 'Luxury'))
                               .length;
-                          final servicesCount = widget.destinations
+                          final servicesCount = allDestinations
                               .where((p) => _matchesCategory(p, 'Services'))
                               .length;
-                          final parkingCount = widget.destinations
+                          final parkingCount = allDestinations
                               .where((p) => _matchesCategory(p, 'Parking'))
                               .length;
 
@@ -2387,6 +2463,33 @@ class _ARViewportScreenState extends State<ARViewportScreen>
       ),
     );
   }
+
+  void _selectAndNavigate(DestinationPOI poi) {
+    final allDests = _liveDestinations.isNotEmpty
+        ? _liveDestinations
+        : widget.destinations;
+    final activeMallAnchor = allDests.isNotEmpty
+        ? allDests.first.location
+        : widget.userCoords;
+    final effectiveUser = getEffectiveUserCoords(
+      widget.userCoords,
+      activeMallAnchor,
+    );
+    setState(() {
+      _selectedPOI = poi;
+      _isNavigatingActive = true;
+      _activeRoute = _routeService.calculateRoute(
+        buildingId: 'mall-01',
+        userCoords: effectiveUser,
+        currentFloor: widget.currentFloor.floorNumber,
+        destination: poi,
+      );
+    });
+    widget.onSelectDestination(poi);
+  }
+
+
+
 
   String _getCardinalDirection(double deg) {
     if (deg >= 337.5 || deg < 22.5) return 'N';

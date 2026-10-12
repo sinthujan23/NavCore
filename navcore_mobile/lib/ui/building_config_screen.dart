@@ -34,13 +34,45 @@ class _BuildingConfigScreenState extends State<BuildingConfigScreen> {
     super.initState();
     _currentCoords = widget.userCoords;
     _currentProfile = widget.profile ?? defaultBuildingProfile;
+  }
 
-    // Automatically resolve elevation bands from user's current physical location if unconfigured
-    if (_currentProfile.floors.isEmpty || _currentProfile.name.isEmpty) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _autoResolveElevationFromRealLocation();
-      });
+  void _clearAllFloors() {
+    final updated = BuildingElevationProfile(
+      buildingId: _currentProfile.buildingId,
+      name: _currentProfile.name,
+      entranceBaseAnchorHeight: _currentProfile.entranceBaseAnchorHeight,
+      floorGapMeters: _currentProfile.floorGapMeters,
+      floors: const <FloorLevelConfig>[],
+    );
+    setState(() {
+      _currentProfile = updated;
+    });
+    widget.onProfileUpdated?.call(updated);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('All dummy floors removed.'),
+          backgroundColor: Color(0xFF0F172A),
+          duration: Duration(seconds: 2),
+        ),
+      );
     }
+  }
+
+  void _deleteFloor(String floorId) {
+    final updatedFloors =
+        _currentProfile.floors.where((f) => f.floorId != floorId).toList();
+    final updated = BuildingElevationProfile(
+      buildingId: _currentProfile.buildingId,
+      name: _currentProfile.name,
+      entranceBaseAnchorHeight: _currentProfile.entranceBaseAnchorHeight,
+      floorGapMeters: _currentProfile.floorGapMeters,
+      floors: updatedFloors,
+    );
+    setState(() {
+      _currentProfile = updated;
+    });
+    widget.onProfileUpdated?.call(updated);
   }
 
   Future<void> _autoResolveElevationFromRealLocation() async {
@@ -92,29 +124,14 @@ class _BuildingConfigScreenState extends State<BuildingConfigScreen> {
 
         final String venueName = geo.placeName.isNotEmpty
             ? geo.placeName
-            : (geo.city.isNotEmpty ? '${geo.city} Real Location Profile' : 'Current Location Profile');
+            : (geo.city.isNotEmpty
+                ? '${geo.city} Real Location Profile'
+                : 'Current Location Profile');
 
         final double baseAltitude = geo.groundAltitude;
         final double storyGap = geo.floorGap;
-        final int floorCount = geo.floorCount;
 
-        final realFloors = List.generate(floorCount, (i) {
-          final int flrNum = i + 1;
-          final double relHeight = i * storyGap;
-          final double absHeight = baseAltitude + relHeight;
-          return FloorLevelConfig(
-            floorId: 'fl-$flrNum',
-            floorNumber: flrNum,
-            name: flrNum == 1 ? 'Level 1 (Ground)' : 'Level $flrNum',
-            relativeVectorMeters: relHeight,
-            absoluteHeightMeters: absHeight,
-            bandMinMeters: absHeight - (storyGap / 2),
-            bandMaxMeters: absHeight + (storyGap / 2),
-            storesCount: 0,
-            ceilingHeightMeters: storyGap,
-          );
-        });
-
+        // Keep real floors intact or empty (never generate fake dummy floors)
         final updated = BuildingElevationProfile(
           buildingId: geo.suggestedVenueId.isNotEmpty
               ? geo.suggestedVenueId
@@ -122,7 +139,7 @@ class _BuildingConfigScreenState extends State<BuildingConfigScreen> {
           name: venueName,
           entranceBaseAnchorHeight: baseAltitude,
           floorGapMeters: storyGap,
-          floors: realFloors,
+          floors: _currentProfile.floors,
         );
 
         if (mounted) {
@@ -250,7 +267,7 @@ class _BuildingConfigScreenState extends State<BuildingConfigScreen> {
                 ],
                 const SizedBox(height: 6),
                 Text(
-                  'Base Anchor Height: ${_currentProfile.entranceBaseAnchorHeight.toStringAsFixed(1)}m WGS84 | Story Gap: ${_currentProfile.floorGapMeters.toStringAsFixed(1)}m',
+                  'Base Anchor Height: ${_currentProfile.entranceBaseAnchorHeight.toStringAsFixed(1)}m WGS84 | Story Gap: ${_currentProfile.floorGapMeters > 0 ? '${_currentProfile.floorGapMeters.toStringAsFixed(1)}m' : 'Not Set'}',
                   style: GoogleFonts.plusJakartaSans(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
@@ -295,12 +312,43 @@ class _BuildingConfigScreenState extends State<BuildingConfigScreen> {
                 ),
               ),
               if (hasRealFloors)
+                Row(
+                  children: [
+                    Text(
+                      '${_currentProfile.floors.length} Floors',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: const Color(0xFF059669),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    TextButton.icon(
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      onPressed: _clearAllFloors,
+                      icon: const Icon(LucideIcons.trash2, size: 12, color: Color(0xFFDC2626)),
+                      label: Text(
+                        'Remove All',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: const Color(0xFFDC2626),
+                        ),
+                      ),
+                    ),
+                  ],
+                )
+              else
                 Text(
-                  '${_currentProfile.floors.length} Real Floors',
+                  '0 Floors Configured',
                   style: GoogleFonts.plusJakartaSans(
                     fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                    color: const Color(0xFF059669),
+                    fontWeight: FontWeight.w700,
+                    color: const Color(0xFF94A3B8),
                   ),
                 ),
             ],
@@ -349,7 +397,7 @@ class _BuildingConfigScreenState extends State<BuildingConfigScreen> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Tap the button above to automatically detect real elevation bands based on your current physical GPS coordinates.',
+                    'No dummy floors are active. Add and calibrate real architectural floors using the Admin Floor Heights Manager.',
                     textAlign: TextAlign.center,
                     style: GoogleFonts.plusJakartaSans(
                       fontSize: 12,
@@ -383,13 +431,24 @@ class _BuildingConfigScreenState extends State<BuildingConfigScreen> {
                       'Band: ${floor.bandMinMeters.toStringAsFixed(1)}m – ${floor.bandMaxMeters.toStringAsFixed(1)}m',
                       style: const TextStyle(fontSize: 11, color: Color(0xFF64748B)),
                     ),
-                    trailing: Text(
-                      '${floor.absoluteHeightMeters.toStringAsFixed(1)}m',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontWeight: FontWeight.w900,
-                        color: const Color(0xFF0F172A),
-                        fontSize: 14,
-                      ),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '${floor.absoluteHeightMeters.toStringAsFixed(1)}m',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontWeight: FontWeight.w900,
+                            color: const Color(0xFF0F172A),
+                            fontSize: 14,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        IconButton(
+                          icon: const Icon(LucideIcons.trash2, size: 16, color: Color(0xFFEF4444)),
+                          tooltip: 'Delete floor',
+                          onPressed: () => _deleteFloor(floor.floorId),
+                        ),
+                      ],
                     ),
                   ),
                 )),

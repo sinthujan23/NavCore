@@ -244,53 +244,31 @@ class ParkingService extends ChangeNotifier {
 
   Map<String, List<ParkingSlot>> get allFloorSlots => _floorSlots;
 
-  /// Dynamically load and generate parking bay grid layouts anchored at a specific Mall Map package's geodetic location
-  void loadLayoutForMallMetadata({
+  /// Load parking bay layouts anchored at a specific Mall Map package.
+  /// Uses real backend slots and cached local slots, eliminating hardcoded dummy data.
+  Future<void> loadLayoutForMallMetadata({
     required String mallId,
     required double baseLat,
     required double baseLon,
     int basementFloors = 2,
-  }) {
-    _floorSlots.clear();
-
-    final int numBasements = basementFloors > 0 ? basementFloors : 2;
-
-    for (int b = numBasements; b >= 1; b--) {
-      final String floorId = 'B$b';
-      final double height = 45.0 - (b * 5.0);
-      _floorSlots[floorId] = _generateGridSlots(
-        floorId: floorId,
-        baseHeight: height,
-        rows: 6,
-        cols: 4,
-        sections: ['A', 'B'],
-        baseLat: baseLat - (b * 0.0002),
-        baseLon: baseLon - (b * 0.0002),
-      );
-    }
-
-    // Ground Floor / VIP Surface Parking
-    _floorSlots['GF'] = _generateGridSlots(
-      floorId: 'GF',
-      baseHeight: 45.0,
-      rows: 3,
-      cols: 4,
-      sections: ['P'],
-      baseLat: baseLat + 0.0001,
-      baseLon: baseLon + 0.0001,
-    );
-
-    _slotStreamController.add(_floorSlots);
-    notifyListeners();
+  }) async {
+    await loadSlotsForMall(mallId);
   }
 
   /// Reset all slots across all floors for active mall map to FREE status
-  void resetAllSlotsToFree() {
+  Future<void> resetAllSlotsToFree(String mallId) async {
     for (final slots in _floorSlots.values) {
       for (final slot in slots) {
         slot.status = ParkingSlotStatus.free;
+        ApiService.instance.updateParkingSlotStatus(slot.id, 'free');
       }
     }
+    final prefs = await SharedPreferences.getInstance();
+    final all = _floorSlots.values.expand((s) => s).toList();
+    await prefs.setString(
+      'cache_parking_slots_$mallId',
+      jsonEncode(all.map((s) => s.toJson()).toList()),
+    );
     _slotStreamController.add(_floorSlots);
     notifyListeners();
   }
@@ -298,13 +276,33 @@ class ParkingService extends ChangeNotifier {
   /// Load parking slots dynamically from backend API for a given venue
   Future<void> loadSlotsForMall(String mallId) async {
     try {
+      final prefs = await SharedPreferences.getInstance();
       final slots = await ApiService.instance.fetchParkingSlots(mallId);
       _floorSlots.clear();
-      for (final slot in slots) {
-        if (!_floorSlots.containsKey(slot.floorId)) {
-          _floorSlots[slot.floorId] = [];
+      if (slots.isNotEmpty) {
+        for (final slot in slots) {
+          if (!_floorSlots.containsKey(slot.floorId)) {
+            _floorSlots[slot.floorId] = [];
+          }
+          _floorSlots[slot.floorId]!.add(slot);
         }
-        _floorSlots[slot.floorId]!.add(slot);
+        await prefs.setString(
+          'cache_parking_slots_$mallId',
+          jsonEncode(slots.map((s) => s.toJson()).toList()),
+        );
+      } else {
+        // Read from local cache if offline or backend freshly started
+        final cached = prefs.getString('cache_parking_slots_$mallId');
+        if (cached != null) {
+          final List list = jsonDecode(cached);
+          for (final item in list) {
+            final slot = ParkingSlot.fromJson(item);
+            if (!_floorSlots.containsKey(slot.floorId)) {
+              _floorSlots[slot.floorId] = [];
+            }
+            _floorSlots[slot.floorId]!.add(slot);
+          }
+        }
       }
       _slotStreamController.add(_floorSlots);
       notifyListeners();
@@ -313,102 +311,136 @@ class ParkingService extends ChangeNotifier {
     }
   }
 
-  List<ParkingSlot> _generateGridSlots({
+  /// Adds a single parking stall
+  Future<bool> addParkingSlot(String mallId, ParkingSlot slot) async {
+    final ok = await ApiService.instance.createParkingSlot(mallId, slot);
+    if (!_floorSlots.containsKey(slot.floorId)) {
+      _floorSlots[slot.floorId] = [];
+    }
+    _floorSlots[slot.floorId]!.removeWhere((s) => s.id == slot.id);
+    _floorSlots[slot.floorId]!.add(slot);
+
+    final prefs = await SharedPreferences.getInstance();
+    final all = _floorSlots.values.expand((s) => s).toList();
+    await prefs.setString(
+      'cache_parking_slots_$mallId',
+      jsonEncode(all.map((s) => s.toJson()).toList()),
+    );
+
+    _slotStreamController.add(_floorSlots);
+    notifyListeners();
+    return ok;
+  }
+
+  /// Adds a batch/panel of parking stalls (e.g. Row of 10 or 20 bays)
+  Future<bool> addParkingPanel(
+    String mallId, {
     required String floorId,
-    required double baseHeight,
-    required int rows,
-    required int cols,
-    required List<String> sections,
+    required String section,
+    required int startNumber,
+    required int count,
     required double baseLat,
     required double baseLon,
-  }) {
-    final List<ParkingSlot> slots = [];
-    final random = Random(floorId.hashCode);
-
-    if (floorId == 'B1' || floorId == 'B2') {
-      for (final sec in ['A', 'B']) {
-        for (int i = 1; i <= 12; i++) {
-          final numStr = i < 10 ? '0$i' : '$i';
-          final slotId = '$floorId-$sec-$numStr';
-          final isEV = (sec == 'A' && (i == 1 || i == 2));
-          final isHandicap = (sec == 'A' && (i == 3 || i == 4));
-
-          ParkingSlotStatus initialStatus = ParkingSlotStatus.free;
-          final randVal = random.nextDouble();
-          if (randVal < 0.35) {
-            initialStatus = ParkingSlotStatus.occupied;
-          } else if (randVal < 0.45) {
-            initialStatus = ParkingSlotStatus.reserved;
-          }
-
-          final r = (i - 1) ~/ 2;
-          final c = (i - 1) % 2;
-
-          slots.add(
-            ParkingSlot(
-              id: slotId,
-              floorId: floorId,
-              section: sec,
-              slotNumber: i,
-              status: initialStatus,
-              location: GeodeticCoords(
-                latitude: baseLat + (r * 0.00004),
-                longitude: baseLon + (c * 0.00004),
-                height: baseHeight,
-              ),
-              gridRow: r,
-              gridCol: c,
-              isEVCharging: isEV,
-              isHandicapAccessible: isHandicap,
-              sensorId: 'IOT-SNS-$floorId-$sec$numStr',
-            ),
-          );
-        }
-      }
-      return slots;
-    }
-
-    int counter = 1;
-    for (int r = 0; r < rows; r++) {
-      for (int c = 0; c < cols; c++) {
-        final sec = sections[(r + c) % sections.length];
-        final numStr = counter < 10 ? '0$counter' : '$counter';
-        final slotId = '$floorId-$sec-$numStr';
-
-        ParkingSlotStatus initialStatus = ParkingSlotStatus.free;
-        final randVal = random.nextDouble();
-        if (randVal < 0.55) {
-          initialStatus = ParkingSlotStatus.occupied;
-        } else if (randVal < 0.65) {
-          initialStatus = ParkingSlotStatus.reserved;
-        }
-
-        final isEV = (r == 0 && c < 2);
-        final isHandicap = (r == 0 && c >= 2 && c < 4);
-
-        slots.add(
-          ParkingSlot(
-            id: slotId,
-            floorId: floorId,
-            section: sec,
-            slotNumber: counter,
-            status: initialStatus,
-            location: GeodeticCoords(
-              latitude: baseLat + (r * 0.00004),
-              longitude: baseLon + (c * 0.00004),
-              height: baseHeight,
-            ),
-            gridRow: r,
-            gridCol: c,
-            isEVCharging: isEV,
-            isHandicapAccessible: isHandicap,
-            sensorId: 'IOT-SNS-$floorId-$r$c',
+    required double height,
+    bool isEV = false,
+    bool isHandicap = false,
+  }) async {
+    final List<ParkingSlot> newSlots = [];
+    for (int i = 0; i < count; i++) {
+      final num = startNumber + i;
+      final numStr = num < 10 ? '0$num' : '$num';
+      final slotId = '$floorId-$section-$numStr';
+      final r = i ~/ 4;
+      final c = i % 4;
+      newSlots.add(
+        ParkingSlot(
+          id: slotId,
+          floorId: floorId,
+          section: section,
+          slotNumber: num,
+          status: ParkingSlotStatus.free,
+          location: GeodeticCoords(
+            latitude: baseLat + (r * 0.00004),
+            longitude: baseLon + (c * 0.00004),
+            height: height,
           ),
-        );
-        counter++;
+          gridRow: r,
+          gridCol: c,
+          isEVCharging: isEV,
+          isHandicapAccessible: isHandicap,
+          sensorId: 'SNS-$floorId-$section$numStr',
+        ),
+      );
+    }
+
+    final ok = await ApiService.instance.createParkingSlotsBulk(
+      mallId,
+      newSlots,
+    );
+    if (!_floorSlots.containsKey(floorId)) {
+      _floorSlots[floorId] = [];
+    }
+    for (final s in newSlots) {
+      _floorSlots[floorId]!.removeWhere((x) => x.id == s.id);
+      _floorSlots[floorId]!.add(s);
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final all = _floorSlots.values.expand((s) => s).toList();
+    await prefs.setString(
+      'cache_parking_slots_$mallId',
+      jsonEncode(all.map((s) => s.toJson()).toList()),
+    );
+
+    _slotStreamController.add(_floorSlots);
+    notifyListeners();
+    return ok;
+  }
+
+  /// Deletes a parking slot
+  Future<bool> deleteParkingSlot(String mallId, String slotId) async {
+    final ok = await ApiService.instance.deleteParkingSlot(slotId);
+    for (final list in _floorSlots.values) {
+      list.removeWhere((s) => s.id == slotId);
+    }
+    _floorSlots.removeWhere((key, value) => value.isEmpty);
+
+    final prefs = await SharedPreferences.getInstance();
+    final all = _floorSlots.values.expand((s) => s).toList();
+    await prefs.setString(
+      'cache_parking_slots_$mallId',
+      jsonEncode(all.map((s) => s.toJson()).toList()),
+    );
+
+    _slotStreamController.add(_floorSlots);
+    notifyListeners();
+    return ok;
+  }
+
+  /// Toggles or updates slot occupancy status
+  Future<void> updateSlotStatus(
+    String mallId,
+    String slotId,
+    ParkingSlotStatus newStatus,
+  ) async {
+    for (final list in _floorSlots.values) {
+      for (final s in list) {
+        if (s.id == slotId) {
+          s.status = newStatus;
+          break;
+        }
       }
     }
-    return slots;
+    await ApiService.instance.updateParkingSlotStatus(slotId, newStatus.name);
+    final prefs = await SharedPreferences.getInstance();
+    final all = _floorSlots.values.expand((s) => s).toList();
+    await prefs.setString(
+      'cache_parking_slots_$mallId',
+      jsonEncode(all.map((s) => s.toJson()).toList()),
+    );
+
+    _slotStreamController.add(_floorSlots);
+    notifyListeners();
   }
 
   /// REST / Local API endpoint: fetchFloorMap(floorId)
@@ -497,7 +529,8 @@ class ParkingService extends ChangeNotifier {
 
     // Restriction: Prevent double-parking if the user already has a parked vehicle location
     final existingParked = fetchMyVehicleLocation(vehicleRecord.userId);
-    if (existingParked != null && existingParked.slotId != vehicleRecord.slotId) {
+    if (existingParked != null &&
+        existingParked.slotId != vehicleRecord.slotId) {
       throw Exception(
         'Vehicle Already Parked: You currently have a vehicle parked at Stall ${existingParked.slotId} (${existingParked.floorName}). Please remove your existing parked location before parking in a new slot.',
       );
@@ -619,7 +652,10 @@ class ParkingService extends ChangeNotifier {
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('$_vehicleStorageKeyPrefix$targetUser');
-    ApiService.instance.deleteVehicleLocation('mall-one-galle-face', targetUser);
+    ApiService.instance.deleteVehicleLocation(
+      'mall-one-galle-face',
+      targetUser,
+    );
     notifyListeners();
   }
 
