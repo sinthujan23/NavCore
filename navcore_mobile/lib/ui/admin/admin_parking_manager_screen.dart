@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../data/parking_service.dart';
 import '../../data/mall_database_service.dart';
@@ -42,6 +43,16 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
   Future<void> _loadMallsAndLayout() async {
     setState(() => _isLoading = true);
     final malls = await _mallService.getMallsList();
+    if (malls.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _malls = [];
+          _activeMall = null;
+          _isLoading = false;
+        });
+      }
+      return;
+    }
     final active = malls.firstWhere((m) => m.isActive, orElse: () => malls.first);
 
     _parkingService.loadLayoutForMallMetadata(
@@ -128,9 +139,39 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: Color(0xFF0F172A)))
-          : ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
+          : _malls.isEmpty
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(32),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(LucideIcons.car, size: 48, color: Color(0xFF94A3B8)),
+                        const SizedBox(height: 16),
+                        Text(
+                          'No Active Venues',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                            color: const Color(0xFF0F172A),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Register a venue in the Venue Package Manager to automatically generate and manage parking stalls.',
+                          textAlign: TextAlign.center,
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 13,
+                            color: const Color(0xFF64748B),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              : ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [
                 // 1. ACTIVE MALL MAP WORKFLOW SELECTOR CARD
                 Container(
                   padding: const EdgeInsets.all(16),

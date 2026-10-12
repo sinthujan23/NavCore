@@ -136,6 +136,33 @@ class RealSensorService {
     }
   }
 
+  Future<GeodeticCoords?> getLastKnownOrCurrentPosition() async {
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) return null;
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) return null;
+      }
+      if (permission == LocationPermission.deniedForever) return null;
+
+      final last = await Geolocator.getLastKnownPosition();
+      if (last != null && last.latitude != 0.0) {
+        _lastCoords = GeodeticCoords(
+          latitude: last.latitude,
+          longitude: last.longitude,
+          height: last.altitude,
+        );
+        _lastAccuracyMeters = last.accuracy;
+        _lastFixTime = DateTime.now();
+        return _lastCoords;
+      }
+    } catch (_) {}
+    return getCurrentPosition();
+  }
+
   double _smoothedPitch = 0.0;
   final double _alpha = 0.25;
 

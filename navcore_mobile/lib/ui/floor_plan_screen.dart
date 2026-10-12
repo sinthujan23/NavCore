@@ -168,7 +168,9 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
               ),
             ),
             Text(
-              'One Galle Face Mall • Colombo',
+              widget.buildingProfile.name.isNotEmpty && widget.buildingProfile.name != 'Venue'
+                  ? widget.buildingProfile.name
+                  : 'Indoor Navigation Floor Plan',
               overflow: TextOverflow.ellipsis,
               style: GoogleFonts.plusJakartaSans(
                 fontSize: 11,
@@ -713,7 +715,7 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                         () {
                           final activeMallAnchor = widget.destinations.isNotEmpty
                               ? widget.destinations.first.location
-                              : entranceAnchor;
+                              : widget.userCoords;
                           final effectiveUser = getEffectiveUserCoords(
                             widget.userCoords,
                             activeMallAnchor,
@@ -949,6 +951,61 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                                                           0xFFD97706,
                                                         ),
                                                       ),
+                                                ),
+                                                const SizedBox(width: 8),
+                                                Builder(
+                                                  builder: (context) {
+                                                    final activeAnchor = widget.destinations.isNotEmpty
+                                                        ? widget.destinations.first.location
+                                                        : widget.userCoords;
+                                                    final effectiveUser = getEffectiveUserCoords(
+                                                      widget.userCoords,
+                                                      activeAnchor,
+                                                    );
+                                                    final storeDistMeters = calculateAccurate3DDistance(
+                                                      effectiveUser,
+                                                      _selectedPOI!.location,
+                                                      userFloorNumber: widget.currentFloor.floorNumber,
+                                                      targetFloorNumber: _selectedPOI!.floorNumber,
+                                                    );
+                                                    return Row(
+                                                      mainAxisSize: MainAxisSize.min,
+                                                      children: [
+                                                        const Icon(
+                                                          LucideIcons.navigation,
+                                                          size: 10,
+                                                          color: Color(0xFF2563EB),
+                                                        ),
+                                                        const SizedBox(width: 3),
+                                                        Text(
+                                                          '${storeDistMeters.toStringAsFixed(0)}m away',
+                                                          style: GoogleFonts.plusJakartaSans(
+                                                            fontSize: 10.5,
+                                                            fontWeight: FontWeight.w700,
+                                                            color: const Color(0xFF2563EB),
+                                                          ),
+                                                        ),
+                                                        if (_selectedPOI!.floorNumber != widget.currentFloor.floorNumber) ...[
+                                                          const SizedBox(width: 5),
+                                                          Container(
+                                                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                                                            decoration: BoxDecoration(
+                                                              color: const Color(0xFFEFF6FF),
+                                                              borderRadius: BorderRadius.circular(5),
+                                                            ),
+                                                            child: Text(
+                                                              'Floor ${_selectedPOI!.floorNumber}',
+                                                              style: GoogleFonts.plusJakartaSans(
+                                                                fontSize: 9,
+                                                                fontWeight: FontWeight.bold,
+                                                                color: const Color(0xFF1D4ED8),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ],
+                                                    );
+                                                  },
                                                 ),
                                               ],
                                             ),

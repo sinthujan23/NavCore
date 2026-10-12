@@ -126,7 +126,7 @@ class _ARViewportScreenState extends State<ARViewportScreen>
     _shopMarkerManager.loadShops(widget.destinations);
     final activeAnchor = widget.destinations.isNotEmpty
         ? widget.destinations.first.location
-        : entranceAnchor;
+        : widget.userCoords;
     final effectiveUser = getEffectiveUserCoords(
       widget.userCoords,
       activeAnchor,
@@ -164,7 +164,7 @@ class _ARViewportScreenState extends State<ARViewportScreen>
         widget.currentFloor != oldWidget.currentFloor) {
       final activeAnchor = widget.destinations.isNotEmpty
           ? widget.destinations.first.location
-          : entranceAnchor;
+          : widget.userCoords;
       final effectiveUser = getEffectiveUserCoords(
         widget.userCoords,
         activeAnchor,
@@ -327,7 +327,7 @@ class _ARViewportScreenState extends State<ARViewportScreen>
     // Real-world dynamic mall anchor fallback (anchors user position to active Sri Lanka mall)
     final activeMallAnchor = widget.destinations.isNotEmpty
         ? widget.destinations.first.location
-        : entranceAnchor;
+        : widget.userCoords;
 
     final effectiveUserCoords = getEffectiveUserCoords(
       widget.userCoords,
@@ -883,7 +883,7 @@ class _ARViewportScreenState extends State<ARViewportScreen>
             if (mounted && _isNavigatingActive && _selectedPOI != null) {
               final activeMallAnchor = widget.destinations.isNotEmpty
                   ? widget.destinations.first.location
-                  : entranceAnchor;
+                  : widget.userCoords;
               final effectiveUser = getEffectiveUserCoords(
                 fusedPose.position,
                 activeMallAnchor,
@@ -1261,7 +1261,7 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                                 final activeMallAnchor =
                                     widget.destinations.isNotEmpty
                                     ? widget.destinations.first.location
-                                    : entranceAnchor;
+                                    : widget.userCoords;
                                 final effectiveUser = getEffectiveUserCoords(
                                   widget.userCoords,
                                   activeMallAnchor,

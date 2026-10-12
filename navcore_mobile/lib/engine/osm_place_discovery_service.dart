@@ -39,7 +39,7 @@ class OSMPlaceDiscoveryService {
     final double lon = userCoords.longitude;
 
     if (lat == 0.0 && lon == 0.0) {
-      return mockDestinations;
+      return const <DestinationPOI>[];
     }
 
     // Overpass QL Query for real shops, amenities, and building levels
@@ -165,58 +165,8 @@ out center 40;
       debugPrint('OSM Overpass API Exception: $e');
     }
 
-    // Fallback: Generate real local POIs around user GPS coordinates
-    return _generateLocalMockPOIsForRealLocation(userCoords);
-  }
-
-  /// Synthesizes real local POIs anchored directly at the user's real GPS position
-  List<DestinationPOI> _generateLocalMockPOIsForRealLocation(GeodeticCoords userCoords) {
-    final double baseLat = userCoords.latitude;
-    final double baseLon = userCoords.longitude;
-
-    final List<Map<String, dynamic>> localTemplates = [
-      {'name': 'Central Food & Dining Studio', 'cat': 'FOOD & DRINK', 'floor': 4, 'latOff': 0.00012, 'lonOff': 0.00015},
-      {'name': 'Grand Fashion & Apparel Flagship', 'cat': 'RETAIL & FASHION', 'floor': 2, 'latOff': -0.00010, 'lonOff': 0.00018},
-      {'name': 'Luxury Brand Outlet', 'cat': 'RETAIL & FASHION', 'floor': 1, 'latOff': 0.00008, 'lonOff': -0.00012},
-      {'name': 'Digital Experience Store', 'cat': 'TECH & ELECTRONICS', 'floor': 3, 'latOff': -0.00014, 'lonOff': -0.00010},
-      {'name': 'Smart Devices Hub', 'cat': 'TECH & ELECTRONICS', 'floor': 3, 'latOff': 0.00016, 'lonOff': 0.00005},
-      {'name': 'B1 Underground Parking', 'cat': 'PARKING', 'floor': -1, 'latOff': -0.00005, 'lonOff': -0.00008},
-      {'name': 'Concierge & Visitor Info Desk', 'cat': 'SERVICES', 'floor': 1, 'latOff': 0.00002, 'lonOff': 0.00003},
-      {'name': 'Artisan Coffee & Bakery', 'cat': 'FOOD & DRINK', 'floor': 4, 'latOff': 0.00018, 'lonOff': -0.00014},
-    ];
-
-    final List<DestinationPOI> generated = [];
-
-    for (int i = 0; i < localTemplates.length; i++) {
-      final t = localTemplates[i];
-      final int flr = t['floor'] as int;
-      final floorConfig = defaultBuildingProfile.floors.firstWhere(
-        (f) => f.floorNumber == flr,
-        orElse: () => defaultBuildingProfile.floors.first,
-      );
-
-      generated.add(
-        DestinationPOI(
-          id: 'real-loc-$i',
-          name: t['name'] as String,
-          category: t['cat'] as String,
-          location: GeodeticCoords(
-            latitude: baseLat + (t['latOff'] as double),
-            longitude: baseLon + (t['lonOff'] as double),
-            height: floorConfig.absoluteHeightMeters,
-          ),
-          floorNumber: flr,
-          description: 'Local venue anchored at user real GPS coordinates',
-          openStatus: 'Open Now (10:00 AM - 10:00 PM)',
-          rating: 4.8,
-          imageUrl: 'assets/images/shops/fashion1.jpg',
-        ),
-      );
-    }
-
-    _cachedRealPOIs = generated;
-    _lastFetchCoords = userCoords;
-    return generated;
+    // Fallback: Return empty POI list if no real OpenStreetMap places discovered
+    return const <DestinationPOI>[];
   }
 
   String _capitalize(String s) {

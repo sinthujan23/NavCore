@@ -37,7 +37,7 @@ class ARNavigationStateManager extends ChangeNotifier {
   double _distanceToDestinationMeters = 0.0;
   double _relativeBearingDegrees = 0.0;
   
-  GeodeticCoords _userCoords = entranceAnchor;
+  GeodeticCoords _userCoords = const GeodeticCoords(latitude: 0.0, longitude: 0.0, height: 0.0);
   double _compassHeading = 0.0;
   double _phonePitch = 0.0;
   

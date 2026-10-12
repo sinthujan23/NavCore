@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -12,6 +11,8 @@ import '../engine/ar_sensor_engine.dart';
 import '../data/building_data_service.dart';
 import '../data/destinations.dart';
 import '../data/mall_database_service.dart';
+
+import '../data/parking_service.dart';
 
 import 'admin_marker_config_modal.dart';
 import 'building_config_screen.dart';
@@ -63,7 +64,7 @@ class AdminDashboardScreen extends StatefulWidget {
 
 class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     with SingleTickerProviderStateMixin {
-  int _markerCount = 12;
+  int _markerCount = 0;
   late List<DestinationPOI> _currentDestinations;
   late TabController _tabController;
   Timer? _telemetryTimer;
@@ -72,14 +73,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   late double _liveLat;
   late double _liveLng;
   late double _liveHeight;
-  double _liveAccuracy = 3.5;
-  double _heading = 42.0;
+  double _liveAccuracy = 0.0;
+  double _heading = 0.0;
   double _pitch = 0.0;
   PitchTiltDirection _tiltDir = PitchTiltDirection.level;
   double _rawPressure = 1013.25;
   double _smoothedPressure = 1013.25;
-  double _kalmanVariance = 0.00012;
-  int _satCount = 18;
+  final double _kalmanVariance = 0.0001;
+  int _satCount = 0;
   bool _isRealHardwareActive = false;
 
   @override
@@ -90,6 +91,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     _liveLat = widget.userCoords.latitude;
     _liveLng = widget.userCoords.longitude;
     _liveHeight = widget.userCoords.height;
+    _markerCount = 0;
 
     // Connect to real hardware sensor stream if available
     if (widget.sensorService != null) {
@@ -102,7 +104,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             _liveLng = coords.longitude;
             _liveHeight = coords.height;
             _liveAccuracy = accuracy;
-            _satCount = (accuracy <= 5.0) ? 18 : 12;
+            _satCount = (accuracy <= 5.0) ? 18 : ((accuracy <= 15.0) ? 12 : 6);
           });
         },
         onHeadingUpdated: (heading) {
@@ -128,18 +130,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       );
     }
 
-    // Timer for latency & kalman variance updates
+    // Refresh telemetry and metrics periodically without generating fake coordinates
     _telemetryTimer = Timer.periodic(const Duration(milliseconds: 1500), (timer) {
       if (!mounted) return;
-      final rng = math.Random();
-      setState(() {
-        if (!_isRealHardwareActive) {
-          _liveLat = widget.userCoords.latitude + (rng.nextDouble() - 0.5) * 0.00002;
-          _liveLng = widget.userCoords.longitude + (rng.nextDouble() - 0.5) * 0.00002;
-          _heading = (350 + rng.nextDouble() * 20) % 360;
-        }
-        _kalmanVariance = 0.00010 + rng.nextDouble() * 0.00004;
-      });
+      setState(() {});
     });
   }
 
@@ -396,19 +390,25 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               children: [
                 _buildLiveValueItem(
                   label: 'GPS LOCATION',
-                  value: '${_liveLat.toStringAsFixed(5)}°, ${_liveLng.toStringAsFixed(5)}°',
+                  value: (_liveLat != 0.0 || _liveLng != 0.0)
+                      ? '${_liveLat.toStringAsFixed(5)}°, ${_liveLng.toStringAsFixed(5)}°'
+                      : 'Standby',
                   accentColor: const Color(0xFF2563EB),
                 ),
                 Container(width: 1, height: 28, color: const Color(0xFFE2E8F0)),
                 _buildLiveValueItem(
                   label: 'DIRECTION',
-                  value: '${_heading.toStringAsFixed(0)}° ${_getCardinalDir(_heading)}',
+                  value: _heading > 0
+                      ? '${_heading.toStringAsFixed(0)}° ${_getCardinalDir(_heading)}'
+                      : '0° N',
                   accentColor: const Color(0xFF7C3AED),
                 ),
                 Container(width: 1, height: 28, color: const Color(0xFFE2E8F0)),
                 _buildLiveValueItem(
                   label: 'GPS SIGNAL',
-                  value: '$_satCount Sats',
+                  value: _satCount > 0
+                      ? '$_satCount Sats'
+                      : (_isRealHardwareActive ? 'Fix Pending' : 'Sensors Ready'),
                   accentColor: const Color(0xFF059669),
                 ),
               ],
@@ -451,6 +451,30 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
 
   // TAB 1: CONTROL HUB DASHBOARD
   Widget _buildControlHubTab() {
+    final allSlots = ParkingService.instance.allFloorSlots.values.expand((s) => s).toList();
+    final totalParking = allSlots.length;
+    final occupiedParking = allSlots.where((s) => s.status == ParkingSlotStatus.occupied).length;
+    final parkingVal = totalParking > 0 ? '$occupiedParking / $totalParking' : '0 / 0';
+    final parkingBadge = totalParking > 0 ? '${(occupiedParking / totalParking * 100).toInt()}% Filled' : 'No Slots Added';
+
+    final bool hasActiveVenue = widget.mallService.catalog.any((m) => m.isActive) ||
+        (widget.buildingProfile.buildingId.isNotEmpty &&
+            widget.buildingProfile.name.isNotEmpty &&
+            widget.buildingProfile.name != 'Venue');
+
+    final activeMall = widget.mallService.catalog.where((m) => m.isActive).firstOrNull ??
+        (widget.mallService.catalog.isNotEmpty ? widget.mallService.catalog.first : null);
+
+    final String displayBuildingName = hasActiveVenue
+        ? (widget.buildingProfile.name.isNotEmpty && widget.buildingProfile.name != 'Venue'
+            ? widget.buildingProfile.name
+            : (activeMall?.name ?? 'No Venue'))
+        : 'No Venue';
+
+    final int floorsCount = hasActiveVenue
+        ? (activeMall?.floorCount ?? widget.buildingProfile.floors.length)
+        : 0;
+
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -460,8 +484,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             Expanded(
               child: _buildModernMetricCard(
                 title: 'Active Building',
-                value: widget.buildingProfile.name.split(' ').first,
-                badgeText: '${widget.buildingProfile.floors.length} Floors Added',
+                value: displayBuildingName,
+                badgeText: floorsCount > 0 ? '$floorsCount Floors Added' : 'No Floors Added',
                 onTap: () {
                   Navigator.push(
                     context,
@@ -492,6 +516,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                     MaterialPageRoute(
                       builder: (context) => AdminPOIManagerScreen(
                         destinations: _currentDestinations,
+                        mallService: widget.mallService,
                         userCoords: GeodeticCoords(
                           latitude: _liveLat,
                           longitude: _liveLng,
@@ -528,8 +553,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         const SizedBox(height: 12),
         _buildModernMetricCard(
           title: 'Parking Slots',
-          value: '182 / 350',
-          badgeText: '52% Filled',
+          value: parkingVal,
+          badgeText: parkingBadge,
           onTap: () {
             Navigator.push(
               context,
@@ -613,6 +638,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               MaterialPageRoute(
                 builder: (context) => AdminPOIManagerScreen(
                   destinations: _currentDestinations,
+                  mallService: widget.mallService,
                   userCoords: GeodeticCoords(
                     latitude: _liveLat,
                     longitude: _liveLng,
@@ -648,7 +674,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
 
         _buildQuickActionCard(
           title: 'Manage Parking & Spots',
-          badge: 'Basement B1-B3',
+          badge: totalParking > 0 ? '$totalParking Bays Active' : '0 Bays Configured',
           onTap: () {
             Navigator.push(
               context,
@@ -666,19 +692,36 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
 
   // TAB 2: SYSTEM MODULES LIST
   Widget _buildModulesTab() {
+    final bool hasActiveVenue = widget.mallService.catalog.any((m) => m.isActive) ||
+        (widget.buildingProfile.buildingId.isNotEmpty &&
+            widget.buildingProfile.name.isNotEmpty &&
+            widget.buildingProfile.name != 'Venue');
+
+    final activeMall = widget.mallService.catalog.where((m) => m.isActive).firstOrNull ??
+        (widget.mallService.catalog.isNotEmpty ? widget.mallService.catalog.first : null);
+
+    final int floorsCount = hasActiveVenue
+        ? (activeMall?.floorCount ?? widget.buildingProfile.floors.length)
+        : 0;
+
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
         _buildModuleDetailCard(
           title: 'Building Floor & Height Setup',
           subtitle: 'Set floor height levels for accurate indoor navigation',
-          statusText: '${widget.buildingProfile.floors.length} Floors Set',
+          statusText: hasActiveVenue ? '$floorsCount Floors Set' : '0 Floors Set',
           onTap: () {
             Navigator.push(
               context,
               MaterialPageRoute(
                 builder: (context) => BuildingConfigScreen(
                   profile: widget.buildingProfile,
+                  userCoords: GeodeticCoords(
+                    latitude: _liveLat,
+                    longitude: _liveLng,
+                    height: _liveHeight,
+                  ),
                 ),
               ),
             );
@@ -806,7 +849,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                       border: Border.all(color: const Color(0xFFE2E8F0)),
                     ),
                     child: Text(
-                      _isRealHardwareActive ? '100 Hz ACTIVE' : 'SENSORS ACTIVE',
+                      _isRealHardwareActive ? '100 Hz HARDWARE ACTIVE' : 'SENSORS READY',
                       style: GoogleFonts.jetBrainsMono(
                         fontSize: 10,
                         fontWeight: FontWeight.bold,
@@ -820,8 +863,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               _buildTelemetryConsoleLine('GPS.LATITUDE', '${_liveLat.toStringAsFixed(6)}°'),
               _buildTelemetryConsoleLine('GPS.LONGITUDE', '${_liveLng.toStringAsFixed(6)}°'),
               _buildTelemetryConsoleLine('GPS.HEIGHT_WGS84', '${_liveHeight.toStringAsFixed(2)} m'),
-              _buildTelemetryConsoleLine('GPS.ACCURACY_FIX', '±${_liveAccuracy.toStringAsFixed(1)} m'),
-              _buildTelemetryConsoleLine('MAGNETOMETER.HEADING', '${_heading.toStringAsFixed(1)}° (${_getCardinalDir(_heading)})'),
+              _buildTelemetryConsoleLine('GPS.ACCURACY_FIX', _liveAccuracy > 0 ? '±${_liveAccuracy.toStringAsFixed(1)} m' : 'Standby'),
+              _buildTelemetryConsoleLine('MAGNETOMETER.HEADING', _heading > 0 ? '${_heading.toStringAsFixed(1)}° (${_getCardinalDir(_heading)})' : 'Standby'),
               _buildTelemetryConsoleLine('ACCELEROMETER.PITCH', '${_pitch.toStringAsFixed(1)}° (${_tiltDir.name.toUpperCase()})'),
               _buildTelemetryConsoleLine('BAROMETER.RAW_PRESSURE', '${_rawPressure.toStringAsFixed(2)} hPa'),
               _buildTelemetryConsoleLine('BAROMETER.SMOOTHED', '${_smoothedPressure.toStringAsFixed(2)} hPa'),

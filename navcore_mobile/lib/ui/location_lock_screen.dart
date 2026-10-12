@@ -48,16 +48,16 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
     // Step 1: Request Location
     final report = await widget.sensorService.requestAllPermissions();
     if (report.hasLocationPermission) {
-      final pos = await widget.sensorService.getCurrentPosition();
+      final pos = await widget.sensorService.getLastKnownOrCurrentPosition();
       if (pos != null) {
         _acquiredCoords = pos;
       }
     }
 
     _acquiredCoords ??= const GeodeticCoords(
-      latitude: 6.927079,
-      longitude: 79.845612,
-      height: 45.0,
+      latitude: 0.0,
+      longitude: 0.0,
+      height: 0.0,
     );
 
     // Step 2: Detect Nearest Mall

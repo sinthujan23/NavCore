@@ -31,16 +31,21 @@ class _AdminMarkerConfigModalState extends State<AdminMarkerConfigModal> {
   @override
   void initState() {
     super.initState();
-    _markerIdController = TextEditingController(text: 'REF-ENTRANCE-MARKER-01');
-    _nameController = TextEditingController(text: 'North Atrium Entrance');
+    _markerIdController = TextEditingController();
+    _nameController = TextEditingController();
+    final hasLat = widget.initialCoords != null && widget.initialCoords!.latitude != 0.0;
+    final hasLng = widget.initialCoords != null && widget.initialCoords!.longitude != 0.0;
+    final rawAlt = widget.initialCoords?.height ?? 0.0;
+    final normalizedAlt = (rawAlt < 0.0 || rawAlt > 4000.0) ? 0.0 : rawAlt;
+
     _latController = TextEditingController(
-      text: widget.initialCoords?.latitude.toStringAsFixed(6) ?? '6.927079',
+      text: hasLat ? widget.initialCoords!.latitude.toStringAsFixed(6) : '',
     );
     _lngController = TextEditingController(
-      text: widget.initialCoords?.longitude.toStringAsFixed(6) ?? '79.845612',
+      text: hasLng ? widget.initialCoords!.longitude.toStringAsFixed(6) : '',
     );
     _heightController = TextEditingController(
-      text: widget.initialCoords?.height.toStringAsFixed(1) ?? '45.0',
+      text: hasLat ? normalizedAlt.toStringAsFixed(1) : '0.0',
     );
   }
 
@@ -101,15 +106,15 @@ class _AdminMarkerConfigModalState extends State<AdminMarkerConfigModal> {
               ),
               const SizedBox(height: 16),
               
-              _buildTextField('Marker ID Code', _markerIdController),
+              _buildTextField('Marker ID Code', _markerIdController, hintText: 'e.g. REF-01'),
               const SizedBox(height: 10),
-              _buildTextField('Marker Name / Physical Location', _nameController),
+              _buildTextField('Marker Name / Physical Location', _nameController, hintText: 'e.g. Main Entrance Gate'),
               const SizedBox(height: 10),
               Row(
                 children: [
-                  Expanded(child: _buildTextField('Latitude (°N)', _latController)),
+                  Expanded(child: _buildTextField('Latitude (°N)', _latController, hintText: '0.000000')),
                   const SizedBox(width: 10),
-                  Expanded(child: _buildTextField('Longitude (°E)', _lngController)),
+                  Expanded(child: _buildTextField('Longitude (°E)', _lngController, hintText: '0.000000')),
                 ],
               ),
               const SizedBox(height: 10),
@@ -119,6 +124,7 @@ class _AdminMarkerConfigModalState extends State<AdminMarkerConfigModal> {
                     child: _buildTextField(
                       'Base Height (m WGS84)',
                       _heightController,
+                      hintText: '0.0',
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -170,8 +176,17 @@ class _AdminMarkerConfigModalState extends State<AdminMarkerConfigModal> {
                               child: Text('Floor ${idx + 1}', style: const TextStyle(color: Color(0xFF0F172A))),
                             );
                           }),
-                          onChanged: (val) =>
-                              setState(() => _selectedFloor = val ?? 1),
+                          onChanged: (val) {
+                            if (val != null) {
+                              setState(() {
+                                _selectedFloor = val;
+                                final base = (widget.initialCoords != null && widget.initialCoords!.height > 0.0 && widget.initialCoords!.height < 4000.0)
+                                    ? widget.initialCoords!.height
+                                    : 0.0;
+                                _heightController.text = (base + (val - 1) * 4.5).toStringAsFixed(1);
+                              });
+                            }
+                          },
                         ),
                       ],
                     ),
@@ -192,19 +207,19 @@ class _AdminMarkerConfigModalState extends State<AdminMarkerConfigModal> {
                 onPressed: () {
                   if (_formKey.currentState!.validate()) {
                     final marker = ReferenceMarker(
-                      markerId: _markerIdController.text,
-                      name: _nameController.text,
+                      markerId: _markerIdController.text.trim(),
+                      name: _nameController.text.trim(),
                       floorNumber: _selectedFloor,
                       position: GeodeticCoords(
                         latitude:
-                            double.tryParse(_latController.text) ?? 6.927079,
+                            double.tryParse(_latController.text) ?? widget.initialCoords?.latitude ?? 0.0,
                         longitude:
-                            double.tryParse(_lngController.text) ?? 79.845612,
-                        height: double.tryParse(_heightController.text) ?? 45.0,
+                            double.tryParse(_lngController.text) ?? widget.initialCoords?.longitude ?? 0.0,
+                        height: double.tryParse(_heightController.text) ?? widget.initialCoords?.height ?? 0.0,
                       ),
                       physicalWidthMeters: _physicalWidth,
                       physicalHeightMeters: _physicalWidth,
-                      qrCodeData: 'NexNav:${_markerIdController.text}',
+                      qrCodeData: 'NexNav:${_markerIdController.text.trim()}',
                     );
                     widget.onSaveMarker(marker);
                     Navigator.pop(context);
@@ -232,7 +247,7 @@ class _AdminMarkerConfigModalState extends State<AdminMarkerConfigModal> {
     );
   }
 
-  Widget _buildTextField(String label, TextEditingController controller) {
+  Widget _buildTextField(String label, TextEditingController controller, {String? hintText}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -253,6 +268,11 @@ class _AdminMarkerConfigModalState extends State<AdminMarkerConfigModal> {
             fontWeight: FontWeight.w600,
           ),
           decoration: InputDecoration(
+            hintText: hintText,
+            hintStyle: GoogleFonts.plusJakartaSans(
+              color: const Color(0xFF94A3B8),
+              fontSize: 13,
+            ),
             contentPadding: const EdgeInsets.symmetric(
               horizontal: 12,
               vertical: 10,

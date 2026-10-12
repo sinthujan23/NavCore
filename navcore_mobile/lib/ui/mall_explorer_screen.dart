@@ -196,7 +196,13 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
       });
     }
 
-    final cities = ['ALL', 'COLOMBO', 'KANDY'];
+    final dynamicCities = _malls
+        .map((m) => m.city.toUpperCase().trim())
+        .where((c) => c.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+    final cities = ['ALL', ...dynamicCities];
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),

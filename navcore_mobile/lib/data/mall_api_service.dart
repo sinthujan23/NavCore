@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../engine/floor_tracker.dart';
+import 'api_service.dart';
 import 'destinations.dart';
 import 'floor_height_model.dart';
 
@@ -57,85 +58,18 @@ class RestMallBackendApi implements MallBackendApi {
   final Map<String, List<FloorHeightData>> _localMockHeights = {};
 
   RestMallBackendApi({
-    this.baseUrl = 'http://localhost:8080/api',
-    this.useMockFallback = true,
-  }) {
-    _initDefaultMockHeights();
-  }
-
-  void _initDefaultMockHeights() {
-    const mallId = 'mall-one-galle-face';
-    const nowIso = '2026-10-05T08:00:00.000Z';
-    _localMockHeights[mallId] = [
-      const FloorHeightData(
-        mallId: mallId,
-        floorNo: -1,
-        heightToNextM: 15.0,
-        baseAltitudeM: 0.0,
-        source: 'default',
-        confidence: 0.5,
-        isLocked: false,
-        updatedAt: nowIso,
-      ),
-      const FloorHeightData(
-        mallId: mallId,
-        floorNo: 1,
-        heightToNextM: 15.0,
-        baseAltitudeM: 15.0,
-        source: 'default',
-        confidence: 0.5,
-        isLocked: false,
-        updatedAt: nowIso,
-      ),
-      const FloorHeightData(
-        mallId: mallId,
-        floorNo: 2,
-        heightToNextM: 15.0,
-        baseAltitudeM: 30.0,
-        source: 'default',
-        confidence: 0.5,
-        isLocked: false,
-        updatedAt: nowIso,
-      ),
-      const FloorHeightData(
-        mallId: mallId,
-        floorNo: 3,
-        heightToNextM: 15.0,
-        baseAltitudeM: 45.0,
-        source: 'default',
-        confidence: 0.5,
-        isLocked: false,
-        updatedAt: nowIso,
-      ),
-      const FloorHeightData(
-        mallId: mallId,
-        floorNo: 4,
-        heightToNextM: 0.0,
-        baseAltitudeM: 60.0,
-        source: 'default',
-        confidence: 0.5,
-        isLocked: false,
-        updatedAt: nowIso,
-      ),
-    ];
-  }
+    String? baseUrl,
+    this.useMockFallback = false,
+  }) : baseUrl = baseUrl ?? ApiService.defaultBaseUrl;
 
   @override
   Future<BuildingElevationProfile> fetchBuildingProfile(
     String buildingId,
   ) async {
-    if (useMockFallback) {
-      await Future.delayed(const Duration(milliseconds: 50));
-      return defaultBuildingProfile;
+    final pkg = await ApiService.instance.fetchMallPackage(buildingId);
+    if (pkg != null) {
+      return pkg.profile;
     }
-    try {
-      final response = await http.get(
-        Uri.parse('$baseUrl/malls/$buildingId/profile'),
-      );
-      if (response.statusCode == 200) {
-        // Return parsed building profile
-      }
-    } catch (_) {}
     return defaultBuildingProfile;
   }
 
@@ -143,79 +77,15 @@ class RestMallBackendApi implements MallBackendApi {
   Future<List<DestinationPOI>> fetchShopsForFloor(
     MallApiShopFilter filter,
   ) async {
-    if (useMockFallback) {
-      await Future.delayed(const Duration(milliseconds: 50));
-      return mockDestinations
-          .where((poi) => poi.floorNumber == filter.floorNumber)
-          .toList();
-    }
-    return mockDestinations
-        .where((poi) => poi.floorNumber == filter.floorNumber)
-        .toList();
+    final live = await ApiService.instance.fetchDestinations(
+      mallId: filter.buildingId,
+      floorNumber: filter.floorNumber,
+    );
+    return live;
   }
 
   List<FloorHeightData> _getOrCreateDefaultHeights(String mallId) {
-    if (_localMockHeights.containsKey(mallId) &&
-        _localMockHeights[mallId]!.isNotEmpty) {
-      return _localMockHeights[mallId]!;
-    }
-
-    final nowIso = DateTime.now().toIso8601String();
-    final defaultList = [
-      FloorHeightData(
-        mallId: mallId,
-        floorNo: -1,
-        heightToNextM: 15.0,
-        baseAltitudeM: 0.0,
-        source: 'default',
-        confidence: 0.5,
-        isLocked: false,
-        updatedAt: nowIso,
-      ),
-      FloorHeightData(
-        mallId: mallId,
-        floorNo: 1,
-        heightToNextM: 15.0,
-        baseAltitudeM: 15.0,
-        source: 'default',
-        confidence: 0.5,
-        isLocked: false,
-        updatedAt: nowIso,
-      ),
-      FloorHeightData(
-        mallId: mallId,
-        floorNo: 2,
-        heightToNextM: 15.0,
-        baseAltitudeM: 30.0,
-        source: 'default',
-        confidence: 0.5,
-        isLocked: false,
-        updatedAt: nowIso,
-      ),
-      FloorHeightData(
-        mallId: mallId,
-        floorNo: 3,
-        heightToNextM: 15.0,
-        baseAltitudeM: 45.0,
-        source: 'default',
-        confidence: 0.5,
-        isLocked: false,
-        updatedAt: nowIso,
-      ),
-      FloorHeightData(
-        mallId: mallId,
-        floorNo: 4,
-        heightToNextM: 0.0,
-        baseAltitudeM: 60.0,
-        source: 'default',
-        confidence: 0.5,
-        isLocked: false,
-        updatedAt: nowIso,
-      ),
-    ];
-
-    _localMockHeights[mallId] = defaultList;
-    return defaultList;
+    return _localMockHeights[mallId] ?? <FloorHeightData>[];
   }
 
   @override
@@ -251,8 +121,8 @@ class RestMallBackendApi implements MallBackendApi {
             Uri.parse('$baseUrl/malls/$mallId/floor-heights/calculate'),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({
-              'latitude': lat ?? 6.927079,
-              'longitude': lon ?? 79.845612,
+              'latitude': lat ?? 0.0,
+              'longitude': lon ?? 0.0,
             }),
           )
           .timeout(const Duration(seconds: 4));

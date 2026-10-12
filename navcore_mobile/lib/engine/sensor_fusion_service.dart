@@ -106,9 +106,9 @@ class SensorFusionService {
     GeodeticCoords effectivePosition =
         gpsCoords ??
         const GeodeticCoords(
-          latitude: 6.927079,
-          longitude: 79.845612,
-          height: 45.0,
+          latitude: 0.0,
+          longitude: 0.0,
+          height: 0.0,
         );
     if (_lastPnPPosition != null && _lastPnPTime != null) {
       final secondsSincePnP = DateTime.now()

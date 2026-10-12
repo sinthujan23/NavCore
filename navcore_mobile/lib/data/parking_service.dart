@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../engine/ecef_engine.dart';
 import '../engine/bearing_engine.dart';
+import 'api_service.dart';
 import 'destinations.dart';
 
 enum ParkingSlotStatus { free, occupied, reserved }
@@ -172,9 +173,9 @@ class ParkingService extends ChangeNotifier {
   final Map<String, List<ParkingSlot>> _floorSlots = {};
 
   // Auth state tracking
-  String _currentUserId = 'user-001';
-  String _authToken = 'jwt-mock-token-user-001';
-  bool _isAuthenticated = true;
+  String _currentUserId = '';
+  String _authToken = '';
+  bool _isAuthenticated = false;
 
   // Per-user record repository store (simulating backend DB records: userId -> MyVehicleLocation)
   final Map<String, MyVehicleLocation> _userVehicleRecords = {};
@@ -182,12 +183,10 @@ class ParkingService extends ChangeNotifier {
   final StreamController<Map<String, List<ParkingSlot>>> _slotStreamController =
       StreamController<Map<String, List<ParkingSlot>>>.broadcast();
 
-  bool _isLiveStreamActive = true;
+  bool _isLiveStreamActive = false;
 
   ParkingService._internal() {
-    _initializeMockParkingLayouts();
     _loadVehicleFromStorage();
-    _startLiveIoTSensorStream();
   }
 
   String get currentUserId => _currentUserId;
@@ -296,43 +295,22 @@ class ParkingService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Initialize Parking Layout Grids for B2, B1, and Ground Floor
-  void _initializeMockParkingLayouts() {
-    const baseLat = 6.927079;
-    const baseLon = 79.845612;
-
-    // Floor B2 (Basement 2 - Height 35.0m)
-    _floorSlots['B2'] = _generateGridSlots(
-      floorId: 'B2',
-      baseHeight: 35.0,
-      rows: 6,
-      cols: 4,
-      sections: ['A', 'B'],
-      baseLat: baseLat - 0.0003,
-      baseLon: baseLon - 0.0003,
-    );
-
-    // Floor B1 (Basement 1 - Height 40.0m)
-    _floorSlots['B1'] = _generateGridSlots(
-      floorId: 'B1',
-      baseHeight: 40.0,
-      rows: 6,
-      cols: 4,
-      sections: ['A', 'B'],
-      baseLat: baseLat - 0.0001,
-      baseLon: baseLon - 0.0001,
-    );
-
-    // Floor GF (Ground Floor - Height 45.0m)
-    _floorSlots['GF'] = _generateGridSlots(
-      floorId: 'GF',
-      baseHeight: 45.0,
-      rows: 3,
-      cols: 4,
-      sections: ['P'],
-      baseLat: baseLat + 0.0001,
-      baseLon: baseLon + 0.0001,
-    );
+  /// Load parking slots dynamically from backend API for a given venue
+  Future<void> loadSlotsForMall(String mallId) async {
+    try {
+      final slots = await ApiService.instance.fetchParkingSlots(mallId);
+      _floorSlots.clear();
+      for (final slot in slots) {
+        if (!_floorSlots.containsKey(slot.floorId)) {
+          _floorSlots[slot.floorId] = [];
+        }
+        _floorSlots[slot.floorId]!.add(slot);
+      }
+      _slotStreamController.add(_floorSlots);
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error loading parking slots for $mallId: $e');
+    }
   }
 
   List<ParkingSlot> _generateGridSlots({
@@ -464,6 +442,11 @@ class ParkingService extends ChangeNotifier {
   /// Toggle Live WebSocket / MQTT Stream simulation
   void toggleLiveStream(bool active) {
     _isLiveStreamActive = active;
+    if (active) {
+      _startLiveIoTSensorStream();
+    } else {
+      _sensorSimulationTimer?.cancel();
+    }
     notifyListeners();
   }
 
@@ -475,6 +458,7 @@ class ParkingService extends ChangeNotifier {
 
       final random = Random();
       final floors = _floorSlots.keys.toList();
+      if (floors.isEmpty) return;
       final targetFloor = floors[random.nextInt(floors.length)];
       final slots = _floorSlots[targetFloor];
 
@@ -571,6 +555,7 @@ class ParkingService extends ChangeNotifier {
       '$_vehicleStorageKeyPrefix${vehicleRecord.userId}',
       jsonEncode(updatedRecord.toJson()),
     );
+    ApiService.instance.saveVehicleLocation(updatedRecord);
     notifyListeners();
   }
 
@@ -651,7 +636,7 @@ class ParkingService extends ChangeNotifier {
     final slots = fetchFloorMap(floorId);
     if (slots.isEmpty) return null;
 
-    final effectiveUser = getEffectiveUserCoords(userCoords, entranceAnchor);
+    final effectiveUser = userCoords;
 
     ParkingSlot? nearest;
     double minDistance = double.infinity;
@@ -682,10 +667,7 @@ class ParkingService extends ChangeNotifier {
     final activeVehicle = fetchMyVehicleLocation(_currentUserId);
     if (activeVehicle == null) return false;
 
-    final effectiveUser = getEffectiveUserCoords(
-      currentUserCoords,
-      entranceAnchor,
-    );
+    final effectiveUser = currentUserCoords;
 
     final dist = calculateAccurate3DDistance(
       effectiveUser,

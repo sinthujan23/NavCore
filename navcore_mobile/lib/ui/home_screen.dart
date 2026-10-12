@@ -21,6 +21,7 @@ class HomeScreen extends StatefulWidget {
   final ValueChanged<DestinationPOI> onSelectDestination;
   final String userEmail;
   final VoidCallback? onLogout;
+  final Future<void> Function()? onRefresh;
 
   const HomeScreen({
     super.key,
@@ -33,6 +34,7 @@ class HomeScreen extends StatefulWidget {
     required this.onSelectDestination,
     this.userEmail = '',
     this.onLogout,
+    this.onRefresh,
   });
 
   @override
@@ -450,12 +452,28 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                            decoration: BoxDecoration(
+                              color: isMyFloor ? const Color(0xFFDCFCE7) : const Color(0xFFF1F5F9),
+                              borderRadius: BorderRadius.circular(5),
+                            ),
+                            child: Text(
+                              isMyFloor ? 'Floor ${shop.floorNumber}' : 'Floor ${shop.floorNumber}',
+                              style: GoogleFonts.plusJakartaSans(
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.w700,
+                                color: isMyFloor ? const Color(0xFF15803D) : const Color(0xFF475569),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
                           const Icon(
                             LucideIcons.navigation,
                             size: 11,
                             color: Color(0xFF2563EB),
                           ),
-                          const SizedBox(width: 4),
+                          const SizedBox(width: 3),
                           Text(
                             '${dist.toStringAsFixed(0)}m away',
                             style: GoogleFonts.plusJakartaSans(
@@ -503,7 +521,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     final activeMallAnchor = widget.destinations.isNotEmpty
         ? widget.destinations.first.location
-        : entranceAnchor;
+        : widget.userCoords;
     final effectiveCoords = getEffectiveUserCoords(
       widget.userCoords,
       activeMallAnchor,
@@ -547,8 +565,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
       body: SafeArea(
-        child: CustomScrollView(
-          slivers: [
+        child: RefreshIndicator(
+          onRefresh: widget.onRefresh ?? () async {},
+          child: CustomScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: [
             // Top App Bar & Live Location Display Bar
             SliverToBoxAdapter(
               child: Padding(
@@ -826,6 +847,58 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                 height: 1.2,
                               ),
                             ),
+                            const SizedBox(height: 6),
+                            Builder(
+                              builder: (context) {
+                                final distM = haversineDistance(
+                                  widget.userCoords,
+                                  activeMallAnchor,
+                                );
+                                final isInside = distM < 80.0;
+                                return Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 7,
+                                        vertical: 3,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: isInside
+                                            ? const Color(0xFF10B981).withValues(alpha: 0.25)
+                                            : const Color(0xFF3B82F6).withValues(alpha: 0.25),
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(
+                                          color: isInside
+                                              ? const Color(0xFF34D399).withValues(alpha: 0.5)
+                                              : const Color(0xFF60A5FA).withValues(alpha: 0.5),
+                                        ),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            isInside ? LucideIcons.mapPin : LucideIcons.navigation,
+                                            size: 11,
+                                            color: isInside ? const Color(0xFF34D399) : const Color(0xFF93C5FD),
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            isInside
+                                                ? 'Inside Venue • Floor ${currentFloor.name}'
+                                                : '${distM < 1000 ? "${distM.toInt()}m" : "${(distM / 1000).toStringAsFixed(1)}km"} away • Floor ${currentFloor.name}',
+                                            style: GoogleFonts.plusJakartaSans(
+                                              fontSize: 10.5,
+                                              fontWeight: FontWeight.w700,
+                                              color: Colors.white,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              },
+                            ),
                             const SizedBox(height: 16),
                             Row(
                               children: [
@@ -1065,8 +1138,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ],
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildParkedVehicleHomeCard(MyVehicleLocation vehicle) {
     return Container(

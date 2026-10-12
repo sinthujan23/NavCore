@@ -6,14 +6,10 @@ import 'widgets/nexnav_logo_widget.dart';
 
 class WelcomeScreen extends StatefulWidget {
   final VoidCallback onLoginPressed;
-  final VoidCallback onGuestPressed;
-  final VoidCallback onAdminPortalPressed;
 
   const WelcomeScreen({
     super.key,
     required this.onLoginPressed,
-    required this.onGuestPressed,
-    required this.onAdminPortalPressed,
   });
 
   @override
@@ -193,41 +189,6 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                           ),
                           const SizedBox(width: 8),
                           const Icon(LucideIcons.arrowRight, size: 18),
-                        ],
-                      ),
-                    ),
-
-                    const SizedBox(height: 12),
-
-                    OutlinedButton(
-                      onPressed: widget.onGuestPressed,
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFF334155),
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        side: const BorderSide(
-                          color: Color(0xFFCBD5E1),
-                          width: 1.2,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(
-                            LucideIcons.navigation,
-                            size: 16,
-                            color: Color(0xFF64748B),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Continue as Guest Visitor',
-                            style: GoogleFonts.plusJakartaSans(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
                         ],
                       ),
                     ),

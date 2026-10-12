@@ -30,4 +30,6 @@ certs/
 *.csr
 *.certSigningRequest
 *.mobileprovision
-
+# Temporary files
+temp/
+**/temp/

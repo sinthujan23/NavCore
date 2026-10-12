@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -14,6 +15,7 @@ import 'engine/ar_sensor_engine.dart';
 import 'data/destinations.dart';
 import 'data/floor_height_model.dart';
 import 'data/mall_database_service.dart';
+import 'data/api_service.dart';
 
 import 'ui/welcome_screen.dart';
 import 'ui/login_screen.dart';
@@ -79,7 +81,11 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
   int _activeFloorNumber = 1;
 
   double? _userSelectedFloorHeight;
-  GeodeticCoords _userCoords = entranceAnchor;
+  GeodeticCoords _userCoords = const GeodeticCoords(
+    latitude: 0.0,
+    longitude: 0.0,
+    height: 0.0,
+  );
   double _compassHeading = 0.0;
   double _phonePitchDegrees = 0.0;
   PitchTiltDirection _tiltDirection = PitchTiltDirection.level;
@@ -87,19 +93,8 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
   DestinationPOI? _arTargetDestination;
 
   BuildingElevationProfile _buildingProfile = defaultBuildingProfile;
-  List<DestinationPOI> _destinations = mockDestinations;
-  List<EntranceMarkerNode> _entranceMarkers = [
-    const EntranceMarkerNode(
-      markerId: 'mrk-ent-01',
-      buildingId: 'mall-one-galle-face',
-      name: 'Main Entrance Pillar #01',
-      latitude: 6.927079,
-      longitude: 79.845612,
-      baseHeight: 45.0,
-      physicalWidthMeters: 0.20,
-      physicalHeightMeters: 0.20,
-    ),
-  ];
+  List<DestinationPOI> _destinations = <DestinationPOI>[];
+  List<EntranceMarkerNode> _entranceMarkers = <EntranceMarkerNode>[];
 
   late final KalmanPositionFilter _kalmanFilter;
   Timer? _imuTimer;
@@ -109,16 +104,17 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
   @override
   void initState() {
     super.initState();
-    _kalmanFilter = KalmanPositionFilter(entranceAnchor);
+    _kalmanFilter = KalmanPositionFilter(_userCoords);
     _initializeRealHardware();
+    _loadInitialBackendData();
   }
 
   Future<void> _initializeRealHardware() async {
     // 1. Request OS Permissions for Location & Camera
     final report = await _sensorService.requestAllPermissions();
 
-    // 2. Fetch current real GPS position
-    final realPos = await _sensorService.getCurrentPosition();
+    // 2. Fetch current real GPS position (cached or live)
+    final realPos = await _sensorService.getLastKnownOrCurrentPosition();
     if (realPos != null) {
       setState(() {
         _userCoords = realPos;
@@ -222,6 +218,55 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
     }
   }
 
+  Future<void> _loadInitialBackendData() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      // Restore session if Remember Me / Auto-login is active
+      final bool autoLogin =
+          prefs.getBool('NexNav_auto_login_enabled') ?? false;
+      final String? savedEmail = prefs.getString('NexNav_remembered_email');
+      final String? savedRole = prefs.getString('NexNav_remembered_role');
+
+      if (autoLogin &&
+          savedEmail != null &&
+          savedEmail.isNotEmpty &&
+          savedRole != null) {
+        final restoredRole = savedRole == 'admin'
+            ? UserRole.admin
+            : UserRole.user;
+        if (mounted) {
+          setState(() {
+            _currentRole = restoredRole;
+            _userEmail = savedEmail;
+            _authScreenState = (restoredRole == UserRole.admin)
+                ? AuthScreenState.adminDashboard
+                : AuthScreenState.setup;
+          });
+        }
+      }
+
+      final malls = await ApiService.instance.fetchMalls();
+      if (malls.isNotEmpty) {
+        final savedActiveId = prefs.getString('NexNav_active_mall_id');
+        final activeMall = malls.firstWhere(
+          (m) => m.id == savedActiveId,
+          orElse: () => malls.first,
+        );
+        await _loadActiveMallPackage(activeMall.id);
+      } else {
+        final liveDestinations = await ApiService.instance.fetchDestinations();
+        if (mounted && liveDestinations.isNotEmpty) {
+          setState(() {
+            _destinations = liveDestinations;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('[Main] Error loading initial backend data: $e');
+    }
+  }
+
   Future<void> _autoLoadNearestMallMap() async {
     final pkg = await _mallDatabaseService.autoDownloadAndActivateNearestMall(
       _userCoords,
@@ -309,18 +354,17 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
 
   void _triggerPnPScan() {
     _userSelectedFloorHeight = null;
-    final marker = _entranceMarkers.isNotEmpty
-        ? _entranceMarkers.first
-        : const EntranceMarkerNode(
-            markerId: 'mrk-ent-01',
-            buildingId: 'mall-one-galle-face',
-            name: 'Main Entrance Pillar #01',
-            latitude: 6.927079,
-            longitude: 79.845612,
-            baseHeight: 45.0,
-            physicalWidthMeters: 0.20,
-            physicalHeightMeters: 0.20,
-          );
+    if (_entranceMarkers.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No entrance reference markers found for this venue.'),
+          backgroundColor: Color(0xFF64748B),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    final marker = _entranceMarkers.first;
     final pnp = calibratePnP(marker, 240, 240);
     setState(() {
       _pnpResult = pnp;
@@ -337,13 +381,24 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
     );
   }
 
-  void _handleAddPoi(DestinationPOI newPoi) {
+  void _handleAddPoi(DestinationPOI newPoi) async {
     setState(() {
       _destinations = [newPoi, ..._destinations];
     });
+    final targetMall = (newPoi.mallId != null && newPoi.mallId!.isNotEmpty)
+        ? newPoi.mallId!
+        : (_buildingProfile.buildingId.isNotEmpty
+            ? _buildingProfile.buildingId
+            : (_mallDatabaseService.catalog.isNotEmpty
+                ? _mallDatabaseService.catalog.first.id
+                : 'mall-default'));
+    await ApiService.instance.createDestination(newPoi, mallId: targetMall);
+    if (_buildingProfile.buildingId.isNotEmpty) {
+      await _loadActiveMallPackage(_buildingProfile.buildingId);
+    }
   }
 
-  void _handleUpdatePoi(DestinationPOI updatedPoi) {
+  void _handleUpdatePoi(DestinationPOI updatedPoi) async {
     setState(() {
       final index = _destinations.indexWhere((p) => p.id == updatedPoi.id);
       if (index != -1) {
@@ -352,12 +407,20 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
         _destinations = newList;
       }
     });
+    await ApiService.instance.updateDestination(updatedPoi);
+    if (_buildingProfile.buildingId.isNotEmpty) {
+      await _loadActiveMallPackage(_buildingProfile.buildingId);
+    }
   }
 
-  void _handleDeletePoi(String poiId) {
+  void _handleDeletePoi(String poiId) async {
     setState(() {
       _destinations = _destinations.where((p) => p.id != poiId).toList();
     });
+    await ApiService.instance.deleteDestination(poiId);
+    if (_buildingProfile.buildingId.isNotEmpty) {
+      await _loadActiveMallPackage(_buildingProfile.buildingId);
+    }
   }
 
   void _handleFloorHeightsUpdated(List<FloorHeightData> heights) {
@@ -366,8 +429,12 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
       String floorName = h.floorNo < 0
           ? 'Basement B${h.floorNo.abs()}'
           : (h.floorNo == 1 ? 'Ground Floor F1' : 'Upper Floor F${h.floorNo}');
-      final String floorId = h.floorNo < 0 ? 'B${h.floorNo.abs()}' : 'F${h.floorNo}';
-      final int stores = _destinations.where((d) => d.floorNumber == h.floorNo).length;
+      final String floorId = h.floorNo < 0
+          ? 'B${h.floorNo.abs()}'
+          : 'F${h.floorNo}';
+      final int stores = _destinations
+          .where((d) => d.floorNumber == h.floorNo)
+          .length;
       return FloorLevelConfig(
         floorId: floorId,
         floorNumber: h.floorNo,
@@ -380,7 +447,9 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
       );
     }).toList();
 
-    updatedFloors.sort((a, b) => a.absoluteHeightMeters.compareTo(b.absoluteHeightMeters));
+    updatedFloors.sort(
+      (a, b) => a.absoluteHeightMeters.compareTo(b.absoluteHeightMeters),
+    );
 
     setState(() {
       _buildingProfile = BuildingElevationProfile(
@@ -453,14 +522,20 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
               ),
               elevation: 0,
             ),
-            onPressed: () {
+            onPressed: () async {
               Navigator.pop(context);
-              setState(() {
-                _currentRole = UserRole.guest;
-                _userEmail = '';
-                _requestedLoginRole = UserRole.user;
-                _authScreenState = AuthScreenState.login;
-              });
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setBool('NexNav_auto_login_enabled', false);
+              await ApiService.instance.logout();
+              if (mounted) {
+                setState(() {
+                  _currentRole = UserRole.guest;
+                  _userEmail = '';
+                  _requestedLoginRole = UserRole.user;
+                  _authScreenState = AuthScreenState.login;
+                });
+              }
+              // ignore: use_build_context_synchronously
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
                   content: Row(
@@ -505,20 +580,6 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
         onLoginPressed: () {
           setState(() {
             _requestedLoginRole = UserRole.user;
-            _authScreenState = AuthScreenState.login;
-          });
-        },
-        onGuestPressed: () {
-          setState(() {
-            _currentRole = UserRole.guest;
-            _authScreenState = _isSetupComplete
-                ? AuthScreenState.mainNav
-                : AuthScreenState.setup;
-          });
-        },
-        onAdminPortalPressed: () {
-          setState(() {
-            _requestedLoginRole = UserRole.admin;
             _authScreenState = AuthScreenState.login;
           });
         },
@@ -570,13 +631,18 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
                 : AuthScreenState.setup;
           });
         },
-        onLogout: () {
-          setState(() {
-            _currentRole = UserRole.guest;
-            _userEmail = '';
-            _requestedLoginRole = UserRole.admin;
-            _authScreenState = AuthScreenState.login;
-          });
+        onLogout: () async {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setBool('NexNav_auto_login_enabled', false);
+          await ApiService.instance.logout();
+          if (mounted) {
+            setState(() {
+              _currentRole = UserRole.guest;
+              _userEmail = '';
+              _requestedLoginRole = UserRole.admin;
+              _authScreenState = AuthScreenState.login;
+            });
+          }
         },
         onSelectActiveMall: (mallId) async {
           await _loadActiveMallPackage(mallId);
@@ -629,6 +695,7 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
         },
         userEmail: _userEmail,
         onLogout: _showLogoutConfirmationDialog,
+        onRefresh: _loadInitialBackendData,
       ),
       ARViewportScreen(
         isActive: _currentIndex == 1,

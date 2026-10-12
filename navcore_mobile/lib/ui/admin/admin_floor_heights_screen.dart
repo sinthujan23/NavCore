@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import '../../data/api_service.dart';
 import '../../data/floor_height_model.dart';
 import '../../data/mall_api_service.dart';
 
@@ -12,7 +13,7 @@ class AdminFloorHeightsScreen extends StatefulWidget {
 
   const AdminFloorHeightsScreen({
     super.key,
-    this.mallId = 'mall-one-galle-face',
+    this.mallId = '',
     required this.apiService,
     this.onHeightsUpdated,
     this.onMallSelected,
@@ -29,33 +30,41 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
   bool _isCalculating = false;
   String? _statusMessage;
 
-  final Map<String, String> _knownMallNames = {
-    'mall-one-galle-face': 'One Galle Face Mall',
-    'mall-colombo-city-centre': 'Colombo City Centre (CCC)',
-    'mall-havelock-city': 'Havelock City Mall',
-    'mall-kandy-city-centre': 'Kandy City Centre (KCC)',
-    'mall-marino-mall': 'Marino Mall',
-  };
-
+  final Map<String, String> _knownMallNames = {};
   late List<String> _availableMallIds;
 
   @override
   void initState() {
     super.initState();
     _selectedMallId = widget.mallId;
-    _availableMallIds = [
-      'mall-one-galle-face',
-      'mall-colombo-city-centre',
-      'mall-havelock-city',
-      'mall-kandy-city-centre',
-      'mall-marino-mall',
-    ];
+    _availableMallIds = widget.mallId.isNotEmpty ? [widget.mallId] : [];
+    _initMalls();
+  }
 
-    if (!_availableMallIds.contains(widget.mallId)) {
-      _availableMallIds.insert(0, widget.mallId);
+  Future<void> _initMalls() async {
+    try {
+      final malls = await ApiService.instance.fetchMalls();
+      if (mounted) {
+        setState(() {
+          for (final m in malls) {
+            _knownMallNames[m.id] = m.name;
+            if (!_availableMallIds.contains(m.id)) {
+              _availableMallIds.add(m.id);
+            }
+          }
+          if (_selectedMallId.isEmpty && _availableMallIds.isNotEmpty) {
+            _selectedMallId = _availableMallIds.first;
+          }
+        });
+      }
+    } catch (_) {}
+    if (_selectedMallId.isNotEmpty) {
+      _loadFloorHeights();
+    } else {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
-
-    _loadFloorHeights();
   }
 
   void _onMallChanged(String? newMallId) {
@@ -368,33 +377,44 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                                   border: Border.all(color: const Color(0xFFCBD5E1)),
                                 ),
                                 child: DropdownButtonHideUnderline(
-                                  child: DropdownButton<String>(
-                                    value: _selectedMallId,
-                                    isExpanded: true,
-                                    icon: const Icon(LucideIcons.chevronDown, size: 18, color: Color(0xFF0D9488)),
-                                    style: GoogleFonts.outfit(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.bold,
-                                      color: const Color(0xFF0F172A),
-                                    ),
-                                    dropdownColor: Colors.white,
-                                    items: _availableMallIds.map((mallId) {
-                                      final displayName = _knownMallNames[mallId] ?? mallId;
-                                      return DropdownMenuItem<String>(
-                                        value: mallId,
-                                        child: Text(
-                                          displayName,
-                                          overflow: TextOverflow.ellipsis,
+                                  child: _availableMallIds.isEmpty
+                                      ? Text(
+                                          'No venues available',
+                                          style: GoogleFonts.outfit(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w600,
+                                            color: const Color(0xFF94A3B8),
+                                          ),
+                                        )
+                                      : DropdownButton<String>(
+                                          value: _availableMallIds.contains(_selectedMallId)
+                                              ? _selectedMallId
+                                              : _availableMallIds.first,
+                                          isExpanded: true,
+                                          icon: const Icon(LucideIcons.chevronDown, size: 18, color: Color(0xFF0D9488)),
                                           style: GoogleFonts.outfit(
                                             fontSize: 14,
-                                            fontWeight: FontWeight.w600,
+                                            fontWeight: FontWeight.bold,
                                             color: const Color(0xFF0F172A),
                                           ),
+                                          dropdownColor: Colors.white,
+                                          items: _availableMallIds.map((mallId) {
+                                            final displayName = _knownMallNames[mallId] ?? mallId;
+                                            return DropdownMenuItem<String>(
+                                              value: mallId,
+                                              child: Text(
+                                                displayName,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: GoogleFonts.outfit(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: const Color(0xFF0F172A),
+                                                ),
+                                              ),
+                                            );
+                                          }).toList(),
+                                          onChanged: _onMallChanged,
                                         ),
-                                      );
-                                    }).toList(),
-                                    onChanged: _onMallChanged,
-                                  ),
                                 ),
                               ),
                             ],

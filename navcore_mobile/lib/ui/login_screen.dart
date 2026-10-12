@@ -1,18 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../data/api_service.dart';
 import 'widgets/nexnav_logo_widget.dart';
 
 enum UserRole { guest, user, admin }
 
 class LoginScreen extends StatefulWidget {
-  final UserRole initialRole;
+  final UserRole? initialRole;
   final Function(UserRole role, String email) onLoginSuccess;
   final VoidCallback onBackToWelcome;
 
   const LoginScreen({
     super.key,
-    this.initialRole = UserRole.user,
+    this.initialRole,
     required this.onLoginSuccess,
     required this.onBackToWelcome,
   });
@@ -23,7 +25,6 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
-  late UserRole _selectedRole;
 
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
@@ -32,23 +33,33 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _rememberMe = true;
   bool _isLoading = false;
 
+  static const String _prefRememberMe = 'NexNav_remember_me';
+  static const String _prefSavedEmail = 'NexNav_remembered_email';
+  static const String _prefSavedRole = 'NexNav_remembered_role';
+  static const String _prefAutoLogin = 'NexNav_auto_login_enabled';
+
   @override
   void initState() {
     super.initState();
-    _selectedRole = widget.initialRole == UserRole.admin
-        ? UserRole.admin
-        : UserRole.user;
-    _applyDemoCredentials(_selectedRole);
+    _loadRememberedPreferences();
   }
 
-  void _applyDemoCredentials(UserRole role) {
-    if (role == UserRole.admin) {
-      _emailController.text = 'admin@nexnav.com';
-      _passwordController.text = 'admin123';
-    } else {
-      _emailController.text = 'user@nexnav.com';
-      _passwordController.text = 'user123';
-    }
+  Future<void> _loadRememberedPreferences() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final bool remember = prefs.getBool(_prefRememberMe) ?? true;
+      final String? savedEmail = prefs.getString(_prefSavedEmail);
+
+      if (!mounted) return;
+      setState(() {
+        _rememberMe = remember;
+        if (remember && savedEmail != null && savedEmail.isNotEmpty) {
+          _emailController.text = savedEmail;
+        } else if (widget.initialRole == UserRole.admin && _emailController.text.isEmpty) {
+          _emailController.text = 'admin@nexnav.com';
+        }
+      });
+    } catch (_) {}
   }
 
   @override
@@ -63,12 +74,54 @@ class _LoginScreenState extends State<LoginScreen> {
 
     setState(() => _isLoading = true);
 
-    // Simulate network authentication delay
-    await Future.delayed(const Duration(milliseconds: 700));
+    final emailInput = _emailController.text.trim();
+    final passwordInput = _passwordController.text.trim();
+
+    final authResult = await ApiService.instance.login(emailInput, passwordInput);
 
     if (!mounted) return;
-
     setState(() => _isLoading = false);
+
+    if (!authResult.isSuccess) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(LucideIcons.alertCircle, color: Colors.white, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  authResult.errorMessage ?? 'Authentication failed',
+                  style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: const Color(0xFFEF4444),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        ),
+      );
+      return;
+    }
+
+    final userRole = authResult.role == 'admin' ? UserRole.admin : UserRole.user;
+
+    // Persist or clear Remember Me state and session flags based on user toggle
+    final prefs = await SharedPreferences.getInstance();
+    if (_rememberMe) {
+      await prefs.setBool(_prefRememberMe, true);
+      await prefs.setString(_prefSavedEmail, emailInput);
+      await prefs.setString(_prefSavedRole, userRole.name);
+      await prefs.setBool(_prefAutoLogin, true);
+    } else {
+      await prefs.setBool(_prefRememberMe, false);
+      await prefs.remove(_prefSavedEmail);
+      await prefs.remove(_prefSavedRole);
+      await prefs.setBool(_prefAutoLogin, false);
+    }
+
+    if (!mounted) return;
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -77,7 +130,7 @@ class _LoginScreenState extends State<LoginScreen> {
             const Icon(LucideIcons.checkCircle2, color: Colors.white, size: 20),
             const SizedBox(width: 10),
             Text(
-              _selectedRole == UserRole.admin
+              userRole == UserRole.admin
                   ? 'Authenticated as Administrator'
                   : 'Welcome back! Logged in successfully.',
               style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.w600),
@@ -90,12 +143,11 @@ class _LoginScreenState extends State<LoginScreen> {
       ),
     );
 
-    widget.onLoginSuccess(_selectedRole, _emailController.text.trim());
+    widget.onLoginSuccess(userRole, authResult.email ?? emailInput);
   }
 
   @override
   Widget build(BuildContext context) {
-    final isPrimaryAdmin = _selectedRole == UserRole.admin;
     const primaryColor = Color(0xFF0F172A);
 
     return Scaffold(
@@ -108,7 +160,7 @@ class _LoginScreenState extends State<LoginScreen> {
           onPressed: widget.onBackToWelcome,
         ),
         title: Text(
-          isPrimaryAdmin ? 'Admin Authentication' : 'User Login',
+          'Log In',
           style: GoogleFonts.plusJakartaSans(
             fontSize: 16,
             fontWeight: FontWeight.w700,
@@ -139,110 +191,11 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      isPrimaryAdmin
-                          ? 'Manage venues, AR reference markers & floor maps'
-                          : 'Explore malls, indoor store paths & 3D AR navigation',
+                      'Log in with your user or admin credentials',
                       textAlign: TextAlign.center,
                       style: GoogleFonts.plusJakartaSans(
                         fontSize: 13,
                         color: const Color(0xFF64748B),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 24),
-
-              // Role Selector Tabs (User vs Admin)
-              Container(
-                padding: const EdgeInsets.all(4),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFE2E8F0),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: () {
-                          setState(() {
-                            _selectedRole = UserRole.user;
-                            _applyDemoCredentials(UserRole.user);
-                          });
-                        },
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          decoration: BoxDecoration(
-                            color: _selectedRole == UserRole.user
-                                ? Colors.white
-                                : Colors.transparent,
-                            borderRadius: BorderRadius.circular(12),
-                            boxShadow: _selectedRole == UserRole.user
-                                ? const [
-                                    BoxShadow(
-                                      color: Color(0x11000000),
-                                      blurRadius: 6,
-                                      offset: Offset(0, 2),
-                                    ),
-                                  ]
-                                : [],
-                          ),
-                          child: Center(
-                            child: Text(
-                              'User Login',
-                              style: GoogleFonts.plusJakartaSans(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
-                                color: _selectedRole == UserRole.user
-                                    ? const Color(0xFF0F172A)
-                                    : const Color(0xFF64748B),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: () {
-                          setState(() {
-                            _selectedRole = UserRole.admin;
-                            _applyDemoCredentials(UserRole.admin);
-                          });
-                        },
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          decoration: BoxDecoration(
-                            color: _selectedRole == UserRole.admin
-                                ? Colors.white
-                                : Colors.transparent,
-                            borderRadius: BorderRadius.circular(12),
-                            boxShadow: _selectedRole == UserRole.admin
-                                ? const [
-                                    BoxShadow(
-                                      color: Color(0x11000000),
-                                      blurRadius: 6,
-                                      offset: Offset(0, 2),
-                                    ),
-                                  ]
-                                : [],
-                          ),
-                          child: Center(
-                            child: Text(
-                              'Admin Portal',
-                              style: GoogleFonts.plusJakartaSans(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
-                                color: _selectedRole == UserRole.admin
-                                    ? const Color(0xFF0F172A)
-                                    : const Color(0xFF64748B),
-                              ),
-                            ),
-                          ),
-                        ),
                       ),
                     ),
                   ],
@@ -412,34 +365,46 @@ class _LoginScreenState extends State<LoginScreen> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Row(
-                            children: [
-                              SizedBox(
-                                width: 22,
-                                height: 22,
-                                child: Checkbox(
-                                  value: _rememberMe,
-                                  activeColor: primaryColor,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(6),
+                          InkWell(
+                            onTap: () {
+                              setState(() {
+                                _rememberMe = !_rememberMe;
+                              });
+                            },
+                            borderRadius: BorderRadius.circular(8),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  SizedBox(
+                                    width: 22,
+                                    height: 22,
+                                    child: Checkbox(
+                                      value: _rememberMe,
+                                      activeColor: primaryColor,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      onChanged: (val) {
+                                        setState(() {
+                                          _rememberMe = val ?? true;
+                                        });
+                                      },
+                                    ),
                                   ),
-                                  onChanged: (val) {
-                                    setState(() {
-                                      _rememberMe = val ?? true;
-                                    });
-                                  },
-                                ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    'Remember me',
+                                    style: GoogleFonts.plusJakartaSans(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: const Color(0xFF475569),
+                                    ),
+                                  ),
+                                ],
                               ),
-                              const SizedBox(width: 8),
-                              Text(
-                                'Remember me',
-                                style: GoogleFonts.plusJakartaSans(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: const Color(0xFF475569),
-                                ),
-                              ),
-                            ],
+                            ),
                           ),
                           TextButton(
                             onPressed: () {
@@ -491,9 +456,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
                                   Text(
-                                    isPrimaryAdmin
-                                        ? 'LOG IN TO ADMIN PORTAL'
-                                        : 'LOG IN TO NEXNAV',
+                                    'LOG IN TO NEXNAV',
                                     style: GoogleFonts.plusJakartaSans(
                                       fontSize: 14,
                                       fontWeight: FontWeight.w800,
@@ -510,100 +473,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ),
 
-              const SizedBox(height: 20),
-
-              // Demo Auto Fill Shortcuts
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: const Color(0xFFE2E8F0)),
-                ),
-                child: Column(
-                  children: [
-                    Text(
-                      'QUICK DEMO AUTO-FILL',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
-                        color: const Color(0xFF94A3B8),
-                        letterSpacing: 1.0,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: () {
-                              setState(() {
-                                _selectedRole = UserRole.user;
-                                _applyDemoCredentials(UserRole.user);
-                              });
-                            },
-                            icon: const Icon(
-                              LucideIcons.user,
-                              size: 14,
-                              color: Color(0xFF0F172A),
-                            ),
-                            label: Text(
-                              'Demo User',
-                              style: GoogleFonts.plusJakartaSans(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                                color: const Color(0xFF1E293B),
-                              ),
-                            ),
-                            style: OutlinedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 10),
-                              side: const BorderSide(color: Color(0xFFE2E8F0)),
-                              backgroundColor: const Color(0xFFF8FAFC),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: () {
-                              setState(() {
-                                _selectedRole = UserRole.admin;
-                                _applyDemoCredentials(UserRole.admin);
-                              });
-                            },
-                            icon: const Icon(
-                              LucideIcons.shieldCheck,
-                              size: 14,
-                              color: Color(0xFF0F172A),
-                            ),
-                            label: Text(
-                              'Demo Admin',
-                              style: GoogleFonts.plusJakartaSans(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                                color: const Color(0xFF1E293B),
-                              ),
-                            ),
-                            style: OutlinedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 10),
-                              side: const BorderSide(color: Color(0xFFE2E8F0)),
-                              backgroundColor: const Color(0xFFF8FAFC),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 20),
+              const SizedBox(height: 24),
             ],
           ),
         ),

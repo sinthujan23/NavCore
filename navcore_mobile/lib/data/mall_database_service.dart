@@ -3,7 +3,9 @@ import '../engine/ecef_engine.dart';
 import '../engine/bearing_engine.dart';
 import '../engine/floor_tracker.dart';
 import '../engine/pnp_engine.dart';
+import 'api_service.dart';
 import 'destinations.dart';
+import 'geocoding_service.dart';
 
 class MallMetadata {
   final String id;
@@ -53,83 +55,23 @@ class MallDatabaseService {
   static const String _downloadedMallsKey = 'NexNav_downloaded_malls';
   static const String _activeMallKey = 'NexNav_active_mall_id';
 
-  final List<MallMetadata> _catalog = [
-    const MallMetadata(
-      id: 'mall-one-galle-face',
-      name: 'One Galle Face Mall & Tower',
-      city: 'Colombo',
-      country: 'Sri Lanka',
-      latitude: 6.927079,
-      longitude: 79.845612,
-      floorCount: 5,
-      packageSizeBytesMB: 14.2,
-      category: 'Premier Oceanfront Mall',
-      rating: '4.9 ★',
-      isDownloaded: true,
-      isActive: true,
-    ),
-    const MallMetadata(
-      id: 'mall-colombo-city-centre',
-      name: 'Colombo City Centre (CCC)',
-      city: 'Colombo',
-      country: 'Sri Lanka',
-      latitude: 6.916720,
-      longitude: 79.855010,
-      floorCount: 5,
-      packageSizeBytesMB: 18.5,
-      category: 'Luxury Shopping & Lifestyle',
-      rating: '4.8 ★',
-      isDownloaded: true,
-      isActive: false,
-    ),
-    const MallMetadata(
-      id: 'mall-havelock-city',
-      name: 'Havelock City Mall',
-      city: 'Colombo',
-      country: 'Sri Lanka',
-      latitude: 6.885020,
-      longitude: 79.866030,
-      floorCount: 5,
-      packageSizeBytesMB: 16.8,
-      category: 'Lifestyle & Retail Hub',
-      rating: '4.8 ★',
-    ),
-    const MallMetadata(
-      id: 'mall-kandy-city-centre',
-      name: 'Kandy City Centre (KCC)',
-      city: 'Kandy',
-      country: 'Sri Lanka',
-      latitude: 7.293620,
-      longitude: 80.635030,
-      floorCount: 5,
-      packageSizeBytesMB: 15.1,
-      category: 'Heritage Commercial Complex',
-      rating: '4.7 ★',
-    ),
-    const MallMetadata(
-      id: 'mall-marino-mall',
-      name: 'Marino Mall & Entertainment',
-      city: 'Colombo',
-      country: 'Sri Lanka',
-      latitude: 6.897810,
-      longitude: 79.854720,
-      floorCount: 5,
-      packageSizeBytesMB: 12.4,
-      category: 'Tech & Waterfront Mall',
-      rating: '4.6 ★',
-    ),
-  ];
+  final List<MallMetadata> _catalog = [];
 
   List<MallMetadata> get catalog => _catalog;
 
   Future<List<MallMetadata>> getMallsList() async {
-    final prefs = await SharedPreferences.getInstance();
-    final downloadedIds =
-        prefs.getStringList(_downloadedMallsKey) ??
-        ['mall-one-galle-face', 'mall-colombo-city-centre'];
-    final activeId = prefs.getString(_activeMallKey) ?? 'mall-one-galle-face';
+    final liveMalls = await ApiService.instance.fetchMalls();
+    if (liveMalls.isNotEmpty) {
+      _catalog.clear();
+      _catalog.addAll(liveMalls);
+    }
+    final sourceList = _catalog;
 
-    return _catalog.map((m) {
+    final prefs = await SharedPreferences.getInstance();
+    final downloadedIds = prefs.getStringList(_downloadedMallsKey) ?? const [];
+    final activeId = prefs.getString(_activeMallKey) ?? '';
+
+    return sourceList.map((m) {
       bool isDown = downloadedIds.contains(m.id);
       bool isAct = (m.id == activeId);
       return MallMetadata(
@@ -159,8 +101,7 @@ class MallDatabaseService {
     }
 
     final prefs = await SharedPreferences.getInstance();
-    List<String> downloaded =
-        prefs.getStringList(_downloadedMallsKey) ?? ['mall-one-galle-face'];
+    List<String> downloaded = prefs.getStringList(_downloadedMallsKey) ?? [];
     if (!downloaded.contains(mallId)) {
       downloaded.add(mallId);
       await prefs.setStringList(_downloadedMallsKey, downloaded);
@@ -173,50 +114,29 @@ class MallDatabaseService {
   }
 
   /// Returns POIs dynamically localized relative to a given center GPS coordinate.
-  /// Preserves relative spatial layout while anchoring the venue to any global location.
   List<DestinationPOI> getLocalizedDestinationsForCoords(
     GeodeticCoords centerCoords, {
     String mallId = 'mall-global',
   }) {
-    const baseLat = 6.927079;
-    const baseLon = 79.845612;
-
-    final deltaLat = centerCoords.latitude - baseLat;
-    final deltaLon = centerCoords.longitude - baseLon;
-
-    return mockDestinations.map((poi) {
-      return DestinationPOI(
-        id: '$mallId-${poi.id}',
-        name: poi.name,
-        category: poi.category,
-        floorNumber: poi.floorNumber,
-        rating: poi.rating,
-        location: GeodeticCoords(
-          latitude: poi.location.latitude + deltaLat,
-          longitude: poi.location.longitude + deltaLon,
-          height: poi.location.height,
-        ),
-        description: poi.description,
-        openStatus: poi.openStatus,
-        imageUrl: poi.imageUrl,
-      );
-    }).toList();
+    return const <DestinationPOI>[];
   }
 
   /// Finds the nearest mall in the catalog or dynamically resolves a venue for any global user location
   MallMetadata findNearestMall(GeodeticCoords userCoords) {
-    if (userCoords.latitude == 0.0 && userCoords.longitude == 0.0) {
-      return _catalog.isNotEmpty ? _catalog.first : const MallMetadata(
-        id: 'mall-one-galle-face',
-        name: 'One Galle Face Mall & Tower',
-        city: 'Colombo',
-        country: 'Sri Lanka',
-        latitude: 6.927079,
-        longitude: 79.845612,
-        floorCount: 5,
-        packageSizeBytesMB: 14.2,
-        category: 'Premier Oceanfront Mall',
-        rating: '4.9 ★',
+    if (_catalog.isEmpty) {
+      return MallMetadata(
+        id: '',
+        name: 'No Active Mall',
+        city: '',
+        country: '',
+        latitude: userCoords.latitude,
+        longitude: userCoords.longitude,
+        floorCount: 0,
+        packageSizeBytesMB: 0.0,
+        category: '',
+        rating: '',
+        isDownloaded: false,
+        isActive: false,
       );
     }
 
@@ -265,11 +185,11 @@ class MallDatabaseService {
     GeodeticCoords userCoords, {
     Function(double progress)? onProgress,
   }) async {
+    await getMallsList();
     final nearest = findNearestMall(userCoords);
 
     final prefs = await SharedPreferences.getInstance();
-    final downloaded =
-        prefs.getStringList(_downloadedMallsKey) ?? ['mall-one-galle-face'];
+    final downloaded = prefs.getStringList(_downloadedMallsKey) ?? const [];
 
     if (!downloaded.contains(nearest.id)) {
       await downloadMallPackage(nearest.id, (p) {
@@ -287,6 +207,11 @@ class MallDatabaseService {
     String mallId, {
     GeodeticCoords? userCoords,
   }) async {
+    final livePackage = await ApiService.instance.fetchMallPackage(mallId);
+    if (livePackage != null) {
+      return livePackage;
+    }
+
     MallMetadata? targetMetadata;
     
     for (final m in _catalog) {
@@ -297,23 +222,55 @@ class MallDatabaseService {
     }
 
     if (targetMetadata == null && userCoords != null) {
+      final geo = await GeocodingService.reverseGeocode(
+        userCoords.latitude,
+        userCoords.longitude,
+      );
       targetMetadata = MallMetadata(
-        id: mallId,
-        name: 'Current Global AR Venue',
-        city: 'Local Area',
-        country: 'Worldwide',
+        id: geo.suggestedVenueId,
+        name: geo.placeName,
+        city: geo.city,
+        country: geo.country,
         latitude: userCoords.latitude,
         longitude: userCoords.longitude,
         floorCount: 5,
-        packageSizeBytesMB: 14.0,
-        category: 'AR Spatial Navigation Complex',
+        packageSizeBytesMB: 4.5,
+        category: 'Indoor Venue',
         rating: '4.9 ★',
         isDownloaded: true,
         isActive: true,
       );
     }
 
-    targetMetadata ??= _catalog.first;
+    targetMetadata ??= _catalog.isNotEmpty ? _catalog.first : null;
+
+    if (targetMetadata == null || targetMetadata.id.isEmpty) {
+      return const FullMallPackage(
+        metadata: MallMetadata(
+          id: '',
+          name: '',
+          city: '',
+          country: '',
+          latitude: 0.0,
+          longitude: 0.0,
+          floorCount: 0,
+          packageSizeBytesMB: 0.0,
+          category: '',
+          rating: '',
+          isDownloaded: false,
+          isActive: false,
+        ),
+        profile: BuildingElevationProfile(
+          buildingId: '',
+          name: '',
+          entranceBaseAnchorHeight: 0.0,
+          floorGapMeters: 4.5,
+          floors: [],
+        ),
+        destinations: [],
+        entranceMarkers: [],
+      );
+    }
 
     // If userCoords is provided and user is far (>5km) from targetMetadata, re-anchor to userCoords globally
     if (userCoords != null && userCoords.latitude != 0.0 && userCoords.longitude != 0.0) {
@@ -326,11 +283,15 @@ class MallDatabaseService {
         ),
       );
       if (distM > 5000.0) {
+        final geo = await GeocodingService.reverseGeocode(
+          userCoords.latitude,
+          userCoords.longitude,
+        );
         targetMetadata = MallMetadata(
-          id: targetMetadata.id,
-          name: targetMetadata.name == _catalog.first.name ? 'Current Global AR Venue' : targetMetadata.name,
-          city: targetMetadata.city,
-          country: targetMetadata.country,
+          id: geo.suggestedVenueId,
+          name: geo.placeName,
+          city: geo.city,
+          country: geo.country,
           latitude: userCoords.latitude,
           longitude: userCoords.longitude,
           floorCount: 5,
@@ -343,10 +304,15 @@ class MallDatabaseService {
       }
     }
 
+    final geo = await GeocodingService.reverseGeocode(
+      targetMetadata.latitude,
+      targetMetadata.longitude,
+    );
+
     final centerCoords = GeodeticCoords(
       latitude: targetMetadata.latitude,
       longitude: targetMetadata.longitude,
-      height: 45.0,
+      height: geo.groundAltitude,
     );
 
     final localizedDestinations = getLocalizedDestinationsForCoords(
@@ -354,38 +320,36 @@ class MallDatabaseService {
       mallId: targetMetadata.id,
     );
 
+    final calculatedGap = geo.floorGap;
+    final totalFloors = targetMetadata.floorCount.clamp(1, 10);
+    final dynamicFloors = List.generate(totalFloors, (i) {
+      final flrNum = i + 1;
+      final relHeight = i * calculatedGap;
+      final absHeight = centerCoords.height + relHeight;
+      return FloorLevelConfig(
+        floorId: 'fl-$flrNum',
+        floorNumber: flrNum,
+        name: flrNum == 1 ? 'Level 1 (Ground)' : 'Level $flrNum',
+        relativeVectorMeters: relHeight,
+        absoluteHeightMeters: absHeight,
+        bandMinMeters: absHeight - (calculatedGap / 2),
+        bandMaxMeters: absHeight + (calculatedGap / 2),
+        storesCount: 0,
+        ceilingHeightMeters: calculatedGap,
+      );
+    });
+
     return FullMallPackage(
       metadata: targetMetadata,
       profile: BuildingElevationProfile(
         buildingId: targetMetadata.id,
         name: targetMetadata.name,
-        entranceBaseAnchorHeight: 45.0,
-        floorGapMeters: 5.0,
-        floors: defaultBuildingProfile.floors,
+        entranceBaseAnchorHeight: centerCoords.height,
+        floorGapMeters: calculatedGap,
+        floors: dynamicFloors,
       ),
       destinations: localizedDestinations,
-      entranceMarkers: [
-        EntranceMarkerNode(
-          markerId: 'mrk-${targetMetadata.id}-01',
-          buildingId: targetMetadata.id,
-          name: '${targetMetadata.name} Main Gate 1',
-          latitude: targetMetadata.latitude,
-          longitude: targetMetadata.longitude,
-          baseHeight: 45.0,
-          physicalWidthMeters: 0.25,
-          physicalHeightMeters: 0.25,
-        ),
-        EntranceMarkerNode(
-          markerId: 'mrk-${targetMetadata.id}-02',
-          buildingId: targetMetadata.id,
-          name: '${targetMetadata.name} North Elevator Pillar',
-          latitude: targetMetadata.latitude + 0.0001,
-          longitude: targetMetadata.longitude + 0.0001,
-          baseHeight: 50.0,
-          physicalWidthMeters: 0.25,
-          physicalHeightMeters: 0.25,
-        ),
-      ],
+      entranceMarkers: const <EntranceMarkerNode>[],
     );
   }
 

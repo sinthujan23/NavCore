@@ -67,80 +67,13 @@ class BuildingElevationProfile {
   });
 }
 
-/// Default Reference Building Specification (One Galle Face Mall)
-/// Section 4 Spec Data Model
+/// Default Unconfigured Reference Building Specification
 final defaultBuildingProfile = BuildingElevationProfile(
-  buildingId: 'mall-one-galle-face',
-  name: 'One Galle Face Mall & Tower',
-  entranceBaseAnchorHeight: 45.0,
-  floorGapMeters: 15.0,
-  floors: const [
-    FloorLevelConfig(
-      floorId: 'fl-b1',
-      floorNumber: -1,
-      name: 'B1 (Basement Parking)',
-      relativeVectorMeters: -15.0,
-      absoluteHeightMeters: 30.0,
-      bandMinMeters: 0.0,
-      bandMaxMeters: 37.5,
-      storesCount: 5,
-      floorWidthMeters: 160.0,
-      floorLengthMeters: 110.0,
-      ceilingHeightMeters: 3.8,
-    ),
-    FloorLevelConfig(
-      floorId: 'fl-1',
-      floorNumber: 1,
-      name: '1st Floor (Main Entrance)',
-      relativeVectorMeters: 0.0,
-      absoluteHeightMeters: 45.0,
-      bandMinMeters: 37.5,
-      bandMaxMeters: 52.5,
-      storesCount: 5,
-      floorWidthMeters: 150.0,
-      floorLengthMeters: 100.0,
-      ceilingHeightMeters: 5.2,
-    ),
-    FloorLevelConfig(
-      floorId: 'fl-2',
-      floorNumber: 2,
-      name: '2nd Floor (Fashion & Shops)',
-      relativeVectorMeters: 15.0,
-      absoluteHeightMeters: 60.0,
-      bandMinMeters: 52.5,
-      bandMaxMeters: 67.5,
-      storesCount: 5,
-      floorWidthMeters: 135.0,
-      floorLengthMeters: 90.0,
-      ceilingHeightMeters: 4.5,
-    ),
-    FloorLevelConfig(
-      floorId: 'fl-3',
-      floorNumber: 3,
-      name: '3rd Floor (Electronics)',
-      relativeVectorMeters: 30.0,
-      absoluteHeightMeters: 75.0,
-      bandMinMeters: 67.5,
-      bandMaxMeters: 82.5,
-      storesCount: 5,
-      floorWidthMeters: 125.0,
-      floorLengthMeters: 85.0,
-      ceilingHeightMeters: 4.5,
-    ),
-    FloorLevelConfig(
-      floorId: 'fl-4',
-      floorNumber: 4,
-      name: '4th Floor (Food & Dining)',
-      relativeVectorMeters: 45.0,
-      absoluteHeightMeters: 90.0,
-      bandMinMeters: 82.5,
-      bandMaxMeters: 200.0,
-      storesCount: 5,
-      floorWidthMeters: 120.0,
-      floorLengthMeters: 80.0,
-      ceilingHeightMeters: 4.8,
-    ),
-  ],
+  buildingId: '',
+  name: '',
+  entranceBaseAnchorHeight: 0.0,
+  floorGapMeters: 4.5,
+  floors: const [],
 );
 
 /// Automatically computes floor level matching absolute height
@@ -160,6 +93,17 @@ FloorLevelConfig resolveFloorByHeight(
   // Safe fallback to Ground Floor (floorNumber == 1) for outdoor / uncalibrated altitude
   return targetProfile.floors.firstWhere(
     (f) => f.floorNumber == 1,
-    orElse: () => targetProfile.floors.first,
+    orElse: () => targetProfile.floors.isNotEmpty
+        ? targetProfile.floors.first
+        : const FloorLevelConfig(
+            floorId: 'fl-1',
+            floorNumber: 1,
+            name: 'Level 1',
+            relativeVectorMeters: 0.0,
+            absoluteHeightMeters: 0.0,
+            bandMinMeters: -5.0,
+            bandMaxMeters: 5.0,
+            storesCount: 0,
+          ),
   );
 }

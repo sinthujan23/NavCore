@@ -50,8 +50,8 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
     super.initState();
     _mapController = MapController();
     _currentCenter = LatLng(
-      widget.userCoords.latitude != 0.0 ? widget.userCoords.latitude : 6.9175,
-      widget.userCoords.longitude != 0.0 ? widget.userCoords.longitude : 79.8530,
+      widget.userCoords.latitude != 0.0 ? widget.userCoords.latitude : 8.5024,
+      widget.userCoords.longitude != 0.0 ? widget.userCoords.longitude : 81.1812,
     );
 
     _fetchLiveOSMVenues();
@@ -69,6 +69,15 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
         if (permission == LocationPermission.denied) return;
       }
       if (permission == LocationPermission.deniedForever) return;
+
+      final last = await Geolocator.getLastKnownPosition();
+      if (last != null && mounted) {
+        setState(() {
+          _currentCenter = LatLng(last.latitude, last.longitude);
+        });
+        _mapController.move(_currentCenter, 16.5);
+        _fetchLiveOSMVenues();
+      }
 
       final pos = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
@@ -266,6 +275,13 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
   @override
   Widget build(BuildContext meContext) {
     final displayPOIs = _effectiveDisplayPOIs;
+    final combined = <DestinationPOI>[...widget.destinations, ..._osmDiscoveredPOIs];
+    final availableFloors = combined.map((p) => p.floorNumber).toSet().toList()..sort();
+    final availableCategories = combined
+        .map((p) => p.category.toUpperCase().trim())
+        .where((c) => c.isNotEmpty)
+        .toSet()
+        .toList()..sort();
 
     return Scaffold(
       backgroundColor: const Color(0xFF0F172A),
@@ -387,53 +403,55 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
             ],
           ),
 
-          // Top Control Overlay Panel (Floor & Category Filters)
-          Positioned(
-            top: 12,
-            left: 12,
-            right: 12,
-            child: Column(
-              children: [
-                // Floor Level Filter Chips
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      _buildFilterChip('All Floors', 0, LucideIcons.layers),
-                      const SizedBox(width: 6),
-                      _buildFilterChip('Floor 1', 1, LucideIcons.store),
-                      const SizedBox(width: 6),
-                      _buildFilterChip('Floor 2', 2, LucideIcons.shoppingBag),
-                      const SizedBox(width: 6),
-                      _buildFilterChip('Floor 3', 3, LucideIcons.smartphone),
-                      const SizedBox(width: 6),
-                      _buildFilterChip('Floor 4', 4, LucideIcons.utensils),
-                      const SizedBox(width: 6),
-                      _buildFilterChip('Basement -1', -1, LucideIcons.car),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 8),
-                // Category Filter Bar
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      _buildCategoryChip('ALL'),
-                      const SizedBox(width: 6),
-                      _buildCategoryChip('FOOD & DRINK'),
-                      const SizedBox(width: 6),
-                      _buildCategoryChip('RETAIL & FASHION'),
-                      const SizedBox(width: 6),
-                      _buildCategoryChip('TECH & ELECTRONICS'),
-                      const SizedBox(width: 6),
-                      _buildCategoryChip('PARKING'),
-                    ],
-                  ),
-                ),
-              ],
+          // Top Control Overlay Panel (Floor & Category Filters - only shown when real data exists)
+          if (availableFloors.length > 1 || availableCategories.length > 1)
+            Positioned(
+              top: 12,
+              left: 12,
+              right: 12,
+              child: Column(
+                children: [
+                  // Floor Level Filter Chips
+                  if (availableFloors.length > 1) ...[
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          _buildFilterChip('All Floors', 0, LucideIcons.layers),
+                          ...availableFloors.map((f) {
+                            return Padding(
+                              padding: const EdgeInsets.only(left: 6),
+                              child: _buildFilterChip(
+                                f < 0 ? 'Basement $f' : (f == 1 ? 'Floor 1' : 'Floor $f'),
+                                f,
+                                f < 0 ? LucideIcons.car : LucideIcons.layers,
+                              ),
+                            );
+                          }),
+                        ],
+                      ),
+                    ),
+                    if (availableCategories.length > 1) const SizedBox(height: 8),
+                  ],
+                  // Category Filter Bar
+                  if (availableCategories.length > 1)
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          _buildCategoryChip('ALL'),
+                          ...availableCategories.map((cat) {
+                            return Padding(
+                              padding: const EdgeInsets.only(left: 6),
+                              child: _buildCategoryChip(cat),
+                            );
+                          }),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
             ),
-          ),
 
           // Bottom Control Card / Picker Selector Confirmation Bar
           Positioned(

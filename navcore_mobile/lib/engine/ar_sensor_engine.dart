@@ -159,7 +159,7 @@ class ARSensorEngine {
     required double screenWidth,
     required double screenHeight,
   }) {
-    final activeAnchor = pois.isNotEmpty ? pois.first.location : entranceAnchor;
+    final activeAnchor = pois.isNotEmpty ? pois.first.location : userCoords;
     final effectiveUser = getEffectiveUserCoords(userCoords, activeAnchor);
     final List<ARMarkerRenderData> markers = [];
 
@@ -232,13 +232,13 @@ class ARSensorEngine {
 /// IndoorAtlas-Style Barometric Elevation Engine
 class BarometricElevationEngine {
   double? _entranceBaselinePressureHpa;
-  double _entranceAnchorHeightMeters = 45.0;
+  double _entranceAnchorHeightMeters = 0.0;
 
   bool get isCalibrated => _entranceBaselinePressureHpa != null;
   double? get baselinePressure => _entranceBaselinePressureHpa;
 
   /// Calibrate reference baseline pressure at building entrance or anchor point
-  void calibrateBaseline(double currentPressureHpa, [double baseHeightMeters = 45.0]) {
+  void calibrateBaseline(double currentPressureHpa, [double baseHeightMeters = 0.0]) {
     if (currentPressureHpa > 0 && !currentPressureHpa.isNaN && !currentPressureHpa.isInfinite) {
       _entranceBaselinePressureHpa = currentPressureHpa;
       _entranceAnchorHeightMeters = baseHeightMeters;
