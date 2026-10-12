@@ -47,7 +47,7 @@ class DataStore {
       if (fs.existsSync(DB_FILE)) {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
         const parsed = JSON.parse(raw);
-        if (parsed.users && parsed.users.length > 0 && parsed.malls && parsed.malls.length > 0) {
+        if (parsed.users && parsed.users.length > 0) {
           return parsed;
         }
       }
