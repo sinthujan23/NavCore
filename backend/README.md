@@ -62,3 +62,40 @@ The server binds to `0.0.0.0:5000` (accessible from both localhost and mobile de
 - `GET /api/parking/:mallId/vehicle/:userId` — Get user's saved parked car location
 - `POST /api/parking/:mallId/vehicle` — Save parked car location
 - `DELETE /api/parking/:mallId/vehicle/:userId` — Clear parked car location
+
+---
+
+## 💾 Database Dump & Production Deployment
+
+The backend includes complete, pre-configured database dumps ready for instant server deployment (Render, Railway, AWS, DigitalOcean, Docker, VPS, etc.).
+
+### 📁 Database Dump Artifacts
+| File | Format | Purpose |
+|------|--------|---------|
+| [`data/db.dump.json`](file:///e:/Hasnet%20Projects/NavCore/backend/data/db.dump.json) | JSON Document Dump | Complete dataset dump for Node.js engine with all malls, POIs, floors, and users. |
+| [`data/dump.json`](file:///e:/Hasnet%20Projects/NavCore/backend/data/dump.json) | JSON Document Dump | Standard alias of `db.dump.json` for cloud deployment platforms. |
+| [`data/db.json`](file:///e:/Hasnet%20Projects/NavCore/backend/data/db.json) | Active Live DB | The operational database file used by `dataStore.js` at runtime. |
+| [`data/dump.sql`](file:///e:/Hasnet%20Projects/NavCore/backend/data/dump.sql) | Relational SQL Dump | PostgreSQL, SQLite3 & MySQL compatible DDL + DML dump for relational cloud DBs. |
+
+### 🛠 Database Commands
+```bash
+# Re-seed or restore active database from master dump:
+npm run db:seed
+
+# Export current live database state to dump files:
+npm run db:dump
+```
+
+### 🚀 Deploying to Cloud (e.g., Render, Railway, VPS, Docker)
+1. **Push to Git**: Ensure `backend/data/db.dump.json` and `backend/data/db.json` are committed.
+2. **Environment Variables**:
+   ```env
+   PORT=5000
+   JWT_SECRET=your_super_secret_production_key_here
+   NODE_ENV=production
+   ```
+3. **Build & Start Command**:
+   - Build: `npm install`
+   - Start: `npm start` (or `npm run db:seed && npm start` to guarantee fresh seeded state)
+4. The server automatically initializes with all 5 pre-configured venues, 30+ POIs, multi-level floor height profiles, and parking stall sensors.
+

@@ -23,6 +23,7 @@ import 'admin/admin_venue_manager_screen.dart';
 import 'admin/admin_parking_manager_screen.dart';
 import 'admin/admin_osm_map_screen.dart';
 import 'admin/admin_floor_heights_screen.dart';
+import '../data/api_service.dart';
 import '../data/mall_api_service.dart';
 import '../data/floor_height_model.dart';
 
@@ -82,10 +83,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   final double _kalmanVariance = 0.0001;
   int _satCount = 0;
   bool _isRealHardwareActive = false;
+  bool _isServerOnline = false;
 
   @override
   void initState() {
     super.initState();
+    _checkServer();
     _currentDestinations = List.from(widget.destinations);
     _tabController = TabController(length: 3, vsync: this);
     _liveLat = widget.userCoords.latitude;
@@ -136,6 +139,51 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       setState(() {});
     });
   }
+
+  Future<void> _checkServer() async {
+    final online = await ApiService.instance.checkServerHealth();
+    if (mounted) {
+      setState(() {
+        _isServerOnline = online;
+      });
+    }
+  }
+
+  Widget _buildServerStatusBadge() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: _isServerOnline ? const Color(0xFFF0FDF4) : const Color(0xFFFEF2F2),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: _isServerOnline ? const Color(0xFFBBF7D0) : const Color(0xFFFECACA),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(
+              color: _isServerOnline ? const Color(0xFF16A34A) : const Color(0xFFDC2626),
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 5),
+          Text(
+            _isServerOnline ? 'Backend API: Online' : 'Backend API: Offline',
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              color: _isServerOnline ? const Color(0xFF15803D) : const Color(0xFFB91C1C),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
 
   @override
   void dispose() {
@@ -367,14 +415,20 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'LIVE SYSTEM STATUS',
-            style: GoogleFonts.plusJakartaSans(
-              fontSize: 12,
-              fontWeight: FontWeight.w900,
-              color: const Color(0xFF0F172A),
-              letterSpacing: 1.0,
-            ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'LIVE SYSTEM STATUS',
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                  color: const Color(0xFF0F172A),
+                  letterSpacing: 1.0,
+                ),
+              ),
+              _buildServerStatusBadge(),
+            ],
           ),
           const SizedBox(height: 12),
           // Sensor Telemetry Strip

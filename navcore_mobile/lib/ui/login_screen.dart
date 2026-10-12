@@ -38,10 +38,108 @@ class _LoginScreenState extends State<LoginScreen> {
   static const String _prefSavedRole = 'NexNav_remembered_role';
   static const String _prefAutoLogin = 'NexNav_auto_login_enabled';
 
+  String _activeServerUrl = 'Detecting...';
+  bool _isServerOnline = false;
+
   @override
   void initState() {
     super.initState();
     _loadRememberedPreferences();
+    _checkServerConnection();
+  }
+
+  Future<void> _checkServerConnection() async {
+    final url = await ApiService.instance.getBaseUrl();
+    final isOnline = await ApiService.instance.checkServerHealth();
+    if (mounted) {
+      setState(() {
+        _activeServerUrl = url;
+        _isServerOnline = isOnline;
+      });
+    }
+  }
+
+  void _showServerConfigDialog() async {
+    final currentUrl = await ApiService.instance.getBaseUrl();
+    final controller = TextEditingController(text: currentUrl);
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            const Icon(LucideIcons.server, color: Color(0xFF2563EB), size: 20),
+            const SizedBox(width: 8),
+            Text(
+              'Backend Server Connection',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Backend REST API endpoint for live database sync:',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 12.5,
+                color: const Color(0xFF64748B),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              style: GoogleFonts.jetBrainsMono(fontSize: 13),
+              decoration: InputDecoration(
+                hintText: 'http://10.0.2.2:5000/api',
+                filled: true,
+                fillColor: const Color(0xFFF8FAFC),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              '• Android Emulator: http://10.0.2.2:5000/api\n• Desktop / adb reverse: http://localhost:5000/api\n• Physical Device: http://<PC_LAN_IP>:5000/api',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 11,
+                color: const Color(0xFF94A3B8),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2563EB),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () async {
+              Navigator.pop(context);
+              await ApiService.instance.setCustomBaseUrl(controller.text.trim());
+              await _checkServerConnection();
+            },
+            child: const Text('Save & Reconnect'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _loadRememberedPreferences() async {
@@ -467,6 +565,69 @@ class _LoginScreenState extends State<LoginScreen> {
                                   const Icon(LucideIcons.arrowRight, size: 16),
                                 ],
                               ),
+                      ),
+
+                      const SizedBox(height: 16),
+
+                      // Server Connection Status Pill
+                      InkWell(
+                        onTap: _showServerConfigDialog,
+                        borderRadius: BorderRadius.circular(12),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: _isServerOnline
+                                ? const Color(0xFFF0FDF4)
+                                : const Color(0xFFFEF2F2),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: _isServerOnline
+                                  ? const Color(0xFFBBF7D0)
+                                  : const Color(0xFFFECACA),
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 8,
+                                height: 8,
+                                decoration: BoxDecoration(
+                                  color: _isServerOnline
+                                      ? const Color(0xFF16A34A)
+                                      : const Color(0xFFDC2626),
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  _isServerOnline
+                                      ? 'Backend REST API: Online ($_activeServerUrl)'
+                                      : 'Backend API: Offline ($_activeServerUrl)',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: GoogleFonts.plusJakartaSans(
+                                    fontSize: 11.5,
+                                    fontWeight: FontWeight.w600,
+                                    color: _isServerOnline
+                                        ? const Color(0xFF15803D)
+                                        : const Color(0xFFB91C1C),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Icon(
+                                LucideIcons.settings2,
+                                size: 14,
+                                color: _isServerOnline
+                                    ? const Color(0xFF15803D)
+                                    : const Color(0xFFB91C1C),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
                     ],
                   ),

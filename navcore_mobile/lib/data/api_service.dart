@@ -54,8 +54,46 @@ class ApiService {
   Future<String> getBaseUrl() async {
     if (_cachedBaseUrl != null) return _cachedBaseUrl!;
     final prefs = await SharedPreferences.getInstance();
-    _cachedBaseUrl = prefs.getString(_customBaseUrlKey) ?? defaultBaseUrl;
+    final saved = prefs.getString(_customBaseUrlKey);
+    if (saved != null && saved.isNotEmpty) {
+      _cachedBaseUrl = saved.trim();
+      return _cachedBaseUrl!;
+    }
+
+    // Auto-detect reachable host: emulator (10.0.2.2), localhost, LAN
+    final candidates = <String>{
+      defaultBaseUrl,
+      'http://10.0.2.2:5000/api',
+      'http://localhost:5000/api',
+      'http://127.0.0.1:5000/api',
+    };
+
+    for (final candidate in candidates) {
+      try {
+        final res = await http
+            .get(Uri.parse('$candidate/health'))
+            .timeout(const Duration(milliseconds: 900));
+        if (res.statusCode == 200) {
+          _cachedBaseUrl = candidate;
+          return _cachedBaseUrl!;
+        }
+      } catch (_) {}
+    }
+
+    _cachedBaseUrl = defaultBaseUrl;
     return _cachedBaseUrl!;
+  }
+
+  Future<bool> checkServerHealth() async {
+    try {
+      final baseUrl = await getBaseUrl();
+      final res = await http
+          .get(Uri.parse('$baseUrl/health'))
+          .timeout(const Duration(seconds: 2));
+      return res.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> setCustomBaseUrl(String url) async {
@@ -499,6 +537,94 @@ class ApiService {
     }
   }
 
+  Future<List<FloorHeightData>> calculateFloorHeights(
+    String mallId, {
+    double? lat,
+    double? lon,
+  }) async {
+    try {
+      final baseUrl = await getBaseUrl();
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/floors/$mallId/calculate'),
+            headers: await _headers(),
+            body: jsonEncode({
+              'latitude': lat ?? 0.0,
+              'longitude': lon ?? 0.0,
+            }),
+          )
+          .timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        final List list = jsonDecode(response.body);
+        return list.map((json) => FloorHeightData.fromJson(json)).toList();
+      }
+    } catch (_) {}
+    return [];
+  }
+
+  Future<List<FloorHeightData>> addFloor(
+    String mallId,
+    int floorNo,
+    double heightToNextM, {
+    double? baseAltitudeM,
+  }) async {
+    try {
+      final baseUrl = await getBaseUrl();
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/floors/$mallId'),
+            headers: await _headers(),
+            body: jsonEncode({
+              'floorNo': floorNo,
+              'heightToNextM': heightToNextM,
+              'baseAltitudeM': baseAltitudeM ?? (floorNo * heightToNextM),
+            }),
+          )
+          .timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        return await fetchFloorHeights(mallId);
+      }
+    } catch (_) {}
+    return [];
+  }
+
+  Future<List<FloorHeightData>> deleteFloor(String mallId, int floorNo) async {
+    try {
+      final baseUrl = await getBaseUrl();
+      final response = await http
+          .delete(
+            Uri.parse('$baseUrl/floors/$mallId/$floorNo'),
+            headers: await _headers(),
+          )
+          .timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        return await fetchFloorHeights(mallId);
+      }
+    } catch (_) {}
+    return [];
+  }
+
+  Future<List<FloorHeightData>> resetFloorHeights(String mallId) async {
+    try {
+      final baseUrl = await getBaseUrl();
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/floors/$mallId/reset'),
+            headers: await _headers(),
+          )
+          .timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        final List list = jsonDecode(response.body);
+        return list.map((json) => FloorHeightData.fromJson(json)).toList();
+      }
+    } catch (_) {}
+    return [];
+  }
+
   // ==========================================
   // PARKING
   // ==========================================
@@ -547,5 +673,36 @@ class ApiService {
       }
     } catch (_) {}
     return null;
+  }
+
+  Future<bool> updateParkingSlotStatus(String slotId, String status) async {
+    try {
+      final baseUrl = await getBaseUrl();
+      final response = await http
+          .put(
+            Uri.parse('$baseUrl/parking/slots/$slotId'),
+            headers: await _headers(),
+            body: jsonEncode({'status': status}),
+          )
+          .timeout(const Duration(seconds: 5));
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> deleteVehicleLocation(String mallId, String userId) async {
+    try {
+      final baseUrl = await getBaseUrl();
+      final response = await http
+          .delete(
+            Uri.parse('$baseUrl/parking/$mallId/vehicle/$userId'),
+            headers: await _headers(),
+          )
+          .timeout(const Duration(seconds: 5));
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
   }
 }

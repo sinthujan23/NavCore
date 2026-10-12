@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
 import '../engine/floor_tracker.dart';
 import 'api_service.dart';
 import 'destinations.dart';
@@ -90,22 +88,11 @@ class RestMallBackendApi implements MallBackendApi {
 
   @override
   Future<List<FloorHeightData>> fetchFloorHeights(String mallId) async {
-    try {
-      final response = await http
-          .get(Uri.parse('$baseUrl/malls/$mallId/floor-heights'))
-          .timeout(const Duration(seconds: 3));
-      if (response.statusCode == 200) {
-        final decoded = jsonDecode(response.body);
-        final list = (decoded['floors'] as List)
-            .map((e) => FloorHeightData.fromJson(e))
-            .toList();
-        _localMockHeights[mallId] = list;
-        return list;
-      }
-    } catch (_) {
-      // Fallback to local store on network failure
+    final live = await ApiService.instance.fetchFloorHeights(mallId);
+    if (live.isNotEmpty) {
+      _localMockHeights[mallId] = live;
+      return live;
     }
-
     return _getOrCreateDefaultHeights(mallId);
   }
 
@@ -115,28 +102,10 @@ class RestMallBackendApi implements MallBackendApi {
     double? lat,
     double? lon,
   }) async {
-    try {
-      final response = await http
-          .post(
-            Uri.parse('$baseUrl/malls/$mallId/floor-heights/calculate'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'latitude': lat ?? 0.0,
-              'longitude': lon ?? 0.0,
-            }),
-          )
-          .timeout(const Duration(seconds: 4));
-
-      if (response.statusCode == 200) {
-        final decoded = jsonDecode(response.body);
-        final list = (decoded['floors'] as List)
-            .map((e) => FloorHeightData.fromJson(e))
-            .toList();
-        _localMockHeights[mallId] = list;
-        return list;
-      }
-    } catch (_) {
-      // Fallback auto-calculation simulation for offline mode
+    final live = await ApiService.instance.calculateFloorHeights(mallId, lat: lat, lon: lon);
+    if (live.isNotEmpty) {
+      _localMockHeights[mallId] = live;
+      return live;
     }
 
     final currentList = List<FloorHeightData>.from(_getOrCreateDefaultHeights(mallId));
@@ -177,31 +146,20 @@ class RestMallBackendApi implements MallBackendApi {
     double? heightToNextM,
     bool? isLocked,
   }) async {
-    try {
-      final Map<String, dynamic> bodyData = {};
-      if (heightToNextM != null) {
-        bodyData['height_to_next_m'] = heightToNextM;
-        bodyData['source'] = 'admin';
+    final success = await ApiService.instance.updateFloorHeight(
+      mallId,
+      floorNo,
+      heightToNextM: heightToNextM,
+      isLocked: isLocked,
+    );
+    if (success) {
+      final updated = await ApiService.instance.fetchFloorHeights(mallId);
+      if (updated.isNotEmpty) {
+        _localMockHeights[mallId] = updated;
+        final match = updated.firstWhere((f) => f.floorNo == floorNo, orElse: () => updated.first);
+        return match;
       }
-      if (isLocked != null) {
-        bodyData['is_locked'] = isLocked;
-      }
-
-      final response = await http
-          .put(
-            Uri.parse('$baseUrl/malls/$mallId/floor-heights/$floorNo'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode(bodyData),
-          )
-          .timeout(const Duration(seconds: 3));
-
-      if (response.statusCode == 200) {
-        final decoded = jsonDecode(response.body);
-        final result = FloorHeightData.fromJson(decoded['floor']);
-        await fetchFloorHeights(mallId);
-        return result;
-      }
-    } catch (_) {}
+    }
 
     final currentList = _getOrCreateDefaultHeights(mallId);
     final idx = currentList.indexWhere((f) => f.floorNo == floorNo);
@@ -236,6 +194,12 @@ class RestMallBackendApi implements MallBackendApi {
     int floorNo,
     double heightToNextM,
   ) async {
+    final live = await ApiService.instance.addFloor(mallId, floorNo, heightToNextM);
+    if (live.isNotEmpty) {
+      _localMockHeights[mallId] = live;
+      return live;
+    }
+
     final currentList = List<FloorHeightData>.from(
       _getOrCreateDefaultHeights(mallId),
     );
@@ -266,6 +230,12 @@ class RestMallBackendApi implements MallBackendApi {
 
   @override
   Future<List<FloorHeightData>> deleteFloor(String mallId, int floorNo) async {
+    final live = await ApiService.instance.deleteFloor(mallId, floorNo);
+    if (live.isNotEmpty) {
+      _localMockHeights[mallId] = live;
+      return live;
+    }
+
     final currentList = List<FloorHeightData>.from(
       _getOrCreateDefaultHeights(mallId),
     );
@@ -283,6 +253,12 @@ class RestMallBackendApi implements MallBackendApi {
 
   @override
   Future<List<FloorHeightData>> resetAllFloors(String mallId) async {
+    final live = await ApiService.instance.resetFloorHeights(mallId);
+    if (live.isNotEmpty) {
+      _localMockHeights[mallId] = live;
+      return live;
+    }
+
     final currentList = List<FloorHeightData>.from(
       _getOrCreateDefaultHeights(mallId),
     );

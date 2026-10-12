@@ -46,11 +46,31 @@ class DataStore {
     try {
       if (fs.existsSync(DB_FILE)) {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
-        return JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        if (parsed.users && parsed.users.length > 0 && parsed.malls && parsed.malls.length > 0) {
+          return parsed;
+        }
       }
     } catch (err) {
-      console.error('[DataStore] Error reading db.json, falling back to seed:', err.message);
+      console.error('[DataStore] Error reading db.json, falling back to dump/seed:', err.message);
     }
+
+    // Attempt restoring from database dump file if present (for clean cloud deployments)
+    const DUMP_FILE = path.join(__dirname, '..', 'data', 'db.dump.json');
+    const DUMP_ALIAS = path.join(__dirname, '..', 'data', 'dump.json');
+    for (const dPath of [DUMP_FILE, DUMP_ALIAS]) {
+      try {
+        if (fs.existsSync(dPath)) {
+          const rawDump = fs.readFileSync(dPath, 'utf-8');
+          const parsedDump = JSON.parse(rawDump);
+          if (parsedDump.users && parsedDump.users.length > 0) {
+            this._save(parsedDump);
+            return parsedDump;
+          }
+        }
+      } catch (_) {}
+    }
+
     this._save(seedData);
     return JSON.parse(JSON.stringify(seedData));
   }

@@ -121,4 +121,32 @@ router.post('/:mallId/calculate', (req, res) => {
   return res.json(updated);
 });
 
+/**
+ * POST /api/floors/:mallId/reset
+ * Resets floors to default floor gap intervals (4.5m)
+ */
+router.post('/:mallId/reset', requireAdmin, (req, res) => {
+  const mallId = req.params.mallId;
+  const floors = db.filter('floorHeights', f => f.mallId === mallId);
+  floors.sort((a, b) => a.floorNo - b.floorNo);
+
+  const updated = floors.map(f => {
+    const defaultGap = 4.5;
+    const baseAlt = f.floorNo * defaultGap;
+    return {
+      ...f,
+      heightToNextM: defaultGap,
+      baseAltitudeM: baseAlt,
+      source: 'default',
+      confidence: 1.0,
+      isLocked: false,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+
+  const remaining = db.filter('floorHeights', f => f.mallId !== mallId);
+  db.set('floorHeights', [...remaining, ...updated]);
+  return res.json(updated);
+});
+
 module.exports = router;

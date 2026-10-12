@@ -619,6 +619,7 @@ class ParkingService extends ChangeNotifier {
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('$_vehicleStorageKeyPrefix$targetUser');
+    ApiService.instance.deleteVehicleLocation('mall-one-galle-face', targetUser);
     notifyListeners();
   }
 
