@@ -526,26 +526,18 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           ],
         ),
         const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: _buildModernMetricCard(
-                title: 'Parking Slots',
-                value: '182 / 350',
-                badgeText: '52% Filled',
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => const AdminParkingManagerScreen(),
-                    ),
-                  );
-                },
+        _buildModernMetricCard(
+          title: 'Parking Slots',
+          value: '182 / 350',
+          badgeText: '52% Filled',
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const AdminParkingManagerScreen(),
               ),
-            ),
-            const SizedBox(width: 12),
-            const Expanded(child: SizedBox()),
-          ],
+            );
+          },
         ),
 
         const SizedBox(height: 20),
