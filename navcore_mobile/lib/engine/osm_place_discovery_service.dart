@@ -146,9 +146,9 @@ out center 40;
               ),
               floorNumber: floorNum,
               description: 'Real OpenStreetMap venue located at level $floorNum',
-              openStatus: tags['opening_hours'] as String? ?? 'Open Now (9:00 AM - 10:00 PM)',
+              openStatus: tags['opening_hours'] as String? ?? 'Open Now',
               rating: (4.0 + (idCounter % 10) * 0.1).clamp(4.0, 5.0),
-              imageUrl: 'assets/images/shops/fashion1.jpg',
+              imageUrl: null,
             ),
           );
 

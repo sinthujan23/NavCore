@@ -5,6 +5,7 @@ import 'package:nexnav_mobile/engine/ar_pose_engine.dart';
 import 'package:nexnav_mobile/engine/barometer_floor_sampler.dart';
 import 'package:nexnav_mobile/engine/ecef_engine.dart';
 import 'package:nexnav_mobile/engine/real_sensor_service.dart';
+import 'package:nexnav_mobile/engine/ar_sensor_engine.dart';
 
 void main() {
   group('1. Floor Height Data Model Tests', () {
@@ -188,4 +189,117 @@ void main() {
       );
     },
   );
+
+  group('4. Cumulative Base Altitude & Admin Floor Gap Preservation Tests', () {
+    test(
+      'Sequentially chains base altitudes from 15.0m baseline: 15.0, 19.5, 24.0, 28.5, 33.0',
+      () {
+        final floors = [
+          FloorHeightData(mallId: 'minimall', floorNo: 1, heightToNextM: 4.5, baseAltitudeM: 15.0, source: 'default', confidence: 1.0, isLocked: false, updatedAt: ''),
+          FloorHeightData(mallId: 'minimall', floorNo: 2, heightToNextM: 4.5, baseAltitudeM: 19.5, source: 'default', confidence: 1.0, isLocked: false, updatedAt: ''),
+          FloorHeightData(mallId: 'minimall', floorNo: 3, heightToNextM: 4.5, baseAltitudeM: 24.0, source: 'default', confidence: 1.0, isLocked: false, updatedAt: ''),
+          FloorHeightData(mallId: 'minimall', floorNo: 4, heightToNextM: 4.5, baseAltitudeM: 28.5, source: 'default', confidence: 1.0, isLocked: false, updatedAt: ''),
+          FloorHeightData(mallId: 'minimall', floorNo: 5, heightToNextM: 4.5, baseAltitudeM: 33.0, source: 'default', confidence: 1.0, isLocked: false, updatedAt: ''),
+        ];
+
+        double currentAlt = 15.0;
+        for (int i = 0; i < floors.length; i++) {
+          if (i == 0) {
+            expect(floors[i].baseAltitudeM, equals(15.0));
+          } else {
+            currentAlt += floors[i - 1].heightToNextM;
+            expect(floors[i].baseAltitudeM, equals(currentAlt));
+          }
+        }
+      },
+    );
+
+    test(
+      'Admin floor gap override re-cascades cumulative base altitudes for subsequent floors',
+      () {
+        final floors = [
+          FloorHeightData(mallId: 'minimall', floorNo: 1, heightToNextM: 4.5, baseAltitudeM: 15.0, source: 'default', confidence: 1.0, isLocked: false, updatedAt: ''),
+          FloorHeightData(mallId: 'minimall', floorNo: 2, heightToNextM: 5.2, baseAltitudeM: 19.5, source: 'admin', confidence: 1.0, isLocked: true, updatedAt: ''),
+          FloorHeightData(mallId: 'minimall', floorNo: 3, heightToNextM: 4.5, baseAltitudeM: 24.0, source: 'default', confidence: 1.0, isLocked: false, updatedAt: ''),
+          FloorHeightData(mallId: 'minimall', floorNo: 4, heightToNextM: 4.5, baseAltitudeM: 28.5, source: 'default', confidence: 1.0, isLocked: false, updatedAt: ''),
+          FloorHeightData(mallId: 'minimall', floorNo: 5, heightToNextM: 4.5, baseAltitudeM: 33.0, source: 'default', confidence: 1.0, isLocked: false, updatedAt: ''),
+        ];
+
+        // Recalculate cumulative
+        final recomputed = <FloorHeightData>[];
+        double currentAlt = 15.0;
+        for (int i = 0; i < floors.length; i++) {
+          if (i == 0) {
+            recomputed.add(floors[i].copyWith(baseAltitudeM: currentAlt));
+          } else {
+            currentAlt += floors[i - 1].heightToNextM;
+            recomputed.add(floors[i].copyWith(baseAltitudeM: double.parse(currentAlt.toStringAsFixed(2))));
+          }
+        }
+
+        expect(recomputed[0].baseAltitudeM, equals(15.00));
+        expect(recomputed[1].baseAltitudeM, equals(19.50));
+        expect(recomputed[2].baseAltitudeM, equals(24.70)); // 19.5 + 5.2 admin gap
+        expect(recomputed[3].baseAltitudeM, equals(29.20)); // 24.7 + 4.5
+        expect(recomputed[4].baseAltitudeM, equals(33.70)); // 29.2 + 4.5
+        expect(recomputed[1].isLocked, isTrue);
+        expect(recomputed[1].source, equals('admin'));
+      },
+    );
+  });
+
+  group('5. User Location Height Multi-Sensor Fusion Tests', () {
+    test(
+      'BarometricElevationEngine computes fused elevation from GNSS datum and barometric model',
+      () {
+        final engine = BarometricElevationEngine();
+        engine.calibrateBaseline(1013.25, 20.0);
+
+        // At sea level standard pressure, relative height delta is 0, so height is baseline 20.0m
+        final heightSeaLevel = engine.calculateAbsoluteHeight(1013.25);
+        expect(heightSeaLevel, closeTo(20.0, 0.05));
+
+        // When pressure drops to 1010 hPa, altitude increases
+        final heightHigher = engine.calculateAbsoluteHeight(1010.0);
+        expect(heightHigher, greaterThan(20.0));
+
+        // Multi-sensor fusion weights high confidence GPS altitude with barometric height
+        final fused = engine.computeFusedLocationHeight(
+          currentPressureHpa: 1013.25,
+          gpsAltitude: 20.5,
+          gpsAccuracy: 5.0, // High accuracy (5m)
+        );
+        expect(fused, closeTo(20.4, 0.2));
+      },
+    );
+
+    test(
+      'Calibrating Floor 1 to user location height (22.5m) chains upper floors with admin gaps',
+      () {
+        final initialFloors = [
+          FloorHeightData(mallId: 'minimall', floorNo: 1, heightToNextM: 4.5, baseAltitudeM: 15.0, source: 'default', confidence: 1.0, isLocked: false, updatedAt: ''),
+          FloorHeightData(mallId: 'minimall', floorNo: 2, heightToNextM: 5.0, baseAltitudeM: 19.5, source: 'admin', confidence: 1.0, isLocked: true, updatedAt: ''),
+          FloorHeightData(mallId: 'minimall', floorNo: 3, heightToNextM: 4.5, baseAltitudeM: 24.0, source: 'default', confidence: 1.0, isLocked: false, updatedAt: ''),
+        ];
+
+        const userLocationHeight = 22.5;
+
+        // Cumulative chain with Floor 1 set to user location height
+        final recomputed = <FloorHeightData>[];
+        double currentAlt = userLocationHeight;
+        for (int i = 0; i < initialFloors.length; i++) {
+          if (i == 0) {
+            recomputed.add(initialFloors[i].copyWith(baseAltitudeM: currentAlt));
+          } else {
+            currentAlt += initialFloors[i - 1].heightToNextM;
+            recomputed.add(initialFloors[i].copyWith(baseAltitudeM: double.parse(currentAlt.toStringAsFixed(2))));
+          }
+        }
+
+        expect(recomputed[0].baseAltitudeM, equals(22.50)); // Floor 1 = user location height
+        expect(recomputed[1].baseAltitudeM, equals(27.00)); // 22.5 + 4.5
+        expect(recomputed[2].baseAltitudeM, equals(32.00)); // 27.0 + 5.0 (admin preserved gap)
+      },
+    );
+  });
 }

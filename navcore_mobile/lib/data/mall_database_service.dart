@@ -59,20 +59,20 @@ class MallDatabaseService {
   List<MallMetadata> get catalog => _catalog;
 
   Future<List<MallMetadata>> getMallsList() async {
-    final liveMalls = await ApiService.instance.fetchMalls();
-    if (liveMalls.isNotEmpty) {
+    try {
+      final liveMalls = await ApiService.instance.fetchMalls();
       _catalog.clear();
       _catalog.addAll(liveMalls);
-    }
-    final sourceList = _catalog;
+    } catch (_) {}
 
     final prefs = await SharedPreferences.getInstance();
     final downloadedIds = prefs.getStringList(_downloadedMallsKey) ?? const [];
-    final activeId = prefs.getString(_activeMallKey) ?? '';
+    final activeId = (prefs.getString(_activeMallKey) ?? '').trim().toLowerCase();
 
-    return sourceList.map((m) {
-      bool isDown = downloadedIds.contains(m.id);
-      bool isAct = (m.id == activeId);
+    return _catalog.map((m) {
+      final mIdLower = m.id.trim().toLowerCase();
+      bool isDown = downloadedIds.any((id) => id.trim().toLowerCase() == mIdLower);
+      bool isAct = (mIdLower == activeId && activeId.isNotEmpty);
       return MallMetadata(
         id: m.id,
         name: m.name,
@@ -88,6 +88,11 @@ class MallDatabaseService {
         isActive: isAct,
       );
     }).toList();
+  }
+
+  void removeMall(String mallId) {
+    final lowerId = mallId.trim().toLowerCase();
+    _catalog.removeWhere((m) => m.id.trim().toLowerCase() == lowerId);
   }
 
   Future<void> downloadMallPackage(
@@ -201,6 +206,34 @@ class MallDatabaseService {
     double maxRadiusMeters = 500.0,
   }) async {
     await getMallsList();
+    if (_catalog.isEmpty) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_activeMallKey);
+      return const FullMallPackage(
+        metadata: MallMetadata(
+          id: '',
+          name: 'No Venue',
+          city: '',
+          country: '',
+          latitude: 0.0,
+          longitude: 0.0,
+          floorCount: 0,
+          packageSizeBytesMB: 0.0,
+          category: '',
+          rating: '',
+        ),
+        profile: BuildingElevationProfile(
+          buildingId: '',
+          name: '',
+          entranceBaseAnchorHeight: 0.0,
+          floorGapMeters: 0.0,
+          floors: [],
+        ),
+        destinations: [],
+        entranceMarkers: [],
+      );
+    }
+
     final prefs = await SharedPreferences.getInstance();
     final activeId = prefs.getString(_activeMallKey);
 
@@ -257,6 +290,34 @@ class MallDatabaseService {
     String mallId, {
     GeodeticCoords? userCoords,
   }) async {
+    if (mallId.trim().isEmpty) {
+      return const FullMallPackage(
+        metadata: MallMetadata(
+          id: '',
+          name: '',
+          city: '',
+          country: '',
+          latitude: 0.0,
+          longitude: 0.0,
+          floorCount: 0,
+          packageSizeBytesMB: 0.0,
+          category: '',
+          rating: '',
+          isDownloaded: false,
+          isActive: false,
+        ),
+        profile: BuildingElevationProfile(
+          buildingId: '',
+          name: '',
+          entranceBaseAnchorHeight: 0.0,
+          floorGapMeters: 0.0,
+          floors: [],
+        ),
+        destinations: [],
+        entranceMarkers: [],
+      );
+    }
+
     final livePackage = await ApiService.instance.fetchMallPackage(mallId);
     if (livePackage != null && livePackage.metadata.id.isNotEmpty) {
       return livePackage;
@@ -319,6 +380,25 @@ class MallDatabaseService {
       height: 45.0,
     );
 
+    final floorHeights = await ApiService.instance.fetchFloorHeights(targetMetadata.id);
+    final floorsList = floorHeights.map((fh) {
+      final fn = fh.floorNo;
+      final baseAlt = fh.baseAltitudeM;
+      final heightNext = fh.heightToNextM;
+      return FloorLevelConfig(
+        floorId: 'F$fn',
+        floorNumber: fn,
+        name: fn < 0
+            ? 'Basement B${fn.abs()}'
+            : (fn == 0 ? 'Ground Floor' : 'Floor $fn'),
+        relativeVectorMeters: heightNext,
+        absoluteHeightMeters: baseAlt,
+        bandMinMeters: baseAlt - 2.5,
+        bandMaxMeters: baseAlt + 2.5,
+        storesCount: mallDestinations.where((d) => d.floorNumber == fn).length,
+      );
+    }).toList();
+
     return FullMallPackage(
       metadata: targetMetadata,
       profile: BuildingElevationProfile(
@@ -326,7 +406,7 @@ class MallDatabaseService {
         name: targetMetadata.name,
         entranceBaseAnchorHeight: centerCoords.height,
         floorGapMeters: 4.5,
-        floors: const <FloorLevelConfig>[],
+        floors: floorsList,
       ),
       destinations: mallDestinations,
       entranceMarkers: const <EntranceMarkerNode>[],

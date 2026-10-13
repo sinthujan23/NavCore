@@ -30,9 +30,9 @@ The server binds to `0.0.0.0:5000` (accessible from both localhost and mobile de
 - `POST /api/auth/register` — Create new user or admin account
 - `GET /api/auth/me` — Verify token and fetch profile
 
-**Default Pre-Seeded Accounts:**
-- **Admin**: `admin@nexnav.com` / `admin123` (Admin Portal access)
-- **User**: `user@nexnav.com` / `user123` (Shopper AR Navigation access)
+**Default Pre-Seeded Accounts (Strong Passwords Enforced):**
+- **Admin**: `admin@nexnav.com` / `Admin@1234` (Admin Portal access)
+- **User**: `user@nexnav.com` / `User@1234` (Shopper AR Navigation access)
 
 ### 🏬 Malls & Venues (`/api/malls`)
 - `GET /api/malls` — List all venues/malls

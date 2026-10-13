@@ -145,8 +145,9 @@ router.put('/:id', requireAdmin, (req, res) => {
  * Admin: Delete destination POI
  */
 router.delete('/:id', requireAdmin, (req, res) => {
-  const poiId = req.params.id;
-  db.delete('destinations', d => d.id === poiId);
+  const poiId = (req.params.id || '').trim();
+  const lowerPoiId = poiId.toLowerCase();
+  db.delete('destinations', d => (d.id || '').trim().toLowerCase() === lowerPoiId);
   return res.json({ message: `Destination ${poiId} deleted successfully` });
 });
 

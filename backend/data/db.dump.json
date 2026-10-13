@@ -20,7 +20,5 @@
   "malls": [],
   "entranceMarkers": [],
   "floorHeights": [],
-  "destinations": [],
-  "parkingSlots": [],
-  "vehicleLocations": {}
+  "destinations": []
 }

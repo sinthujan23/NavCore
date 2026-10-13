@@ -25,6 +25,8 @@ import 'admin/admin_osm_map_screen.dart';
 import 'admin/admin_floor_heights_screen.dart';
 import '../data/mall_api_service.dart';
 import '../data/floor_height_model.dart';
+import 'package:http/http.dart' as http;
+import '../data/api_service.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   final String adminEmail;
@@ -90,7 +92,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     final seenIds = <String>{};
     final deduped = <DestinationPOI>[];
     for (final p in widget.destinations) {
-      final key = '${p.name.trim().toLowerCase()}#${p.floorNumber}#${p.mallId ?? ''}';
+      final key =
+          '${p.name.trim().toLowerCase()}#${p.floorNumber}#${p.mallId ?? ''}';
       if (!seen.contains(key) && !seenIds.contains(p.id)) {
         seen.add(key);
         seenIds.add(p.id);
@@ -142,18 +145,355 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     }
 
     // Refresh telemetry and metrics periodically without generating fake coordinates
-    _telemetryTimer = Timer.periodic(const Duration(milliseconds: 1500), (timer) {
+    _telemetryTimer = Timer.periodic(const Duration(milliseconds: 1500), (
+      timer,
+    ) {
       if (!mounted) return;
       setState(() {});
     });
   }
-
 
   @override
   void dispose() {
     _telemetryTimer?.cancel();
     _tabController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant AdminDashboardScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.destinations != oldWidget.destinations ||
+        widget.buildingProfile != oldWidget.buildingProfile) {
+      final seen = <String>{};
+      final seenIds = <String>{};
+      final deduped = <DestinationPOI>[];
+      for (final p in widget.destinations) {
+        final key =
+            '${p.name.trim().toLowerCase()}#${p.floorNumber}#${p.mallId ?? ''}';
+        if (!seen.contains(key) && !seenIds.contains(p.id)) {
+          seen.add(key);
+          seenIds.add(p.id);
+          deduped.add(p);
+        }
+      }
+      setState(() {
+        _currentDestinations = deduped;
+      });
+    }
+  }
+
+  MallMetadata? _resolveActiveMall() {
+    // If the catalog is empty, no mall exists in database
+    if (widget.mallService.catalog.isEmpty) return null;
+
+    // 1. Check for explicitly active mall in catalog
+    final active =
+        widget.mallService.catalog.where((m) => m.isActive).firstOrNull;
+    if (active != null) return active;
+
+    // 2. Check if buildingProfile.buildingId matches any existing mall in catalog
+    final profileId = widget.buildingProfile.buildingId.trim().toLowerCase();
+    if (profileId.isNotEmpty) {
+      final match = widget.mallService.catalog
+          .where((m) => m.id.trim().toLowerCase() == profileId)
+          .firstOrNull;
+      if (match != null) return match;
+    }
+
+    return null;
+  }
+
+  void _openServerConfigDialog() async {
+    final currentUrl = await ApiService.instance.getBaseUrl();
+    final urlController = TextEditingController(text: currentUrl);
+    bool testing = false;
+    String? testResult;
+    Color testResultColor = const Color(0xFF10B981);
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEEF2FF),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  LucideIcons.server,
+                  color: Color(0xFF4F46E5),
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Database Backend',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: const Color(0xFF0F172A),
+                      ),
+                    ),
+                    Text(
+                      'Live Cloud & Local Sync',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 11.5,
+                        color: const Color(0xFF64748B),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'API Endpoint URL',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: const Color(0xFF334155),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                TextField(
+                  controller: urlController,
+                  style: GoogleFonts.jetBrainsMono(
+                    fontSize: 12,
+                    color: const Color(0xFF0F172A),
+                  ),
+                  decoration: InputDecoration(
+                    hintText: 'https://nexnav.hashnate.com/api',
+                    hintStyle: GoogleFonts.jetBrainsMono(
+                      fontSize: 12,
+                      color: const Color(0xFF94A3B8),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    filled: true,
+                    fillColor: const Color(0xFFF8FAFC),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                if (testResult != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: testResultColor.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: testResultColor.withValues(alpha: 0.3),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          LucideIcons.checkCircle2,
+                          size: 14,
+                          color: testResultColor,
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            testResult!,
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
+                              color: testResultColor,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                        onPressed: testing
+                            ? null
+                            : () async {
+                                setDialogState(() {
+                                  testing = true;
+                                  testResult = 'Testing connection...';
+                                  testResultColor = const Color(0xFF3B82F6);
+                                });
+                                final input = urlController.text.trim();
+                                final norm = ApiService.normalizeUrl(
+                                  input.isNotEmpty
+                                      ? input
+                                      : ApiService.defaultBaseUrl,
+                                );
+                                try {
+                                  final res = await http
+                                      .get(Uri.parse('$norm/health'))
+                                      .timeout(const Duration(seconds: 5));
+                                  if (res.statusCode == 200) {
+                                    setDialogState(() {
+                                      testing = false;
+                                      testResult = 'Connected (200 OK)';
+                                      testResultColor = const Color(0xFF10B981);
+                                    });
+                                  } else {
+                                    setDialogState(() {
+                                      testing = false;
+                                      testResult =
+                                          'Server returned HTTP ${res.statusCode}';
+                                      testResultColor = const Color(0xFFEF4444);
+                                    });
+                                  }
+                                } catch (e) {
+                                  setDialogState(() {
+                                    testing = false;
+                                    testResult = 'Connection failed: $e';
+                                    testResultColor = const Color(0xFFEF4444);
+                                  });
+                                }
+                              },
+                        icon: const Icon(LucideIcons.activity, size: 14),
+                        label: Text(
+                          testing ? 'Pinging...' : 'Test Ping',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    TextButton(
+                      onPressed: () {
+                        urlController.text = ApiService.defaultBaseUrl;
+                        setDialogState(() {
+                          testResult = null;
+                        });
+                      },
+                      child: Text(
+                        'Reset Cloud',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 11.5,
+                          color: const Color(0xFF64748B),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const Divider(height: 24),
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF1F5F9),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        LucideIcons.database,
+                        size: 16,
+                        color: Color(0xFF0F172A),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'All additions, edits, and deletions persist directly into the backend database (db.json and dump.json).',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 11,
+                            color: const Color(0xFF475569),
+                            height: 1.3,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(
+                'Cancel',
+                style: GoogleFonts.plusJakartaSans(
+                  fontWeight: FontWeight.w600,
+                  color: const Color(0xFF64748B),
+                ),
+              ),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF0F172A),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              onPressed: () async {
+                final input = urlController.text.trim();
+                if (input.isEmpty || input == ApiService.defaultBaseUrl) {
+                  await ApiService.instance.resetToDefaultBaseUrl();
+                } else {
+                  await ApiService.instance.setCustomBaseUrl(input);
+                }
+                // ignore: use_build_context_synchronously
+                Navigator.pop(ctx);
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Connected to ${urlController.text}'),
+                      backgroundColor: const Color(0xFF10B981),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                }
+              },
+              child: Text(
+                'Save & Connect',
+                style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _openMarkerConfigModal() {
@@ -175,14 +515,20 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             SnackBar(
               content: Row(
                 children: [
-                  const Icon(LucideIcons.checkCircle2, color: Colors.white, size: 18),
+                  const Icon(
+                    LucideIcons.checkCircle2,
+                    color: Colors.white,
+                    size: 18,
+                  ),
                   const SizedBox(width: 8),
                   Text('AR Marker ${marker.markerId} registered!'),
                 ],
               ),
               backgroundColor: const Color(0xFF10B981),
               behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
             ),
           );
         },
@@ -202,12 +548,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(
-              'NexNav Admin Panel',
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 16,
-                fontWeight: FontWeight.w800,
-                color: const Color(0xFF0F172A),
+            GestureDetector(
+              onLongPress: _openServerConfigDialog,
+              child: Text(
+                'NexNav Admin Panel',
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                  color: const Color(0xFF0F172A),
+                ),
               ),
             ),
             const SizedBox(height: 2),
@@ -237,7 +586,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
               tooltip: 'Logout',
-              icon: const Icon(LucideIcons.logOut, color: Color(0xFFEF4444), size: 16),
+              icon: const Icon(
+                LucideIcons.logOut,
+                color: Color(0xFFEF4444),
+                size: 16,
+              ),
               onPressed: widget.onLogout,
             ),
           ),
@@ -420,7 +773,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   label: 'GPS SIGNAL',
                   value: _satCount > 0
                       ? '$_satCount Sats'
-                      : (_isRealHardwareActive ? 'Fix Pending' : 'Sensors Ready'),
+                      : (_isRealHardwareActive
+                            ? 'Fix Pending'
+                            : 'Sensors Ready'),
                   accentColor: const Color(0xFF059669),
                 ),
               ],
@@ -463,28 +818,34 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
 
   // TAB 1: CONTROL HUB DASHBOARD
   Widget _buildControlHubTab() {
-    final allSlots = ParkingService.instance.allFloorSlots.values.expand((s) => s).toList();
+    final allSlots = ParkingService.instance.allFloorSlots.values
+        .expand((s) => s)
+        .toList();
     final totalParking = allSlots.length;
-    final occupiedParking = allSlots.where((s) => s.status == ParkingSlotStatus.occupied).length;
-    final parkingVal = totalParking > 0 ? '$occupiedParking / $totalParking' : '0 / 0';
-    final parkingBadge = totalParking > 0 ? '${(occupiedParking / totalParking * 100).toInt()}% Filled' : 'No Slots Added';
+    final occupiedParking = allSlots
+        .where((s) => s.status == ParkingSlotStatus.occupied)
+        .length;
+    final parkingVal = totalParking > 0
+        ? '$occupiedParking / $totalParking'
+        : '0 / 0';
+    final parkingBadge = totalParking > 0
+        ? '${(occupiedParking / totalParking * 100).toInt()}% Filled'
+        : 'No Slots Added';
 
-    final bool hasActiveVenue = widget.mallService.catalog.any((m) => m.isActive) ||
-        (widget.buildingProfile.buildingId.isNotEmpty &&
-            widget.buildingProfile.name.isNotEmpty &&
-            widget.buildingProfile.name != 'Venue');
-
-    final activeMall = widget.mallService.catalog.where((m) => m.isActive).firstOrNull ??
-        (widget.mallService.catalog.isNotEmpty ? widget.mallService.catalog.first : null);
+    final activeMall = _resolveActiveMall();
+    final bool hasActiveVenue = activeMall != null;
 
     final String displayBuildingName = hasActiveVenue
-        ? (widget.buildingProfile.name.isNotEmpty && widget.buildingProfile.name != 'Venue'
-            ? widget.buildingProfile.name
-            : (activeMall?.name ?? 'No Venue'))
+        ? activeMall.name
         : 'No Venue';
 
     final int floorsCount = hasActiveVenue
-        ? (activeMall?.floorCount ?? widget.buildingProfile.floors.length)
+        ? (activeMall.floorCount > 0
+            ? activeMall.floorCount
+            : (widget.buildingProfile.buildingId.trim().toLowerCase() ==
+                    activeMall.id.trim().toLowerCase()
+                ? widget.buildingProfile.floors.length
+                : 0))
         : 0;
 
     return ListView(
@@ -497,14 +858,21 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               child: _buildModernMetricCard(
                 title: 'Active Building',
                 value: displayBuildingName,
-                badgeText: floorsCount > 0 ? '$floorsCount Floors Added' : 'No Floors Added',
-                onTap: () {
-                  Navigator.push(
+                badgeText: hasActiveVenue
+                    ? (floorsCount > 0
+                        ? '$floorsCount Floors Added'
+                        : 'No Floors Added')
+                    : 'No Venue Added',
+                onTap: () async {
+                  await Navigator.push(
                     context,
                     MaterialPageRoute(
                       builder: (context) => AdminVenueManagerScreen(
                         mallService: widget.mallService,
-                        onSelectActiveMall: widget.onSelectActiveMall,
+                        onSelectActiveMall: (newMallId) async {
+                          await widget.onSelectActiveMall(newMallId);
+                          if (mounted) setState(() {});
+                        },
                         userCoords: GeodeticCoords(
                           latitude: _liveLat,
                           longitude: _liveLng,
@@ -513,6 +881,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                       ),
                     ),
                   );
+                  await widget.mallService.getMallsList();
+                  if (mounted) {
+                    setState(() {});
+                  }
                 },
               ),
             ),
@@ -520,8 +892,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             Expanded(
               child: _buildModernMetricCard(
                 title: 'Stores & Shops',
-                value: '${_currentDestinations.length} Stores',
-                badgeText: 'Active Shops',
+                value: hasActiveVenue
+                    ? '${_currentDestinations.length} Stores'
+                    : '0 Stores',
+                badgeText: hasActiveVenue ? 'Active Shops' : 'No Active Venue',
                 onTap: () {
                   Navigator.push(
                     context,
@@ -535,9 +909,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                           height: _liveHeight,
                         ),
                         onAddPoi: (newPoi) {
-                          final key = '${newPoi.name.trim().toLowerCase()}#${newPoi.floorNumber}#${newPoi.mallId ?? ''}';
+                          final key =
+                              '${newPoi.name.trim().toLowerCase()}#${newPoi.floorNumber}#${newPoi.mallId ?? ''}';
                           setState(() {
-                            _currentDestinations.removeWhere((p) => p.id == newPoi.id || '${p.name.trim().toLowerCase()}#${p.floorNumber}#${p.mallId ?? ''}' == key);
+                            _currentDestinations.removeWhere(
+                              (p) =>
+                                  p.id == newPoi.id ||
+                                  '${p.name.trim().toLowerCase()}#${p.floorNumber}#${p.mallId ?? ''}' ==
+                                      key,
+                            );
                             _currentDestinations.insert(0, newPoi);
                           });
                           widget.onAddPoi?.call(newPoi);
@@ -545,14 +925,19 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                         onUpdatePoi: (updatedPoi) {
                           setState(() {
                             final idx = _currentDestinations.indexWhere(
-                                (p) => p.id == updatedPoi.id);
-                            if (idx != -1) _currentDestinations[idx] = updatedPoi;
+                              (p) => p.id == updatedPoi.id,
+                            );
+                            if (idx != -1) {
+                              _currentDestinations[idx] = updatedPoi;
+                            }
                           });
                           widget.onUpdatePoi?.call(updatedPoi);
                         },
                         onDeletePoi: (poiId) {
                           setState(() {
-                            _currentDestinations.removeWhere((p) => p.id == poiId);
+                            _currentDestinations.removeWhere(
+                              (p) => p.id == poiId,
+                            );
                           });
                           widget.onDeletePoi?.call(poiId);
                         },
@@ -605,6 +990,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   apiService: RestMallBackendApi(),
                   onHeightsUpdated: (heights) {
                     widget.onFloorHeightsUpdated?.call(heights);
+                  },
+                  onMallSelected: (newMallId) {
+                    widget.onSelectActiveMall(newMallId);
                   },
                 ),
               ),
@@ -659,9 +1047,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                     height: _liveHeight,
                   ),
                   onAddPoi: (newPoi) {
-                    final key = '${newPoi.name.trim().toLowerCase()}#${newPoi.floorNumber}#${newPoi.mallId ?? ''}';
+                    final key =
+                        '${newPoi.name.trim().toLowerCase()}#${newPoi.floorNumber}#${newPoi.mallId ?? ''}';
                     setState(() {
-                      _currentDestinations.removeWhere((p) => p.id == newPoi.id || '${p.name.trim().toLowerCase()}#${p.floorNumber}#${p.mallId ?? ''}' == key);
+                      _currentDestinations.removeWhere(
+                        (p) =>
+                            p.id == newPoi.id ||
+                            '${p.name.trim().toLowerCase()}#${p.floorNumber}#${p.mallId ?? ''}' ==
+                                key,
+                      );
                       _currentDestinations.insert(0, newPoi);
                     });
                     widget.onAddPoi?.call(newPoi);
@@ -669,7 +1063,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   onUpdatePoi: (updatedPoi) {
                     setState(() {
                       final idx = _currentDestinations.indexWhere(
-                          (p) => p.id == updatedPoi.id);
+                        (p) => p.id == updatedPoi.id,
+                      );
                       if (idx != -1) _currentDestinations[idx] = updatedPoi;
                     });
                     widget.onUpdatePoi?.call(updatedPoi);
@@ -690,7 +1085,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
 
         _buildQuickActionCard(
           title: 'Manage Parking & Spots',
-          badge: totalParking > 0 ? '$totalParking Bays Active' : '0 Bays Configured',
+          badge: totalParking > 0
+              ? '$totalParking Bays Active'
+              : '0 Bays Configured',
           onTap: () {
             Navigator.push(
               context,
@@ -708,16 +1105,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
 
   // TAB 2: SYSTEM MODULES LIST
   Widget _buildModulesTab() {
-    final bool hasActiveVenue = widget.mallService.catalog.any((m) => m.isActive) ||
-        (widget.buildingProfile.buildingId.isNotEmpty &&
-            widget.buildingProfile.name.isNotEmpty &&
-            widget.buildingProfile.name != 'Venue');
-
-    final activeMall = widget.mallService.catalog.where((m) => m.isActive).firstOrNull ??
-        (widget.mallService.catalog.isNotEmpty ? widget.mallService.catalog.first : null);
+    final activeMall = _resolveActiveMall();
+    final bool hasActiveVenue = activeMall != null;
 
     final int floorsCount = hasActiveVenue
-        ? (activeMall?.floorCount ?? widget.buildingProfile.floors.length)
+        ? (activeMall.floorCount > 0
+            ? activeMall.floorCount
+            : (widget.buildingProfile.buildingId.trim().toLowerCase() ==
+                    activeMall.id.trim().toLowerCase()
+                ? widget.buildingProfile.floors.length
+                : 0))
         : 0;
 
     return ListView(
@@ -726,7 +1123,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         _buildModuleDetailCard(
           title: 'Building Floor & Height Setup',
           subtitle: 'Set floor height levels for accurate indoor navigation',
-          statusText: hasActiveVenue ? '$floorsCount Floors Set' : '0 Floors Set',
+          statusText: hasActiveVenue
+              ? '$floorsCount Floors Set'
+              : '0 Floors Set',
           onTap: () {
             Navigator.push(
               context,
@@ -738,6 +1137,21 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                     longitude: _liveLng,
                     height: _liveHeight,
                   ),
+                  onProfileUpdated: (updatedProfile) {
+                    final heights = updatedProfile.floors.map((f) {
+                      return FloorHeightData(
+                        mallId: updatedProfile.buildingId,
+                        floorNo: f.floorNumber,
+                        heightToNextM: f.relativeVectorMeters,
+                        baseAltitudeM: f.absoluteHeightMeters,
+                        source: 'admin',
+                        confidence: 1.0,
+                        isLocked: true,
+                        updatedAt: DateTime.now().toIso8601String(),
+                      );
+                    }).toList();
+                    widget.onFloorHeightsUpdated?.call(heights);
+                  },
                 ),
               ),
             );
@@ -746,7 +1160,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         const SizedBox(height: 12),
         _buildModuleDetailCard(
           title: 'Phone Motion & GPS Sensors',
-          subtitle: 'View live GPS position, compass direction, and phone sensors',
+          subtitle:
+              'View live GPS position, compass direction, and phone sensors',
           statusText: 'Active',
           onTap: () {
             Navigator.push(
@@ -798,11 +1213,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
 
   // TAB 3: REAL-TIME TELEMETRY STREAM
   Widget _buildTelemetryStreamTab() {
-    final ecef = geodeticToECEF(GeodeticCoords(
-      latitude: _liveLat,
-      longitude: _liveLng,
-      height: _liveHeight,
-    ));
+    final ecef = geodeticToECEF(
+      GeodeticCoords(
+        latitude: _liveLat,
+        longitude: _liveLng,
+        height: _liveHeight,
+      ),
+    );
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -858,14 +1275,19 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   ),
                   const SizedBox(width: 8),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: const Color(0xFFF1F5F9),
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(color: const Color(0xFFE2E8F0)),
                     ),
                     child: Text(
-                      _isRealHardwareActive ? '100 Hz HARDWARE ACTIVE' : 'SENSORS READY',
+                      _isRealHardwareActive
+                          ? '100 Hz HARDWARE ACTIVE'
+                          : 'SENSORS READY',
                       style: GoogleFonts.jetBrainsMono(
                         fontSize: 10,
                         fontWeight: FontWeight.bold,
@@ -876,16 +1298,50 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 ],
               ),
               const SizedBox(height: 16),
-              _buildTelemetryConsoleLine('GPS.LATITUDE', '${_liveLat.toStringAsFixed(6)}°'),
-              _buildTelemetryConsoleLine('GPS.LONGITUDE', '${_liveLng.toStringAsFixed(6)}°'),
-              _buildTelemetryConsoleLine('GPS.HEIGHT_WGS84', '${_liveHeight.toStringAsFixed(2)} m'),
-              _buildTelemetryConsoleLine('GPS.ACCURACY_FIX', _liveAccuracy > 0 ? '±${_liveAccuracy.toStringAsFixed(1)} m' : 'Standby'),
-              _buildTelemetryConsoleLine('MAGNETOMETER.HEADING', _heading > 0 ? '${_heading.toStringAsFixed(1)}° (${_getCardinalDir(_heading)})' : 'Standby'),
-              _buildTelemetryConsoleLine('ACCELEROMETER.PITCH', '${_pitch.toStringAsFixed(1)}° (${_tiltDir.name.toUpperCase()})'),
-              _buildTelemetryConsoleLine('BAROMETER.RAW_PRESSURE', '${_rawPressure.toStringAsFixed(2)} hPa'),
-              _buildTelemetryConsoleLine('BAROMETER.SMOOTHED', '${_smoothedPressure.toStringAsFixed(2)} hPa'),
-              _buildTelemetryConsoleLine('KALMAN.VARIANCE', _kalmanVariance.toStringAsExponential(3)),
-              _buildTelemetryConsoleLine('ACTIVE.MARKERS', '$_markerCount Registered'),
+              _buildTelemetryConsoleLine(
+                'GPS.LATITUDE',
+                '${_liveLat.toStringAsFixed(6)}°',
+              ),
+              _buildTelemetryConsoleLine(
+                'GPS.LONGITUDE',
+                '${_liveLng.toStringAsFixed(6)}°',
+              ),
+              _buildTelemetryConsoleLine(
+                'GPS.HEIGHT_WGS84',
+                '${_liveHeight.toStringAsFixed(2)} m',
+              ),
+              _buildTelemetryConsoleLine(
+                'GPS.ACCURACY_FIX',
+                _liveAccuracy > 0
+                    ? '±${_liveAccuracy.toStringAsFixed(1)} m'
+                    : 'Standby',
+              ),
+              _buildTelemetryConsoleLine(
+                'MAGNETOMETER.HEADING',
+                _heading > 0
+                    ? '${_heading.toStringAsFixed(1)}° (${_getCardinalDir(_heading)})'
+                    : 'Standby',
+              ),
+              _buildTelemetryConsoleLine(
+                'ACCELEROMETER.PITCH',
+                '${_pitch.toStringAsFixed(1)}° (${_tiltDir.name.toUpperCase()})',
+              ),
+              _buildTelemetryConsoleLine(
+                'BAROMETER.RAW_PRESSURE',
+                '${_rawPressure.toStringAsFixed(2)} hPa',
+              ),
+              _buildTelemetryConsoleLine(
+                'BAROMETER.SMOOTHED',
+                '${_smoothedPressure.toStringAsFixed(2)} hPa',
+              ),
+              _buildTelemetryConsoleLine(
+                'KALMAN.VARIANCE',
+                _kalmanVariance.toStringAsExponential(3),
+              ),
+              _buildTelemetryConsoleLine(
+                'ACTIVE.MARKERS',
+                '$_markerCount Registered',
+              ),
             ],
           ),
         ),
@@ -920,9 +1376,18 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 ),
               ),
               const SizedBox(height: 14),
-              _buildTelemetryConsoleLine('X_ECEF (m)', ecef.x.toStringAsFixed(2)),
-              _buildTelemetryConsoleLine('Y_ECEF (m)', ecef.y.toStringAsFixed(2)),
-              _buildTelemetryConsoleLine('Z_ECEF (m)', ecef.z.toStringAsFixed(2)),
+              _buildTelemetryConsoleLine(
+                'X_ECEF (m)',
+                ecef.x.toStringAsFixed(2),
+              ),
+              _buildTelemetryConsoleLine(
+                'Y_ECEF (m)',
+                ecef.y.toStringAsFixed(2),
+              ),
+              _buildTelemetryConsoleLine(
+                'Z_ECEF (m)',
+                ecef.z.toStringAsFixed(2),
+              ),
             ],
           ),
         ),
@@ -1085,7 +1550,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                       ),
                       const SizedBox(width: 8),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
                         decoration: BoxDecoration(
                           color: const Color(0xFFF1F5F9),
                           borderRadius: BorderRadius.circular(6),

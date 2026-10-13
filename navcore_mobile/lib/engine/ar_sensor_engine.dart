@@ -236,6 +236,7 @@ class BarometricElevationEngine {
 
   bool get isCalibrated => _entranceBaselinePressureHpa != null;
   double? get baselinePressure => _entranceBaselinePressureHpa;
+  double get baselineAnchorHeight => _entranceAnchorHeightMeters;
 
   /// Calibrate reference baseline pressure at building entrance or anchor point
   void calibrateBaseline(double currentPressureHpa, [double baseHeightMeters = 0.0]) {
@@ -261,6 +262,28 @@ class BarometricElevationEngine {
         (1.0 - math.pow(currentPressureHpa / _entranceBaselinePressureHpa!, 0.1903));
 
     return _entranceAnchorHeightMeters + deltaMeters;
+  }
+
+  /// Computes fused elevation combining GNSS geodetic height and Barometric hypsometric model.
+  /// Suitable method: WGS84/MSL GNSS anchor datum + Barometric micro-elevation delta.
+  double computeFusedLocationHeight({
+    required double currentPressureHpa,
+    double? gpsAltitude,
+    double? gpsAccuracy,
+  }) {
+    final baroHeight = calculateAbsoluteHeight(currentPressureHpa);
+
+    if (gpsAltitude != null && gpsAltitude > 0 && !gpsAltitude.isNaN) {
+      if (gpsAccuracy != null && gpsAccuracy > 0 && gpsAccuracy < 20.0) {
+        // High confidence GNSS: weight GPS altitude as base datum
+        final gpsWeight = (1.0 - (gpsAccuracy / 25.0)).clamp(0.50, 0.85);
+        final fused = (gpsWeight * gpsAltitude) + ((1.0 - gpsWeight) * baroHeight);
+        return double.parse(fused.toStringAsFixed(2));
+      }
+      return double.parse(gpsAltitude.toStringAsFixed(2));
+    }
+
+    return double.parse(baroHeight.toStringAsFixed(2));
   }
 }
 

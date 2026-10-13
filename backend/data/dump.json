@@ -17,10 +17,246 @@
       "createdAt": "2026-10-01T00:00:00.000Z"
     }
   ],
-  "malls": [],
-  "entranceMarkers": [],
-  "floorHeights": [],
-  "destinations": [],
-  "parkingSlots": [],
-  "vehicleLocations": {}
+  "malls": [
+    {
+      "id": "1",
+      "name": "Minimall",
+      "city": "Trincomalee",
+      "country": "Sri Lanka",
+      "latitude": 8.502434,
+      "longitude": 81.181259,
+      "floorCount": 5,
+      "packageSizeBytesMB": 4.8,
+      "category": "Shopping & Entertainment",
+      "rating": "4.8",
+      "isDownloaded": true,
+      "isActive": true,
+      "entranceBaseAnchorHeight": 0.0,
+      "floorGapMeters": 4.5
+    },
+    {
+      "id": "2",
+      "name": "mall bazar",
+      "city": "Trincomalee",
+      "country": "Sri Lanka",
+      "latitude": 8.50243,
+      "longitude": 81.181256,
+      "floorCount": 7,
+      "packageSizeBytesMB": 4.8,
+      "category": "Shopping & Entertainment",
+      "rating": "4.8",
+      "isDownloaded": true,
+      "isActive": false,
+      "entranceBaseAnchorHeight": 0.0,
+      "floorGapMeters": 4.5
+    }
+  ],
+  "entranceMarkers": [
+    {
+      "markerId": "mrk-minimall-01",
+      "buildingId": "1",
+      "name": "Minimall Main Entrance Gate",
+      "latitude": 8.502434,
+      "longitude": 81.181259,
+      "baseHeight": 8.5,
+      "physicalWidthMeters": 0.25,
+      "physicalHeightMeters": 0.25,
+      "qrCodeData": "NEXNAV://MALL/1/MARKER/01"
+    },
+    {
+      "markerId": "mrk-mallbazar-01",
+      "buildingId": "2",
+      "name": "Mall Bazar Entrance",
+      "latitude": 8.50243,
+      "longitude": 81.181256,
+      "baseHeight": 8.5,
+      "physicalWidthMeters": 0.25,
+      "physicalHeightMeters": 0.25,
+      "qrCodeData": "NEXNAV://MALL/2/MARKER/01"
+    }
+  ],
+  "floorHeights": [
+    {
+      "mallId": "1",
+      "floorNo": 1,
+      "heightToNextM": 4.5,
+      "baseAltitudeM": 8.5,
+      "source": "admin",
+      "confidence": 1.0,
+      "isLocked": true,
+      "updatedAt": "2026-10-13T08:28:55.342Z"
+    },
+    {
+      "mallId": "1",
+      "floorNo": 2,
+      "heightToNextM": 4.5,
+      "baseAltitudeM": 13.0,
+      "source": "admin",
+      "confidence": 1.0,
+      "isLocked": true,
+      "updatedAt": "2026-10-13T08:28:55.956Z"
+    },
+    {
+      "mallId": "1",
+      "floorNo": 3,
+      "heightToNextM": 4.5,
+      "baseAltitudeM": 17.5,
+      "source": "admin",
+      "confidence": 1.0,
+      "isLocked": true,
+      "updatedAt": "2026-10-13T08:28:56.541Z"
+    },
+    {
+      "mallId": "1",
+      "floorNo": 4,
+      "heightToNextM": 4.5,
+      "baseAltitudeM": 22.0,
+      "source": "admin",
+      "confidence": 1.0,
+      "isLocked": true,
+      "updatedAt": "2026-10-13T08:28:57.103Z"
+    },
+    {
+      "mallId": "1",
+      "floorNo": 5,
+      "heightToNextM": 4.5,
+      "baseAltitudeM": 26.5,
+      "source": "admin",
+      "confidence": 1.0,
+      "isLocked": true,
+      "updatedAt": "2026-10-13T08:28:57.696Z"
+    },
+    {
+      "mallId": "2",
+      "floorNo": 1,
+      "heightToNextM": 4.5,
+      "baseAltitudeM": 8.5,
+      "source": "admin",
+      "confidence": 1.0,
+      "isLocked": false,
+      "updatedAt": "2026-10-13T08:13:39.410Z"
+    },
+    {
+      "mallId": "2",
+      "floorNo": 2,
+      "heightToNextM": 4.5,
+      "baseAltitudeM": 13.0,
+      "source": "admin",
+      "confidence": 1.0,
+      "isLocked": false,
+      "updatedAt": "2026-10-13T08:13:40.062Z"
+    },
+    {
+      "mallId": "2",
+      "floorNo": 3,
+      "heightToNextM": 4.5,
+      "baseAltitudeM": 17.5,
+      "source": "admin",
+      "confidence": 1.0,
+      "isLocked": false,
+      "updatedAt": "2026-10-13T08:13:40.680Z"
+    },
+    {
+      "mallId": "2",
+      "floorNo": 4,
+      "heightToNextM": 4.5,
+      "baseAltitudeM": 22.0,
+      "source": "admin",
+      "confidence": 1.0,
+      "isLocked": false,
+      "updatedAt": "2026-10-13T08:13:41.269Z"
+    },
+    {
+      "mallId": "2",
+      "floorNo": 5,
+      "heightToNextM": 4.5,
+      "baseAltitudeM": 26.5,
+      "source": "admin",
+      "confidence": 1.0,
+      "isLocked": false,
+      "updatedAt": "2026-10-13T08:13:41.901Z"
+    },
+    {
+      "mallId": "2",
+      "floorNo": 6,
+      "heightToNextM": 4.5,
+      "baseAltitudeM": 31.0,
+      "source": "admin",
+      "confidence": 1.0,
+      "isLocked": false,
+      "updatedAt": "2026-10-13T08:13:33.098Z"
+    },
+    {
+      "mallId": "2",
+      "floorNo": 7,
+      "heightToNextM": 4.5,
+      "baseAltitudeM": 35.5,
+      "source": "admin",
+      "confidence": 1.0,
+      "isLocked": false,
+      "updatedAt": "2026-10-13T08:13:33.749Z"
+    }
+  ],
+  "destinations": [
+    {
+      "id": "poi-1791869565591",
+      "mallId": "1",
+      "name": "Shopy",
+      "category": "RETAIL & FASHION",
+      "floorNumber": 1,
+      "rating": 4.8,
+      "latitude": 8.502422,
+      "longitude": 81.181258,
+      "height": -84.6,
+      "description": "Retail fashion & clothing in Minimall.",
+      "openStatus": "Open Today: 10 AM - 10 PM",
+      "openingHours": "10:00 AM - 10:00 PM",
+      "imageUrl": ""
+    },
+    {
+      "id": "poi-1791869602835",
+      "mallId": "1",
+      "name": "Coffe Mat",
+      "category": "FOOD & DRINK",
+      "floorNumber": 1,
+      "rating": 4.8,
+      "latitude": 8.502437,
+      "longitude": 81.181246,
+      "height": -84.6,
+      "description": "Coffee, fresh tea & snack bar on Floor 1.",
+      "openStatus": "Open Today: 10 AM - 10 PM",
+      "openingHours": "10:00 AM - 10:00 PM",
+      "imageUrl": ""
+    },
+    {
+      "id": "poi-1791871432637",
+      "mallId": "1",
+      "name": "Shopys",
+      "category": "RETAIL & FASHION",
+      "floorNumber": 4,
+      "rating": 4.8,
+      "latitude": 8.502419,
+      "longitude": 81.181251,
+      "height": -71.1,
+      "description": "Fashion & apparel boutique on Floor 4.",
+      "openStatus": "Open Today: 10 AM - 10 PM",
+      "openingHours": "10:00 AM - 10:00 PM",
+      "imageUrl": ""
+    },
+    {
+      "id": "poi-1791871475990",
+      "mallId": "1",
+      "name": "Pizza hard",
+      "category": "FOOD & DRINK",
+      "floorNumber": 3,
+      "rating": 4.8,
+      "latitude": 8.502412,
+      "longitude": 81.181245,
+      "height": -75.6,
+      "description": "Oven fresh pizza, pasta and drinks on Floor 3.",
+      "openStatus": "Open Today: 10 AM - 10 PM",
+      "openingHours": "10:00 AM - 10:00 PM",
+      "imageUrl": ""
+    }
+  ]
 }

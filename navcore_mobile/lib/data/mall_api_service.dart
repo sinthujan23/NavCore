@@ -31,12 +31,16 @@ abstract class MallBackendApi {
     String mallId, {
     double? lat,
     double? lon,
+    double? barometerPressureHpa,
+    double? liveAltitudeM,
+    double? floorGapM,
   });
   Future<FloorHeightData> updateFloorHeight(
     String mallId,
     int floorNo, {
     double? heightToNextM,
     bool? isLocked,
+    double? baseAltitudeM,
   });
   Future<List<FloorHeightData>> addFloor(
     String mallId,
@@ -50,14 +54,14 @@ abstract class MallBackendApi {
 /// Production REST API Implementation with Local Fallback Hook
 class RestMallBackendApi implements MallBackendApi {
   final String baseUrl;
-  final bool useMockFallback;
+  final bool useOfflineFallback;
 
-  // Local state cache for offline mock fallback
-  final Map<String, List<FloorHeightData>> _localMockHeights = {};
+  // Local state cache for offline database fallback
+  final Map<String, List<FloorHeightData>> _localHeightsCache = {};
 
   RestMallBackendApi({
     String? baseUrl,
-    this.useMockFallback = false,
+    this.useOfflineFallback = false,
   }) : baseUrl = baseUrl ?? ApiService.defaultBaseUrl;
 
   @override
@@ -83,17 +87,14 @@ class RestMallBackendApi implements MallBackendApi {
   }
 
   List<FloorHeightData> _getOrCreateDefaultHeights(String mallId) {
-    return _localMockHeights[mallId] ?? <FloorHeightData>[];
+    return _localHeightsCache[mallId] ?? <FloorHeightData>[];
   }
 
   @override
   Future<List<FloorHeightData>> fetchFloorHeights(String mallId) async {
     final live = await ApiService.instance.fetchFloorHeights(mallId);
-    if (live.isNotEmpty) {
-      _localMockHeights[mallId] = live;
-      return live;
-    }
-    return _getOrCreateDefaultHeights(mallId);
+    _localHeightsCache[mallId] = live;
+    return live;
   }
 
   @override
@@ -101,26 +102,40 @@ class RestMallBackendApi implements MallBackendApi {
     String mallId, {
     double? lat,
     double? lon,
+    double? barometerPressureHpa,
+    double? liveAltitudeM,
+    double? floorGapM,
   }) async {
-    final live = await ApiService.instance.calculateFloorHeights(mallId, lat: lat, lon: lon);
+    final live = await ApiService.instance.calculateFloorHeights(
+      mallId,
+      lat: lat,
+      lon: lon,
+      barometerPressureHpa: barometerPressureHpa,
+      liveAltitudeM: liveAltitudeM,
+      floorGapM: floorGapM,
+    );
     if (live.isNotEmpty) {
-      _localMockHeights[mallId] = live;
+      _localHeightsCache[mallId] = live;
       return live;
     }
 
     final currentList = List<FloorHeightData>.from(_getOrCreateDefaultHeights(mallId));
+    currentList.sort((a, b) => a.floorNo.compareTo(b.floorNo));
     final updatedList = <FloorHeightData>[];
-    double cumulativeAlt = 0.0;
+    double cumulativeAlt = currentList.isNotEmpty && currentList.first.baseAltitudeM > 0
+        ? currentList.first.baseAltitudeM
+        : 8.5;
 
     for (int i = 0; i < currentList.length; i++) {
       final item = currentList[i];
       double h = item.heightToNextM;
       String src = item.source;
       double conf = item.confidence;
+      final isAdmin = item.isLocked || item.source == 'admin';
 
-      if (!item.isLocked && item.source != 'admin') {
+      if (!isAdmin) {
         src = 'barometer';
-        conf = 0.85;
+        conf = barometerPressureHpa != null ? 0.95 : 0.85;
       }
 
       updatedList.add(
@@ -128,6 +143,7 @@ class RestMallBackendApi implements MallBackendApi {
           baseAltitudeM: cumulativeAlt,
           source: src,
           confidence: conf,
+          isLocked: isAdmin,
           updatedAt: DateTime.now().toIso8601String(),
         ),
       );
@@ -135,7 +151,7 @@ class RestMallBackendApi implements MallBackendApi {
       cumulativeAlt += h;
     }
 
-    _localMockHeights[mallId] = updatedList;
+    _localHeightsCache[mallId] = updatedList;
     return updatedList;
   }
 
@@ -145,17 +161,19 @@ class RestMallBackendApi implements MallBackendApi {
     int floorNo, {
     double? heightToNextM,
     bool? isLocked,
+    double? baseAltitudeM,
   }) async {
     final success = await ApiService.instance.updateFloorHeight(
       mallId,
       floorNo,
       heightToNextM: heightToNextM,
       isLocked: isLocked,
+      baseAltitudeM: baseAltitudeM,
     );
     if (success) {
       final updated = await ApiService.instance.fetchFloorHeights(mallId);
       if (updated.isNotEmpty) {
-        _localMockHeights[mallId] = updated;
+        _localHeightsCache[mallId] = updated;
         final match = updated.firstWhere((f) => f.floorNo == floorNo, orElse: () => updated.first);
         return match;
       }
@@ -167,22 +185,24 @@ class RestMallBackendApi implements MallBackendApi {
       final old = currentList[idx];
       final updated = old.copyWith(
         heightToNextM: heightToNextM ?? old.heightToNextM,
-        isLocked: isLocked ?? (heightToNextM != null ? true : old.isLocked),
-        source: heightToNextM != null ? 'admin' : old.source,
-        confidence: heightToNextM != null ? 1.0 : old.confidence,
+        baseAltitudeM: baseAltitudeM ?? old.baseAltitudeM,
+        isLocked: isLocked ?? (heightToNextM != null || baseAltitudeM != null ? true : old.isLocked),
+        source: (heightToNextM != null || baseAltitudeM != null) ? 'admin' : old.source,
+        confidence: 1.0,
         updatedAt: DateTime.now().toIso8601String(),
       );
 
       currentList[idx] = updated;
+      currentList.sort((a, b) => a.floorNo.compareTo(b.floorNo));
 
-      double cumulativeAlt = 0.0;
+      double cumulativeAlt = currentList.first.baseAltitudeM > 0 ? currentList.first.baseAltitudeM : 8.5;
       for (int i = 0; i < currentList.length; i++) {
         currentList[i] = currentList[i].copyWith(baseAltitudeM: cumulativeAlt);
         cumulativeAlt += currentList[i].heightToNextM;
       }
 
-      _localMockHeights[mallId] = currentList;
-      return currentList[idx];
+      _localHeightsCache[mallId] = currentList;
+      return currentList.firstWhere((f) => f.floorNo == floorNo, orElse: () => currentList[idx]);
     }
 
     throw Exception('Floor $floorNo not found in mall $mallId');
@@ -196,7 +216,7 @@ class RestMallBackendApi implements MallBackendApi {
   ) async {
     final live = await ApiService.instance.addFloor(mallId, floorNo, heightToNextM);
     if (live.isNotEmpty) {
-      _localMockHeights[mallId] = live;
+      _localHeightsCache[mallId] = live;
       return live;
     }
 
@@ -218,44 +238,28 @@ class RestMallBackendApi implements MallBackendApi {
     );
     currentList.sort((a, b) => a.floorNo.compareTo(b.floorNo));
 
-    double cumulativeAlt = 0.0;
+    double cumulativeAlt = currentList.first.baseAltitudeM > 0 ? currentList.first.baseAltitudeM : 8.5;
     for (int i = 0; i < currentList.length; i++) {
       currentList[i] = currentList[i].copyWith(baseAltitudeM: cumulativeAlt);
       cumulativeAlt += currentList[i].heightToNextM;
     }
 
-    _localMockHeights[mallId] = currentList;
+    _localHeightsCache[mallId] = currentList;
     return currentList;
   }
 
   @override
   Future<List<FloorHeightData>> deleteFloor(String mallId, int floorNo) async {
     final live = await ApiService.instance.deleteFloor(mallId, floorNo);
-    if (live.isNotEmpty) {
-      _localMockHeights[mallId] = live;
-      return live;
-    }
-
-    final currentList = List<FloorHeightData>.from(
-      _getOrCreateDefaultHeights(mallId),
-    );
-    currentList.removeWhere((f) => f.floorNo == floorNo);
-
-    double cumulativeAlt = 0.0;
-    for (int i = 0; i < currentList.length; i++) {
-      currentList[i] = currentList[i].copyWith(baseAltitudeM: cumulativeAlt);
-      cumulativeAlt += currentList[i].heightToNextM;
-    }
-
-    _localMockHeights[mallId] = currentList;
-    return currentList;
+    _localHeightsCache[mallId] = live;
+    return live;
   }
 
   @override
   Future<List<FloorHeightData>> resetAllFloors(String mallId) async {
     final live = await ApiService.instance.resetFloorHeights(mallId);
     if (live.isNotEmpty) {
-      _localMockHeights[mallId] = live;
+      _localHeightsCache[mallId] = live;
       return live;
     }
 
@@ -278,7 +282,7 @@ class RestMallBackendApi implements MallBackendApi {
       cumulativeAlt += updated.heightToNextM;
     }
 
-    _localMockHeights[mallId] = updatedList;
+    _localHeightsCache[mallId] = updatedList;
     return updatedList;
   }
 }

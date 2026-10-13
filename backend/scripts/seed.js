@@ -17,7 +17,7 @@ const masterDatabase = {
     {
       id: 'usr-admin-01',
       email: 'admin@nexnav.com',
-      password: 'admin123',
+      password: 'Admin@1234',
       name: 'System Administrator',
       role: 'admin',
       createdAt: '2026-10-01T00:00:00.000Z',
@@ -25,7 +25,7 @@ const masterDatabase = {
     {
       id: 'usr-regular-01',
       email: 'user@nexnav.com',
-      password: 'user123',
+      password: 'User@1234',
       name: 'NexNav Shopper',
       role: 'user',
       createdAt: '2026-10-01T00:00:00.000Z',

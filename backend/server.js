@@ -297,7 +297,7 @@ app.get('/', (req, res) => {
 
     <div class="footer">
       <div>Connected Client: <span class="credentials-badge">Flutter NexNav Mobile</span></div>
-      <div>Admin: <span class="credentials-badge">admin@nexnav.com / admin123</span></div>
+      <div>Admin: <span class="credentials-badge">admin@nexnav.com / Admin@1234</span></div>
     </div>
   </div>
 </body>

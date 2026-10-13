@@ -80,7 +80,10 @@ class ARCameraPose {
 
     // Construct rotation matrix from Euler angles (order: Yaw Y -> Pitch X -> Roll Z)
     final qYaw = vmath.Quaternion.axisAngle(vmath.Vector3(0, 1, 0), yawRad);
-    final qPitch = vmath.Quaternion.axisAngle(vmath.Vector3(1, 0, 0), -pitchRad);
+    final qPitch = vmath.Quaternion.axisAngle(
+      vmath.Vector3(1, 0, 0),
+      -pitchRad,
+    );
     final qRoll = vmath.Quaternion.axisAngle(vmath.Vector3(0, 0, 1), rollRad);
     final orientation = qRoll * qPitch * qYaw;
 

@@ -57,12 +57,13 @@ CompassBearingBadge classifyCompassBadge(double bearingDeg) {
 }
 
 /// Resolves localized user coordinates relative to active indoor mall coordinate anchor.
-/// Uses user GPS when within valid proximity (< 300m), or anchors to venue entrance (~11m South)
-/// so that shops appear at natural indoor viewing distance in AR view during testing.
+/// Uses user GPS when within valid proximity (< 300m), or anchors user facing the shops
+/// (~11m along current heading) so that shops appear at natural indoor viewing distance in AR view during testing.
 GeodeticCoords getEffectiveUserCoords(
   GeodeticCoords userCoords,
   GeodeticCoords mallAnchor, {
   double maxProximityMeters = 300.0,
+  double? facingHeadingDegrees,
 }) {
   final hasGps = userCoords.latitude != 0.0 && userCoords.longitude != 0.0;
   final hasAnchor = mallAnchor.latitude != 0.0 && mallAnchor.longitude != 0.0;
@@ -78,12 +79,22 @@ GeodeticCoords getEffectiveUserCoords(
   }
 
   // Outdoor testing fallback / uncalibrated GPS (> 300m away):
-  // Place user ~11m South of the shops anchor facing North towards shops
-  final anchorLat = hasAnchor ? mallAnchor.latitude : 8.4877;
-  final anchorLon = hasAnchor ? mallAnchor.longitude : 81.173736;
+  // Anchor user ~11m in front of shops facing towards them
+  final anchorLat = hasAnchor ? mallAnchor.latitude : 6.927079;
+  final anchorLon = hasAnchor ? mallAnchor.longitude : 79.845612;
+
+  double deltaLat = -0.00010;
+  double deltaLon = 0.0;
+
+  if (facingHeadingDegrees != null) {
+    final rad = (facingHeadingDegrees * pi) / 180.0;
+    deltaLat = -0.00010 * cos(rad);
+    deltaLon = -0.00010 * sin(rad);
+  }
+
   return GeodeticCoords(
-    latitude: anchorLat - 0.00010, // ~11 meters South
-    longitude: anchorLon,
+    latitude: anchorLat + deltaLat,
+    longitude: anchorLon + deltaLon,
     height: (userCoords.height != 0.0) ? userCoords.height : mallAnchor.height,
   );
 }

@@ -149,11 +149,73 @@ router.put('/:id', requireAdmin, (req, res) => {
  * Admin: Delete a mall
  */
 router.delete('/:id', requireAdmin, (req, res) => {
+  const mallId = (req.params.id || '').trim();
+  const lowerId = mallId.toLowerCase();
+
+  db.delete('malls', m => (m.id || '').trim().toLowerCase() === lowerId);
+  db.delete('destinations', d => (d.mallId || '').trim().toLowerCase() === lowerId);
+  db.delete('floorHeights', f => (f.mallId || '').trim().toLowerCase() === lowerId);
+  db.delete('entranceMarkers', e => (e.buildingId || '').trim().toLowerCase() === lowerId);
+  db.delete('parkingSlots', s => (s.mallId || '').trim().toLowerCase() === lowerId);
+
+  return res.json({ message: `Mall ${mallId} and all associated records deleted permanently` });
+});
+
+/**
+ * POST /api/malls/:id/markers
+ * Admin: Add an entrance reference marker
+ */
+router.post('/:id/markers', requireAdmin, (req, res) => {
   const mallId = req.params.id;
-  db.delete('malls', m => m.id === mallId);
-  db.delete('destinations', d => d.mallId === mallId);
-  db.delete('floorHeights', f => f.mallId === mallId);
-  return res.json({ message: `Mall ${mallId} and associated records deleted` });
+  const body = req.body;
+
+  if (!body.name || body.latitude === undefined || body.longitude === undefined) {
+    return res.status(400).json({ error: 'Missing marker fields: name, latitude, longitude' });
+  }
+
+  const marker = {
+    markerId: body.markerId || `mrk-${Date.now()}`,
+    buildingId: mallId,
+    name: body.name,
+    latitude: Number(body.latitude),
+    longitude: Number(body.longitude),
+    baseHeight: Number(body.baseHeight !== undefined ? body.baseHeight : 0.0),
+    physicalWidthMeters: Number(body.physicalWidthMeters || 0.20),
+    physicalHeightMeters: Number(body.physicalHeightMeters || 0.20),
+    qrCodeData: body.qrCodeData || null,
+    createdAt: new Date().toISOString(),
+  };
+
+  db.insert('entranceMarkers', marker);
+  return res.status(201).json(marker);
+});
+
+/**
+ * PUT /api/malls/markers/:markerId
+ * Admin: Update an entrance marker
+ */
+router.put('/markers/:markerId', requireAdmin, (req, res) => {
+  const markerId = req.params.markerId;
+  const updated = db.update(
+    'entranceMarkers',
+    m => m.markerId === markerId,
+    m => ({ ...m, ...req.body, markerId })
+  );
+
+  if (!updated) {
+    return res.status(404).json({ error: 'Entrance marker not found' });
+  }
+  return res.json(updated);
+});
+
+/**
+ * DELETE /api/malls/markers/:markerId
+ * Admin: Delete an entrance marker
+ */
+router.delete('/markers/:markerId', requireAdmin, (req, res) => {
+  const markerId = req.params.markerId;
+  db.delete('entranceMarkers', m => m.markerId === markerId);
+  return res.json({ message: `Entrance marker ${markerId} deleted permanently` });
 });
 
 module.exports = router;

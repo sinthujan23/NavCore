@@ -33,3 +33,7 @@ certs/
 # Temporary files
 temp/
 **/temp/
+scratch_*.*
+**/scratch_*.*
+scratch/
+**/scratch/

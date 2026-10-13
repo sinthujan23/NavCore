@@ -21,26 +21,44 @@ class FloorHeightData {
   });
 
   Map<String, dynamic> toJson() => {
+        'mallId': mallId,
         'mall_id': mallId,
+        'floorNo': floorNo,
         'floor_no': floorNo,
+        'heightToNextM': heightToNextM,
         'height_to_next_m': heightToNextM,
+        'baseAltitudeM': baseAltitudeM,
         'base_altitude_m': baseAltitudeM,
         'source': source,
         'confidence': confidence,
+        'isLocked': isLocked,
         'is_locked': isLocked ? 1 : 0,
+        'updatedAt': updatedAt,
         'updated_at': updatedAt,
       };
 
   factory FloorHeightData.fromJson(Map<String, dynamic> json) {
+    num? parseNum(dynamic val) {
+      if (val is num) return val;
+      if (val is String) return num.tryParse(val);
+      return null;
+    }
+
+    final fn = parseNum(json['floorNo'] ?? json['floor_no'])?.toInt() ?? 1;
+    final hNext = parseNum(json['heightToNextM'] ?? json['height_to_next_m'])?.toDouble() ?? 4.5;
+    final bAlt = parseNum(json['baseAltitudeM'] ?? json['base_altitude_m'])?.toDouble() ?? 0.0;
+    final conf = parseNum(json['confidence'])?.toDouble() ?? 1.0;
+    final locked = (json['isLocked'] == true || json['is_locked'] == 1 || json['is_locked'] == true);
+
     return FloorHeightData(
-      mallId: json['mall_id'] ?? 'mall-one-galle-face',
-      floorNo: (json['floor_no'] as num).toInt(),
-      heightToNextM: (json['height_to_next_m'] as num).toDouble(),
-      baseAltitudeM: (json['base_altitude_m'] as num).toDouble(),
-      source: json['source'] ?? 'default',
-      confidence: (json['confidence'] as num).toDouble(),
-      isLocked: (json['is_locked'] == 1 || json['is_locked'] == true),
-      updatedAt: json['updated_at'] ?? DateTime.now().toIso8601String(),
+      mallId: (json['mallId'] ?? json['mall_id'] ?? '').toString(),
+      floorNo: fn,
+      heightToNextM: hNext,
+      baseAltitudeM: bAlt,
+      source: (json['source'] ?? 'default').toString(),
+      confidence: conf,
+      isLocked: locked,
+      updatedAt: (json['updatedAt'] ?? json['updated_at'] ?? DateTime.now().toIso8601String()).toString(),
     );
   }
 

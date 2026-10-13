@@ -15,7 +15,7 @@ const seedData = {
     {
       id: 'usr-admin-01',
       email: 'admin@nexnav.com',
-      password: 'admin123',
+      password: 'Admin@1234',
       name: 'System Administrator',
       role: 'admin',
       createdAt: '2026-10-01T00:00:00.000Z',
@@ -23,7 +23,7 @@ const seedData = {
     {
       id: 'usr-regular-01',
       email: 'user@nexnav.com',
-      password: 'user123',
+      password: 'User@1234',
       name: 'NexNav Shopper',
       role: 'user',
       createdAt: '2026-10-01T00:00:00.000Z',
@@ -77,9 +77,20 @@ class DataStore {
 
   _save(newData) {
     try {
-      fs.writeFileSync(DB_FILE, JSON.stringify(newData, null, 2), 'utf-8');
+      const content = JSON.stringify(newData, null, 2);
+      fs.writeFileSync(DB_FILE, content, 'utf-8');
+
+      // Also permanently sync to dump files so all creates, updates, and deletes persist across server reloads
+      const DUMP_FILE = path.join(__dirname, '..', 'data', 'db.dump.json');
+      const DUMP_ALIAS = path.join(__dirname, '..', 'data', 'dump.json');
+      try {
+        fs.writeFileSync(DUMP_FILE, content, 'utf-8');
+      } catch (_) {}
+      try {
+        fs.writeFileSync(DUMP_ALIAS, content, 'utf-8');
+      } catch (_) {}
     } catch (err) {
-      console.error('[DataStore] Error saving db.json:', err.message);
+      console.error('[DataStore] Error saving database:', err.message);
     }
   }
 
@@ -111,6 +122,11 @@ class DataStore {
     return item;
   }
 
+  // Alias for insert
+  push(collection, item) {
+    return this.insert(collection, item);
+  }
+
   update(collection, predicate, updater) {
     const list = this.get(collection);
     const index = list.findIndex(predicate);
@@ -129,6 +145,11 @@ class DataStore {
     this.data[collection] = filtered;
     this._save(this.data);
     return filtered;
+  }
+
+  // Alias for delete
+  remove(collection, predicate) {
+    return this.delete(collection, predicate);
   }
 }
 

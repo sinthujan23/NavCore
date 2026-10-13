@@ -65,8 +65,12 @@ class SensorFusionService {
     PnPResult? latestPnPResult,
   }) {
     // Sanitize raw inputs against NaN and Infinite values
-    final safeRawHeading = (rawHeading.isNaN || rawHeading.isInfinite) ? 0.0 : rawHeading;
-    final safeRawPitch = (rawPitch.isNaN || rawPitch.isInfinite) ? 0.0 : rawPitch;
+    final safeRawHeading = (rawHeading.isNaN || rawHeading.isInfinite)
+        ? 0.0
+        : rawHeading;
+    final safeRawPitch = (rawPitch.isNaN || rawPitch.isInfinite)
+        ? 0.0
+        : rawPitch;
     final safeRawRoll = (rawRoll.isNaN || rawRoll.isInfinite) ? 0.0 : rawRoll;
 
     // 1. Filter orientation angles using shortest-path angular Kalman filter
@@ -105,11 +109,7 @@ class SensorFusionService {
     // 4. Resolve fused geodetic position (PnP > GPS > Fallback)
     GeodeticCoords effectivePosition =
         gpsCoords ??
-        const GeodeticCoords(
-          latitude: 0.0,
-          longitude: 0.0,
-          height: 0.0,
-        );
+        const GeodeticCoords(latitude: 0.0, longitude: 0.0, height: 0.0);
     if (_lastPnPPosition != null && _lastPnPTime != null) {
       final secondsSincePnP = DateTime.now()
           .difference(_lastPnPTime!)
@@ -123,7 +123,9 @@ class SensorFusionService {
     double confidenceScore = 0.95;
     TrackingConfidence confidenceLevel = TrackingConfidence.high;
 
-    double magAccel = math.sqrt(accelX * accelX + accelY * accelY + accelZ * accelZ);
+    double magAccel = math.sqrt(
+      accelX * accelX + accelY * accelY + accelZ * accelZ,
+    );
     if (magAccel > 0 && magAccel < 3.0) {
       magAccel *= 9.80665;
     }

@@ -64,7 +64,7 @@ class _ARViewportScreenState extends State<ARViewportScreen>
     with WidgetsBindingObserver {
   final String _searchQuery = '';
   String _selectedCategory = 'All';
-  final ARFloorFilterMode _floorFilterMode = ARFloorFilterMode.allFloors;
+  final ARFloorFilterMode _floorFilterMode = ARFloorFilterMode.autoTilt;
   int? _selectedFloorNumber;
   bool _isNavigatingActive = false;
   bool _isFavorite = false;
@@ -103,12 +103,15 @@ class _ARViewportScreenState extends State<ARViewportScreen>
   }
 
   List<DestinationPOI> _deduplicateDestinations(List<DestinationPOI> list) {
-    final seen = <String>{};
+    final seenIds = <String>{};
+    final seenNames = <String>{};
     final result = <DestinationPOI>[];
     for (final p in list) {
-      final key = '${p.id}#${p.name.trim().toLowerCase()}#${p.floorNumber}';
-      if (!seen.contains(key)) {
-        seen.add(key);
+      final cleanId = p.id.trim();
+      final nameKey = '${p.name.trim().toLowerCase()}#${p.floorNumber}';
+      if (cleanId.isNotEmpty && !seenIds.contains(cleanId) && !seenNames.contains(nameKey)) {
+        seenIds.add(cleanId);
+        seenNames.add(nameKey);
         result.add(p);
       }
     }
@@ -120,16 +123,40 @@ class _ARViewportScreenState extends State<ARViewportScreen>
     setState(() => _isLoadingBackend = true);
     try {
       final prefs = await SharedPreferences.getInstance();
-      final activeMallId = prefs.getString('NexNav_active_mall_id') ??
-          (widget.destinations.isNotEmpty && widget.destinations.first.mallId != null
-              ? widget.destinations.first.mallId!
-              : 'mall');
+      final allMalls = await ApiService.instance.fetchMalls();
+      String? activeMallId = prefs.getString('NexNav_active_mall_id');
 
-      final fetched = await ApiService.instance.fetchDestinations(mallId: activeMallId);
-      final mallShops = fetched.where((p) => p.mallId == null || p.mallId == activeMallId).toList();
-      if (mallShops.isNotEmpty && mounted) {
+      if (allMalls.isNotEmpty) {
+        if (activeMallId == null ||
+            activeMallId.isEmpty ||
+            activeMallId == 'mall' ||
+            !allMalls.any((m) => m.id == activeMallId)) {
+          activeMallId = allMalls.first.id;
+          await prefs.setString('NexNav_active_mall_id', activeMallId);
+        }
+      } else {
+        activeMallId = (activeMallId == null || activeMallId.isEmpty || activeMallId == 'mall')
+            ? '1'
+            : activeMallId;
+      }
+
+      List<DestinationPOI> fetched = await ApiService.instance.fetchDestinations(
+        mallId: activeMallId,
+      );
+      if (fetched.isEmpty) {
+        fetched = await ApiService.instance.fetchDestinations();
+      }
+
+      final mallShops = fetched
+          .where((p) => p.mallId == null || p.mallId == activeMallId)
+          .toList();
+      final targetList = mallShops.isNotEmpty
+          ? mallShops
+          : (fetched.isNotEmpty ? fetched : widget.destinations);
+
+      if (targetList.isNotEmpty && mounted) {
         setState(() {
-          _liveDestinations = _deduplicateDestinations(mallShops);
+          _liveDestinations = _deduplicateDestinations(targetList);
           _shopMarkerManager.loadShops(_liveDestinations);
         });
         return;
@@ -207,6 +234,7 @@ class _ARViewportScreenState extends State<ARViewportScreen>
     final effectiveUser = getEffectiveUserCoords(
       widget.userCoords,
       activeAnchor,
+      facingHeadingDegrees: widget.compassHeadingDegrees,
     );
 
     if (widget.targetDestination != null) {
@@ -239,22 +267,25 @@ class _ARViewportScreenState extends State<ARViewportScreen>
         widget.userCoords != oldWidget.userCoords ||
         widget.destinations != oldWidget.destinations ||
         widget.currentFloor != oldWidget.currentFloor) {
-      if (widget.destinations.isNotEmpty) {
-        _liveDestinations = _deduplicateDestinations(widget.destinations);
-      }
-      final allDestinations = _liveDestinations.isNotEmpty
-          ? _liveDestinations
-          : widget.destinations;
-      final activeAnchor = allDestinations.isNotEmpty
-          ? allDestinations.first.location
+      final updatedList = widget.destinations.isNotEmpty
+          ? _deduplicateDestinations(widget.destinations)
+          : _liveDestinations;
+      final activeAnchor = updatedList.isNotEmpty
+          ? updatedList.first.location
           : widget.userCoords;
       final effectiveUser = getEffectiveUserCoords(
         widget.userCoords,
         activeAnchor,
+        facingHeadingDegrees: widget.compassHeadingDegrees,
       );
 
       setState(() {
-        _shopMarkerManager.loadShops(allDestinations);
+        if (widget.destinations.isNotEmpty) {
+          _liveDestinations = updatedList;
+        }
+        _shopMarkerManager.loadShops(
+          _liveDestinations.isNotEmpty ? _liveDestinations : widget.destinations,
+        );
         if (widget.targetDestination != oldWidget.targetDestination) {
           _selectedPOI = widget.targetDestination;
           _isNavigatingActive = widget.targetDestination != null;
@@ -408,9 +439,11 @@ class _ARViewportScreenState extends State<ARViewportScreen>
   @override
   Widget build(BuildContext context) {
     // Prefer live database destinations from nexnav.hashnate.com, falling back to widget.destinations
-    final List<DestinationPOI> allDestinations = _liveDestinations.isNotEmpty
+    final List<DestinationPOI> rawDestinations = _liveDestinations.isNotEmpty
         ? _liveDestinations
         : widget.destinations;
+    final List<DestinationPOI> allDestinations =
+        _deduplicateDestinations(rawDestinations);
 
     // Real-world dynamic mall anchor fallback (anchors user position to active Sri Lanka mall)
     final activeMallAnchor = allDestinations.isNotEmpty
@@ -420,6 +453,7 @@ class _ARViewportScreenState extends State<ARViewportScreen>
     final effectiveUserCoords = getEffectiveUserCoords(
       widget.userCoords,
       activeMallAnchor,
+      facingHeadingDegrees: widget.compassHeadingDegrees,
     );
 
     // Process fused spatial pose via SensorFusionService for smooth, jitter-free compass heading & pose
@@ -445,9 +479,11 @@ class _ARViewportScreenState extends State<ARViewportScreen>
     );
 
     // 2. Pitch-to-floor index mapping with deadzone and hysteresis band
-    final List<int> validBuildingFloors = defaultBuildingProfile.floors
-        .map((f) => f.floorNumber)
-        .toList();
+    final Set<int> allAvailableFloors = {
+      widget.currentFloor.floorNumber,
+      ...allDestinations.map((d) => d.floorNumber),
+    };
+    final List<int> validBuildingFloors = allAvailableFloors.toList()..sort();
 
     final int resolvedFloorIndex = _tiltFloorMapper.updateFloorIndexFromPitch(
       pitchDegrees: cameraPose.pitchDegrees,
@@ -493,26 +529,20 @@ class _ARViewportScreenState extends State<ARViewportScreen>
     _shopMarkerManager.loadShops(allDestinations);
 
     List<DestinationPOI> candidatePOIs;
-    if (_selectedCategory != 'All' && _selectedCategory != 'ALL') {
-      // When a specific category is selected, allow discovery of matching shops across all building floors
-      candidatePOIs = allDestinations
-          .where((poi) => _matchesCategory(poi, _selectedCategory))
-          .toList();
-    } else if (_floorFilterMode == ARFloorFilterMode.currentFloorOnly) {
-      candidatePOIs = allDestinations
-          .where((poi) => poi.floorNumber == widget.currentFloor.floorNumber)
-          .toList();
-    } else if (_floorFilterMode == ARFloorFilterMode.autoTilt) {
-      // Resolve active target floor number strictly from camera pitch tilt position
+    if (_floorFilterMode == ARFloorFilterMode.autoTilt) {
+      // Dynamic camera tilt floor resolution:
+      // When tilting camera UP (increasing pitch) or DOWN (decreasing pitch),
+      // show shops on the pitch-focused floor based on camera motion
       final int targetFloorNumber = resolvedFloorIndex;
 
-      // Filter strictly to shops on the pitch-resolved floor based on camera motion
       candidatePOIs = allDestinations.where((poi) {
+        // If actively navigating to a place, always keep it visible
         if (_selectedPOI != null && poi.id == _selectedPOI!.id) return true;
+        // Strictly filter to the floor the camera is currently pointed at
         return poi.floorNumber == targetFloorNumber;
       }).toList();
 
-      // Fallback: If pitch floor has no configured shops, fallback to current floor
+      // Fallback if target floor has no shops: fallback to current floor
       if (candidatePOIs.isEmpty) {
         candidatePOIs = allDestinations.where((poi) {
           return poi.floorNumber == widget.currentFloor.floorNumber;
@@ -522,10 +552,20 @@ class _ARViewportScreenState extends State<ARViewportScreen>
         }
       }
 
-      if (_selectedPOI != null &&
-          !candidatePOIs.any((p) => p.id == _selectedPOI!.id)) {
-        candidatePOIs.add(_selectedPOI!);
+      if (_selectedCategory != 'All' && _selectedCategory != 'ALL') {
+        candidatePOIs = candidatePOIs
+            .where((poi) => _matchesCategory(poi, _selectedCategory))
+            .toList();
       }
+    } else if (_selectedCategory != 'All' && _selectedCategory != 'ALL') {
+      // When a specific category is selected, allow discovery of matching shops across all building floors
+      candidatePOIs = allDestinations
+          .where((poi) => _matchesCategory(poi, _selectedCategory))
+          .toList();
+    } else if (_floorFilterMode == ARFloorFilterMode.currentFloorOnly) {
+      candidatePOIs = allDestinations
+          .where((poi) => poi.floorNumber == widget.currentFloor.floorNumber)
+          .toList();
     } else {
       candidatePOIs = allDestinations;
     }
@@ -615,298 +655,18 @@ class _ARViewportScreenState extends State<ARViewportScreen>
       screenHeight - 140.0,
       topSafeLimit + 100.0,
     );
-    // 1. Pre-calculate bearings and spatial data for each filtered POI in a single O(N) pass
-    final poiMetadata = filteredPOIs.map((poi) {
-      final bearing = calculateBearingAngle(effectiveUserCoords, poi.location);
-      return (poi: poi, bearing: bearing);
-    }).toList();
-
-    // Sort deterministically by floor and POI ID so array evaluation order NEVER flip-flops between frames
-    poiMetadata.sort((a, b) {
-      if (a.poi.floorNumber != b.poi.floorNumber) {
-        return b.poi.floorNumber.compareTo(a.poi.floorNumber);
+    // 1. Pre-calculate bearings and spatial data for each filtered POI in a single O(N) pass (guaranteed unique by ID)
+    final seenFilteredIds = <String>{};
+    final uniqueFiltered = <DestinationPOI>[];
+    for (final p in filteredPOIs) {
+      final cleanId = p.id.trim();
+      if (cleanId.isNotEmpty && !seenFilteredIds.contains(cleanId)) {
+        seenFilteredIds.add(cleanId);
+        uniqueFiltered.add(p);
       }
-      return a.poi.id.compareTo(b.poi.id);
-    });
-
-    // 3D Perspective Camera Projection & Motion Tracking Engine
-    final double hFovRad = (65.0 * math.pi) / 180.0;
-    final double focalPx = (screenWidth / 2.0) / math.tan(hFovRad / 2.0);
-    const double cardWidth = 195.0;
-    const double cardHeight = 80.0;
-    // Total visual height of card container + dotted stem (20px) + pin dot (8px)
-    const double cardTotalVisualHeight = 108.0;
-
-    final double headingRad = (fusedPose.headingDegrees * math.pi) / 180.0;
-    final double pitchRad = (widget.phonePitchDegrees * math.pi) / 180.0;
-
-    final List<Map<String, dynamic>> rawPositioned = [];
-
-    for (int i = 0; i < poiMetadata.length; i++) {
-      final item = poiMetadata[i];
-      final poi = item.poi;
-      final bearing = item.bearing;
-      final poiFloorConfig = _getFloorConfig(poi.floorNumber);
-
-      final shopENU = _floorPointCalculator.calculateShopENUVector(
-        userCoords: effectiveUserCoords,
-        shopCoords: poi.location,
-        userFloorNumber: widget.currentFloor.floorNumber,
-        shopFloorNumber: poi.floorNumber,
-        userBaseAltitudeM: widget.currentFloor.absoluteHeightMeters,
-        shopBaseAltitudeM: poiFloorConfig.absoluteHeightMeters,
-      );
-
-      final double east = shopENU.x;
-      final double north = shopENU.z;
-      final double deltaUpMeters = shopENU.y;
-
-      int distM = calculateAccurate3DDistance(
-        effectiveUserCoords,
-        poi.location,
-        userFloorNumber: widget.currentFloor.floorNumber,
-        targetFloorNumber: poi.floorNumber,
-        userAbsoluteAltitudeM: widget.currentFloor.absoluteHeightMeters,
-        targetAbsoluteAltitudeM: poiFloorConfig.absoluteHeightMeters,
-      ).round();
-
-      final directionStr = _getCardinalDirection(bearing);
-
-      double relAngle = (bearing - fusedPose.headingDegrees);
-      while (relAngle > 180) {
-        relAngle -= 360;
-      }
-      while (relAngle < -180) {
-        relAngle += 360;
-      }
-
-      // 1. Transform ENU vector to Horizontal Camera Space (forwardH, rightH, upH)
-      final double forwardH =
-          east * math.sin(headingRad) + north * math.cos(headingRad);
-      final double rightH =
-          east * math.cos(headingRad) - north * math.sin(headingRad);
-      final double upH = deltaUpMeters;
-
-      // 2. Rotate by Phone Pitch around camera Right axis
-      final double zCam =
-          forwardH * math.cos(pitchRad) + upH * math.sin(pitchRad);
-      final double yCam =
-          upH * math.cos(pitchRad) - forwardH * math.sin(pitchRad);
-      final double xCam = rightH;
-
-      // Cull points behind camera plane (zCam < 0.5m)
-      if (zCam < 0.5) continue;
-
-      // 3. Pinhole Projection to Viewport Coordinates
-      final double rawScreenX =
-          (screenWidth / 2.0) + (xCam / zCam) * focalPx - (cardWidth / 2.0);
-      final double rawScreenY =
-          (screenHeight / 2.0) - (yCam / zCam) * focalPx - (cardHeight / 2.0);
-
-      final isTargetPOI = activePOI?.id == poi.id;
-      final bool isWithinMaxDistance = distM <= maxViewDistanceMeters;
-      if (!isWithinMaxDistance && !isTargetPOI) continue;
-
-      final bool isInScreenFOV = true;
-
-      double cardOpacity = 1.0;
-      bool isPitchFocused = true;
-      if (_floorFilterMode == ARFloorFilterMode.autoTilt) {
-        final int targetFloorNum = resolvedFloorIndex;
-        final fDelta = (poi.floorNumber - targetFloorNum).abs();
-        cardOpacity = fDelta == 0 ? 1.0 : (fDelta == 1 ? 0.82 : 0.50);
-        isPitchFocused = fDelta <= maxVisibleFloorOffset;
-      } else if (_floorFilterMode == ARFloorFilterMode.allFloors) {
-        if (distM > 120 && widget.phonePitchDegrees < 10.0) {
-          cardOpacity = 0.65;
-        } else {
-          cardOpacity = 1.0;
-        }
-        isPitchFocused = true;
-      }
-
-      final double distanceScaleFactor = (1.18 - ((distM - 5.0) * 0.006)).clamp(
-        0.70,
-        1.20,
-      );
-
-      final spatialMetrics = calculateSameCoordinateSpatialMetrics(
-        userCoords: effectiveUserCoords,
-        poiCoords: poi.location,
-        userFloorNumber: widget.currentFloor.floorNumber,
-        poiFloorNumber: poi.floorNumber,
-        userFloorConfig: widget.currentFloor,
-        poiFloorConfig: poiFloorConfig,
-      );
-
-      final double posX = rawScreenX.clamp(
-        12.0,
-        math.max(12.0, screenWidth - cardWidth - 12.0),
-      );
-      final double posY = rawScreenY.clamp(
-        topSafeLimit,
-        math.max(
-          topSafeLimit,
-          bottomSafeLimit - (cardTotalVisualHeight * distanceScaleFactor),
-        ),
-      );
-
-      rawPositioned.add({
-        'poi': poi,
-        'distM': distM,
-        'bearing': bearing,
-        'directionStr': directionStr,
-        'relAngle': relAngle,
-        'rawPosX': rawScreenX,
-        'posX': posX,
-        'posY': posY,
-        'isInScreenFOV': isInScreenFOV,
-        'cardOpacity': cardOpacity,
-        'isPitchFocused': isPitchFocused,
-        'distanceScale': distanceScaleFactor,
-        'spatialMetrics': spatialMetrics,
-        'shopENU': shopENU,
-      });
     }
 
-    // 2. Deterministic Multi-Pass 2D Spatial Collision Avoidance Engine (guarantees zero overlapping cards across floors)
-    const double baseCardW = 195.0;
-    const double baseCardH = 108.0; // Includes card body + stem + dot
-    const double minGapX = 16.0;
-    const double minGapY = 16.0;
-    final List<Map<String, dynamic>> positionedCards = List.from(rawPositioned);
-
-    for (int pass = 0; pass < 5; pass++) {
-      bool hadCollision = false;
-      for (int i = 0; i < positionedCards.length; i++) {
-        final item = positionedCards[i];
-        final poiA = item['poi'] as DestinationPOI;
-        double curX = item['posX'] as double;
-        double curY = item['posY'] as double;
-        final double scaleA = (item['distanceScale'] as double? ?? 1.0);
-        final double wA = baseCardW * scaleA;
-        final double hA = baseCardH * scaleA;
-
-        curY = curY.clamp(
-          topSafeLimit,
-          math.max(topSafeLimit, bottomSafeLimit - hA),
-        );
-
-        for (int j = 0; j < positionedCards.length; j++) {
-          if (i == j) continue;
-          final existing = positionedCards[j];
-          final poiB = existing['poi'] as DestinationPOI;
-          final double exX = existing['posX'] as double;
-          final double exY = existing['posY'] as double;
-          final double scaleB = (existing['distanceScale'] as double? ?? 1.0);
-          final double wB = baseCardW * scaleB;
-          final double hB = baseCardH * scaleB;
-
-          final bool overlapX =
-              (curX < exX + wB + minGapX) && (curX + wA + minGapX > exX);
-          final bool overlapY =
-              (curY < exY + hB + minGapY) && (curY + hA + minGapY > exY);
-
-          if (overlapX && overlapY) {
-            hadCollision = true;
-
-            if (poiA.floorNumber > poiB.floorNumber) {
-              final double newY = exY - hA - minGapY;
-              if (newY >= topSafeLimit) {
-                curY = newY;
-              } else {
-                curX = (curX >= exX)
-                    ? (exX + wB + minGapX).clamp(
-                        12.0,
-                        math.max(12.0, screenWidth - wA - 12.0),
-                      )
-                    : (exX - wA - minGapX).clamp(
-                        12.0,
-                        math.max(12.0, screenWidth - wA - 12.0),
-                      );
-              }
-            } else if (poiA.floorNumber < poiB.floorNumber) {
-              final double newY = exY + hB + minGapY;
-              if (newY + hA <= bottomSafeLimit) {
-                curY = newY;
-              } else {
-                curX = (curX >= exX)
-                    ? (exX + wB + minGapX).clamp(
-                        12.0,
-                        math.max(12.0, screenWidth - wA - 12.0),
-                      )
-                    : (exX - wA - minGapX).clamp(
-                        12.0,
-                        math.max(12.0, screenWidth - wA - 12.0),
-                      );
-              }
-            } else {
-              final double shiftYUp = exY - hA - minGapY;
-              final double shiftYDown = exY + hB + minGapY;
-
-              if (shiftYUp >= topSafeLimit && (i % 2 == 0)) {
-                curY = shiftYUp;
-              } else if (shiftYDown + hA <= bottomSafeLimit) {
-                curY = shiftYDown;
-              } else if (shiftYUp >= topSafeLimit) {
-                curY = shiftYUp;
-              } else {
-                curX = (curX >= exX)
-                    ? (exX + wB + minGapX).clamp(
-                        12.0,
-                        math.max(12.0, screenWidth - wA - 12.0),
-                      )
-                    : (exX - wA - minGapX).clamp(
-                        12.0,
-                        math.max(12.0, screenWidth - wA - 12.0),
-                      );
-              }
-            }
-
-            curY = curY.clamp(
-              topSafeLimit,
-              math.max(topSafeLimit, bottomSafeLimit - hA),
-            );
-            item['posX'] = curX;
-            item['posY'] = curY;
-          }
-        }
-      }
-      if (!hadCollision) break;
-    }
-
-    // Low-Pass Deadzone Exponential Position Smoothing for Rock-Solid AR Card Stability
-    for (int i = 0; i < positionedCards.length; i++) {
-      final item = positionedCards[i];
-      final poiA = item['poi'] as DestinationPOI;
-      final double rawTargetX = item['posX'] as double;
-      final double rawTargetY = item['posY'] as double;
-
-      final Offset? prevPos = _smoothedCardPositions[poiA.id];
-      double finalX = rawTargetX;
-      double finalY = rawTargetY;
-
-      if (prevPos != null) {
-        final double deltaX = (rawTargetX - prevPos.dx).abs();
-        final double deltaY = (rawTargetY - prevPos.dy).abs();
-
-        // If movement delta is within 4px sensor noise threshold, freeze position to eliminate jitter
-        if (deltaX < 4.0 && deltaY < 4.0) {
-          finalX = prevPos.dx;
-          finalY = prevPos.dy;
-        } else {
-          // Smooth exponential lerp filter (0.18) for fluid camera panning without frame jitter
-          finalX = prevPos.dx + (rawTargetX - prevPos.dx) * 0.18;
-          finalY = prevPos.dy + (rawTargetY - prevPos.dy) * 0.18;
-        }
-      }
-
-      _smoothedCardPositions[poiA.id] = Offset(finalX, finalY);
-      item['posX'] = finalX;
-      item['posY'] = finalY;
-    }
-
-    // Dynamic 3D AR Target Badge Screen Offset anchored directly above ground target ring
+    // Dynamic 3D AR Target Badge Screen Offset & Collision Boundary (Anchored directly above ground target ring)
     final safeAngle = (activeRelAngle.isNaN || activeRelAngle.isInfinite)
         ? 0.0
         : activeRelAngle;
@@ -935,12 +695,389 @@ class _ARViewportScreenState extends State<ARViewportScreen>
         (distRatio * (screenHeight * 0.18)) -
         floorElevShift +
         pitchShift;
-    final targetTopY = targetY.clamp(screenHeight * 0.25, screenHeight * 0.78);
+    final targetTopY = targetY.clamp(screenHeight * 0.22, screenHeight * 0.75);
 
     final targetBadgePosY = (targetTopY - 110.0).clamp(
       140.0,
       screenHeight - 220.0,
     );
+
+    const double targetBadgeWidth = 210.0;
+    const double targetBadgeTotalHeight = 135.0; // Card box + chevron arrows
+    final double targetBadgeLeft = (targetBadgePosX - (targetBadgeWidth / 2.0)).clamp(
+      12.0,
+      math.max(12.0, screenWidth - targetBadgeWidth - 12.0),
+    );
+    final Rect? targetBadgeRect = (_isNavigatingActive && activePOI != null)
+        ? Rect.fromLTWH(targetBadgeLeft, targetBadgePosY, targetBadgeWidth, targetBadgeTotalHeight)
+        : null;
+
+    // Filter ambient POIs: When active navigation is engaged, the target POI is rendered exclusively
+    // as the primary 3D Target Badge, avoiding confusing duplicate cards on screen.
+    final ambientFiltered = uniqueFiltered.where((poi) {
+      if (_isNavigatingActive && activePOI != null && poi.id == activePOI.id) {
+        return false;
+      }
+      return true;
+    }).toList();
+
+    final poiMetadata = ambientFiltered.map((poi) {
+      final bearing = calculateBearingAngle(effectiveUserCoords, poi.location);
+      return (poi: poi, bearing: bearing);
+    }).toList();
+
+    // Sort deterministically by floor and POI ID so array evaluation order NEVER flip-flops between frames
+    poiMetadata.sort((a, b) {
+      if (a.poi.floorNumber != b.poi.floorNumber) {
+        return b.poi.floorNumber.compareTo(a.poi.floorNumber);
+      }
+      return a.poi.id.compareTo(b.poi.id);
+    });
+
+    // 3D Perspective Camera Projection & Motion Tracking Engine
+    final double hFovRad = (65.0 * math.pi) / 180.0;
+    final double focalPx = (screenWidth / 2.0) / math.tan(hFovRad / 2.0);
+    const double cardWidth = 195.0;
+    const double cardHeight = 80.0;
+    // Total visual height of card container + dotted stem (20px) + pin dot (8px)
+    const double cardTotalVisualHeight = 108.0;
+
+    final List<Map<String, dynamic>> rawPositioned = [];
+
+    for (int i = 0; i < poiMetadata.length; i++) {
+      final item = poiMetadata[i];
+      final poi = item.poi;
+      final bearing = item.bearing;
+      final poiFloorConfig = _getFloorConfig(poi.floorNumber);
+
+      final shopENU = _floorPointCalculator.calculateShopENUVector(
+        userCoords: effectiveUserCoords,
+        shopCoords: poi.location,
+        userFloorNumber: widget.currentFloor.floorNumber,
+        shopFloorNumber: poi.floorNumber,
+        userBaseAltitudeM: widget.currentFloor.absoluteHeightMeters,
+        shopBaseAltitudeM: poiFloorConfig.absoluteHeightMeters,
+      );
+
+      final double rawDistToUser = haversineDistance(
+        effectiveUserCoords,
+        poi.location,
+      );
+      double effBearing = bearing;
+
+      int distM = calculateAccurate3DDistance(
+        effectiveUserCoords,
+        poi.location,
+        userFloorNumber: widget.currentFloor.floorNumber,
+        targetFloorNumber: poi.floorNumber,
+        userAbsoluteAltitudeM: widget.currentFloor.absoluteHeightMeters,
+        targetAbsoluteAltitudeM: poiFloorConfig.absoluteHeightMeters,
+      ).round();
+
+      // Zero-distance fallback: Fan out only if coordinates are unassigned (0,0) or exactly at user position (< 0.5m)
+      if (rawDistToUser < 0.5 ||
+          (poi.location.latitude == 0.0 && poi.location.longitude == 0.0)) {
+        final double fanOffsetDeg =
+            ((i - (poiMetadata.length - 1) / 2.0) * 26.0);
+        final double synBearing =
+            (fusedPose.headingDegrees + fanOffsetDeg + 360.0) % 360.0;
+        final double synDist = 8.5 + (i % 3) * 4.0;
+        effBearing = synBearing;
+        distM = synDist.round();
+      }
+
+      final directionStr = _getCardinalDirection(effBearing);
+
+      double relAngle = (effBearing - fusedPose.headingDegrees);
+      while (relAngle > 180) {
+        relAngle -= 360;
+      }
+      while (relAngle < -180) {
+        relAngle += 360;
+      }
+
+      final isTargetPOI = activePOI?.id == poi.id;
+      final bool isWithinMaxDistance =
+          distM <= math.max(600.0, maxViewDistanceMeters);
+
+      if (!isWithinMaxDistance && !isTargetPOI) {
+        continue;
+      }
+
+      // 3. Wide Viewing Angle Check:
+      // Show all places in the front 170° field of view (|relAngle| <= 85°)
+      if (relAngle.abs() > 85.0) {
+        continue; // Only hide places that are directly behind the user
+      }
+
+      // 4. High-Accuracy 3D Perspective Projection:
+      // Horizontal pinhole camera projection accurately aligned with real bearing
+      final double relAngleRad = (relAngle * math.pi) / 180.0;
+      final double rawScreenX = (screenWidth / 2.0) +
+          (math.tan(relAngleRad.clamp(-1.25, 1.25)) * focalPx) -
+          (cardWidth / 2.0);
+
+      // Multi-floor vertical projection: accurately maps phone pitch tilt and building floor elevation
+      final double pitchOffset = widget.phonePitchDegrees * 3.2;
+      final double floorHeightDelta =
+          (poi.floorNumber - widget.currentFloor.floorNumber).toDouble();
+      final double floorOffset = (floorHeightDelta * 32.0).clamp(-110.0, 110.0);
+      final double rawScreenY = (screenHeight * 0.48) +
+          pitchOffset -
+          floorOffset -
+          (cardHeight / 2.0);
+
+      // 5. Dynamic Depth & Camera-Motion Scaling ("increase and decrease" logic)
+      // A) Distance Depth Scaling: closer places (1-3m) scale up to 1.25x, farther places (>20m) scale down to 0.75x
+      final double distanceScaleFactor = (1.25 /
+              (1.0 + math.log(math.max(1.0, distM.toDouble()) / 3.0) * 0.35))
+          .clamp(0.72, 1.25);
+
+      // B) Camera Motion Alignment Scaling: when centered in camera viewport, scale increases (+12%)
+      final double alignFactor = (1.0 - (relAngle.abs() / 35.0)).clamp(0.0, 1.0);
+      final double motionScaleFactor = 0.90 + (alignFactor * 0.20);
+      final double totalCardScale =
+          (distanceScaleFactor * motionScaleFactor).clamp(0.68, 1.30);
+
+      // 6. High-Visibility Camera Motion Opacity:
+      // Crisp 1.0 opacity when facing places, smoothly adapting to 0.75 near peripheral edges
+      final double angleFactor = (1.0 - ((relAngle.abs() - 35.0) / 50.0)).clamp(0.0, 1.0);
+      final double motionVisibility = (0.75 + (angleFactor * 0.25)).clamp(0.70, 1.0);
+
+      double cardOpacity = motionVisibility;
+      bool isPitchFocused = true;
+      if (_floorFilterMode == ARFloorFilterMode.autoTilt) {
+        final int targetFloorNum = resolvedFloorIndex;
+        final fDelta = (poi.floorNumber - targetFloorNum).abs();
+        cardOpacity *= fDelta == 0 ? 1.0 : (fDelta == 1 ? 0.88 : 0.65);
+        isPitchFocused = fDelta <= maxVisibleFloorOffset;
+      } else if (_floorFilterMode == ARFloorFilterMode.allFloors) {
+        if (distM > 120 && widget.phonePitchDegrees < 10.0) {
+          cardOpacity *= 0.75;
+        }
+        isPitchFocused = true;
+      }
+
+      final spatialMetrics = calculateSameCoordinateSpatialMetrics(
+        userCoords: effectiveUserCoords,
+        poiCoords: poi.location,
+        userFloorNumber: widget.currentFloor.floorNumber,
+        poiFloorNumber: poi.floorNumber,
+        userFloorConfig: widget.currentFloor,
+        poiFloorConfig: poiFloorConfig,
+      );
+
+      final double posX = rawScreenX.clamp(
+        12.0,
+        math.max(12.0, screenWidth - cardWidth - 12.0),
+      );
+      final double posY = rawScreenY.clamp(
+        topSafeLimit,
+        math.max(
+          topSafeLimit,
+          bottomSafeLimit - (cardTotalVisualHeight * totalCardScale),
+        ),
+      );
+
+      rawPositioned.add({
+        'poi': poi,
+        'distM': distM,
+        'bearing': effBearing,
+        'directionStr': directionStr,
+        'relAngle': relAngle,
+        'rawPosX': rawScreenX,
+        'posX': posX,
+        'posY': posY,
+        'isInScreenFOV': true,
+        'cardOpacity': cardOpacity,
+        'isPitchFocused': isPitchFocused,
+        'distanceScale': totalCardScale,
+        'spatialMetrics': spatialMetrics,
+        'shopENU': shopENU,
+      });
+    }
+
+    // 2. Deterministic Multi-Pass 2D Spatial Collision Avoidance Engine
+    // (guarantees zero overlapping cards across floors & zero overlap with target navigation badge)
+    const double baseCardW = 195.0;
+    const double baseCardH = 108.0; // Includes card body + stem + dot
+    const double minGapX = 16.0;
+    const double minGapY = 16.0;
+    final seenRawIds = <String>{};
+    final uniqueRawPositioned = <Map<String, dynamic>>[];
+    for (final item in rawPositioned) {
+      final poi = item['poi'] as DestinationPOI;
+      final cleanId = poi.id.trim();
+      if (cleanId.isNotEmpty && !seenRawIds.contains(cleanId)) {
+        seenRawIds.add(cleanId);
+        uniqueRawPositioned.add(item);
+      }
+    }
+    final List<Map<String, dynamic>> positionedCards = List.from(uniqueRawPositioned);
+
+    for (int pass = 0; pass < 5; pass++) {
+      bool hadCollision = false;
+      for (int i = 0; i < positionedCards.length; i++) {
+        final item = positionedCards[i];
+        final poiA = item['poi'] as DestinationPOI;
+        double curX = item['posX'] as double;
+        double curY = item['posY'] as double;
+        final double scaleA = (item['distanceScale'] as double? ?? 1.0);
+        final double wA = baseCardW * scaleA;
+        final double hA = baseCardH * scaleA;
+
+        curX = curX.clamp(
+          10.0,
+          math.max(10.0, screenWidth - wA - 10.0),
+        );
+        curY = curY.clamp(
+          topSafeLimit,
+          math.max(topSafeLimit, bottomSafeLimit - hA),
+        );
+
+        // A) Check collision against Active 3D Target Navigation Badge
+        if (targetBadgeRect != null) {
+          final cardRect = Rect.fromLTWH(curX, curY, wA, hA);
+          if (cardRect.overlaps(targetBadgeRect.inflate(10.0))) {
+            hadCollision = true;
+            final double safeUnderY = targetBadgeRect.bottom + minGapY;
+            if (safeUnderY + hA <= bottomSafeLimit) {
+              curY = safeUnderY;
+            } else {
+              if (curX < targetBadgeRect.center.dx) {
+                curX = (targetBadgeRect.left - wA - minGapX).clamp(
+                  10.0,
+                  math.max(10.0, screenWidth - wA - 10.0),
+                );
+              } else {
+                curX = (targetBadgeRect.right + minGapX).clamp(
+                  10.0,
+                  math.max(10.0, screenWidth - wA - 10.0),
+                );
+              }
+            }
+            curY = curY.clamp(
+              topSafeLimit,
+              math.max(topSafeLimit, bottomSafeLimit - hA),
+            );
+            item['posX'] = curX;
+            item['posY'] = curY;
+          }
+        }
+
+        // B) Check collision against other ambient cards
+        for (int j = 0; j < positionedCards.length; j++) {
+          if (i == j) continue;
+          final existing = positionedCards[j];
+          final poiB = existing['poi'] as DestinationPOI;
+          final double exX = existing['posX'] as double;
+          final double exY = existing['posY'] as double;
+          final double scaleB = (existing['distanceScale'] as double? ?? 1.0);
+          final double wB = baseCardW * scaleB;
+          final double hB = baseCardH * scaleB;
+
+          final bool overlapX =
+              (curX < exX + wB + minGapX) && (curX + wA + minGapX > exX);
+          final bool overlapY =
+              (curY < exY + hB + minGapY) && (curY + hA + minGapY > exY);
+
+          if (overlapX && overlapY) {
+            hadCollision = true;
+
+            if (poiA.floorNumber > poiB.floorNumber) {
+              final double newY = exY - hA - minGapY;
+              bool violatesBadge = targetBadgeRect != null &&
+                  Rect.fromLTWH(curX, newY, wA, hA).overlaps(targetBadgeRect.inflate(10.0));
+              if (newY >= topSafeLimit && !violatesBadge) {
+                curY = newY;
+              } else {
+                curX = (curX >= exX)
+                    ? (exX + wB + minGapX).clamp(
+                        10.0,
+                        math.max(10.0, screenWidth - wA - 10.0),
+                      )
+                    : (exX - wA - minGapX).clamp(
+                        10.0,
+                        math.max(10.0, screenWidth - wA - 10.0),
+                      );
+              }
+            } else if (poiA.floorNumber < poiB.floorNumber) {
+              final double newY = exY + hB + minGapY;
+              if (newY + hA <= bottomSafeLimit) {
+                curY = newY;
+              } else {
+                curX = (curX >= exX)
+                    ? (exX + wB + minGapX).clamp(
+                        10.0,
+                        math.max(10.0, screenWidth - wA - 10.0),
+                      )
+                    : (exX - wA - minGapX).clamp(
+                        10.0,
+                        math.max(10.0, screenWidth - wA - 10.0),
+                      );
+              }
+            } else {
+              final double shiftYUp = exY - hA - minGapY;
+              final double shiftYDown = exY + hB + minGapY;
+              bool upViolatesBadge = targetBadgeRect != null &&
+                  Rect.fromLTWH(curX, shiftYUp, wA, hA).overlaps(targetBadgeRect.inflate(10.0));
+
+              if (shiftYUp >= topSafeLimit && !upViolatesBadge && (i % 2 == 0)) {
+                curY = shiftYUp;
+              } else if (shiftYDown + hA <= bottomSafeLimit) {
+                curY = shiftYDown;
+              } else if (shiftYUp >= topSafeLimit && !upViolatesBadge) {
+                curY = shiftYUp;
+              } else {
+                curX = (curX >= exX)
+                    ? (exX + wB + minGapX).clamp(
+                        10.0,
+                        math.max(10.0, screenWidth - wA - 10.0),
+                      )
+                    : (exX - wA - minGapX).clamp(
+                        10.0,
+                        math.max(10.0, screenWidth - wA - 10.0),
+                      );
+              }
+            }
+
+            curY = curY.clamp(
+              topSafeLimit,
+              math.max(topSafeLimit, bottomSafeLimit - hA),
+            );
+            item['posX'] = curX;
+            item['posY'] = curY;
+          }
+        }
+      }
+      if (!hadCollision) break;
+    }
+
+    // Dynamic Responsive Smoothing (Zero Deadzone Freezing for Fluid Real-Time Camera Panning)
+    for (int i = 0; i < positionedCards.length; i++) {
+      final item = positionedCards[i];
+      final poiA = item['poi'] as DestinationPOI;
+      final double rawTargetX = item['posX'] as double;
+      final double rawTargetY = item['posY'] as double;
+
+      final Offset? prevPos = _smoothedCardPositions[poiA.id];
+      double finalX = rawTargetX;
+      double finalY = rawTargetY;
+
+      if (prevPos != null) {
+        final double moveDist =
+            (Offset(rawTargetX, rawTargetY) - prevPos).distance;
+        // Responsive lerp: fast camera motions track immediately, small motions smoothly interpolate without freezing
+        final double lerpAlpha =
+            (0.55 + (moveDist / 50.0) * 0.30).clamp(0.55, 0.85);
+        finalX = prevPos.dx + (rawTargetX - prevPos.dx) * lerpAlpha;
+        finalY = prevPos.dy + (rawTargetY - prevPos.dy) * lerpAlpha;
+      }
+
+      _smoothedCardPositions[poiA.id] = Offset(finalX, finalY);
+      item['posX'] = finalX;
+      item['posY'] = finalY;
+    }
 
     // Sort positioned cards by distance and floor (farther dist first -> renders behind closer places)
     positionedCards.sort((a, b) {
@@ -958,7 +1095,16 @@ class _ARViewportScreenState extends State<ARViewportScreen>
       return (b['distM'] as int).compareTo(a['distM'] as int);
     });
 
-    List<Map<String, dynamic>> visibleCardsInFOV = positionedCards;
+    final seenVisiblePoiIds = <String>{};
+    final List<Map<String, dynamic>> visibleCardsInFOV = [];
+    for (final card in positionedCards) {
+      final poi = card['poi'] as DestinationPOI;
+      final cleanId = poi.id.trim();
+      if (cleanId.isNotEmpty && !seenVisiblePoiIds.contains(cleanId)) {
+        seenVisiblePoiIds.add(cleanId);
+        visibleCardsInFOV.add(card);
+      }
+    }
 
     // Evaluate off-route compliance if active route is available
     if (_activeRoute != null && activePOI != null) {
@@ -1137,14 +1283,26 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                       12.0,
                       math.max(12.0, screenWidth - badgeWidth - 12.0),
                     );
+                final double targetBadgeScale = (1.20 /
+                        (1.0 +
+                            math.log(math.max(
+                                      1.0,
+                                      safeDist.toDouble(),
+                                    ) /
+                                    3.0) *
+                                0.28))
+                    .clamp(0.85, 1.25);
                 return AnimatedPositioned(
-                  duration: const Duration(milliseconds: 180),
+                  duration: const Duration(milliseconds: 120),
                   curve: Curves.easeOutCubic,
                   left: badgeLeft,
                   top: targetBadgePosY,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
+                  child: Transform.scale(
+                    scale: targetBadgeScale,
+                    alignment: Alignment.bottomCenter,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
                       // Glowing 3D AR Distance Box
                       Container(
                         width: badgeWidth,
@@ -1294,55 +1452,70 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                       ),
                     ],
                   ),
-                );
-              },
-            ),
+                ),
+              );
+            },
+          ),
           ],
 
-          // 4. Ambient Floating AR Place Cards (rendered only when within camera horizontal FOV)
-          if (!_isNavigatingActive)
-            Positioned.fill(
-              child: Stack(
-                children: visibleCardsInFOV.map((data) {
-                  final poi = data['poi'] as DestinationPOI;
-                  final distM = data['distM'] as int;
-                  final directionStr = data['directionStr'] as String;
-                  final posX = data['posX'] as double;
-                  final posY = data['posY'] as double;
-                  final cardOpacity = (data['cardOpacity'] as double? ?? 1.0);
-                  final isPitchFocused =
-                      (data['isPitchFocused'] as bool? ?? true);
-                  final cardScale = (data['distanceScale'] as double? ?? 1.0);
-
-                  final isSelected = activePOI?.id == poi.id;
-
-                  final cardMetrics =
-                      data['spatialMetrics'] as RealWorldSpatialMetrics?;
-                  final int dist3D =
-                      cardMetrics?.euclidean3DDistanceMeters.round() ?? distM;
-
-                  String floorRelationStr;
-                  final String floorLabel = poi.floorNumber < 0
-                      ? 'B${poi.floorNumber.abs()}'
-                      : 'FLOOR ${poi.floorNumber}';
-                  if (poi.floorNumber == widget.currentFloor.floorNumber) {
-                    floorRelationStr = '$floorLabel • SAME FLOOR';
-                  } else if (poi.floorNumber >
-                      widget.currentFloor.floorNumber) {
-                    floorRelationStr = '$floorLabel • ▲ UP';
-                  } else {
-                    floorRelationStr = '$floorLabel • ▼ DOWN';
+          // 4. Ambient Floating AR Place Cards (always rendered, with target POI highlighted)
+          Positioned.fill(
+            child: Stack(
+              children: () {
+                final seenCardKeyIds = <String>{};
+                final uniqueList = visibleCardsInFOV.where((data) {
+                  final p = data['poi'] as DestinationPOI;
+                  final cleanId = p.id.trim();
+                  if (cleanId.isEmpty || seenCardKeyIds.contains(cleanId)) {
+                    return false;
                   }
+                  seenCardKeyIds.add(cleanId);
+                  return true;
+                }).toList();
 
-                  return AnimatedPositioned(
-                    key: ValueKey('poi-card-${poi.id}'),
-                    duration: const Duration(milliseconds: 60),
-                    curve: Curves.easeOut,
-                    left: posX,
-                    top: posY,
-                    child: AnimatedOpacity(
-                      duration: const Duration(milliseconds: 150),
-                      opacity: cardOpacity,
+                return uniqueList.map((data) {
+                  final poi = data['poi'] as DestinationPOI;
+                final distM = data['distM'] as int;
+                final directionStr = data['directionStr'] as String;
+                final posX = data['posX'] as double;
+                final posY = data['posY'] as double;
+                final cardOpacity = (data['cardOpacity'] as double? ?? 1.0);
+                final isPitchFocused =
+                    (data['isPitchFocused'] as bool? ?? true);
+                final cardScale = (data['distanceScale'] as double? ?? 1.0);
+
+                final isSelected = activePOI?.id == poi.id;
+                final double effectiveOpacity = _isNavigatingActive
+                    ? (isSelected ? 1.0 : (cardOpacity * 0.85).clamp(0.0, 0.90))
+                    : cardOpacity.clamp(0.0, 1.0);
+
+                final cardMetrics =
+                    data['spatialMetrics'] as RealWorldSpatialMetrics?;
+                final int dist3D =
+                    cardMetrics?.euclidean3DDistanceMeters.round() ?? distM;
+
+                String floorRelationStr;
+                final String floorLabel = poi.floorNumber < 0
+                    ? 'B${poi.floorNumber.abs()}'
+                    : 'FLOOR ${poi.floorNumber}';
+                if (poi.floorNumber == widget.currentFloor.floorNumber) {
+                  floorRelationStr = '$floorLabel • SAME FLOOR';
+                } else if (poi.floorNumber >
+                    widget.currentFloor.floorNumber) {
+                  floorRelationStr = '$floorLabel • ▲ UP';
+                } else {
+                  floorRelationStr = '$floorLabel • ▼ DOWN';
+                }
+
+                return AnimatedPositioned(
+                  key: ValueKey('poi-card-${poi.id}'),
+                  duration: const Duration(milliseconds: 24),
+                  curve: Curves.linear,
+                  left: posX,
+                  top: posY,
+                  child: AnimatedOpacity(
+                    duration: const Duration(milliseconds: 80),
+                    opacity: effectiveOpacity,
                       child: Transform.scale(
                         scale: cardScale,
                         alignment: Alignment.bottomCenter,
@@ -1519,10 +1692,10 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                       ),
                     ),
                   );
-                }).toList(),
-              ),
+                }).toList();
+              }(),
             ),
-
+          ),
 
 
           // 5. Top Controls & Navigation Guidance HUD Banner
@@ -1574,6 +1747,52 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                                 ),
                               ),
                             ),
+                          // Active Camera Tilt Floor Indicator Pill
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 5,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xDD0F172A),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: const Color(0xFF00E5FF).withValues(alpha: 0.5),
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(0xFF00E5FF).withValues(alpha: 0.2),
+                                  blurRadius: 8,
+                                ),
+                              ],
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  resolvedFloorIndex > widget.currentFloor.floorNumber
+                                      ? LucideIcons.chevronUp
+                                      : (resolvedFloorIndex < widget.currentFloor.floorNumber
+                                          ? LucideIcons.chevronDown
+                                          : LucideIcons.eye),
+                                  color: const Color(0xFF00E5FF),
+                                  size: 12,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  resolvedFloorIndex < 0
+                                      ? 'BASEMENT B${resolvedFloorIndex.abs()}'
+                                      : 'FLOOR $resolvedFloorIndex',
+                                  style: GoogleFonts.plusJakartaSans(
+                                    color: Colors.white,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: 0.5,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                           const Spacer(),
                           if (activePOI != null && _isNavigatingActive) ...[
                             // Red EXIT Button
@@ -1730,8 +1949,6 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                         ],
                       ),
                     ),
-
-
 
                     // Top Category Filter Chips Bar (when not navigating)
                     if (!_isNavigatingActive)
@@ -2474,6 +2691,7 @@ class _ARViewportScreenState extends State<ARViewportScreen>
     final effectiveUser = getEffectiveUserCoords(
       widget.userCoords,
       activeMallAnchor,
+      facingHeadingDegrees: widget.compassHeadingDegrees,
     );
     setState(() {
       _selectedPOI = poi;
@@ -2487,9 +2705,6 @@ class _ARViewportScreenState extends State<ARViewportScreen>
     });
     widget.onSelectDestination(poi);
   }
-
-
-
 
   String _getCardinalDirection(double deg) {
     if (deg >= 337.5 || deg < 22.5) return 'N';

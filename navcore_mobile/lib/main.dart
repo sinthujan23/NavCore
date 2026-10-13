@@ -38,7 +38,10 @@ class NexNavHttpOverrides extends HttpOverrides {
       ..badCertificateCallback = (X509Certificate cert, String host, int port) {
         if (host.contains('hashnate.com') ||
             host == '10.0.2.2' ||
-            host == 'localhost') {
+            host == 'localhost' ||
+            host == '127.0.0.1' ||
+            host.startsWith('192.168.') ||
+            host.startsWith('10.')) {
           return true;
         }
         return false;
@@ -147,11 +150,22 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
     // 3. Start real hardware sensors (GPS + Magnetometer Compass + Barometer)
     _sensorService.startHardwareStreams(
       onLocationUpdated: (coords, accuracy) {
+        if (!_elevationEngine.isCalibrated && coords.height > 0) {
+          _elevationEngine.calibrateBaseline(
+            _sensorService.currentPressure,
+            coords.height,
+          );
+        }
+        final liveFusedHeight = _elevationEngine.computeFusedLocationHeight(
+          currentPressureHpa: _sensorService.currentPressure,
+          gpsAltitude: coords.height,
+          gpsAccuracy: accuracy,
+        );
         setState(() {
           _userCoords = GeodeticCoords(
             latitude: coords.latitude,
             longitude: coords.longitude,
-            height: _userSelectedFloorHeight ?? coords.height,
+            height: _userSelectedFloorHeight ?? liveFusedHeight,
           );
           _kalmanFilter.setPosition(_userCoords);
         });
@@ -169,19 +183,24 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
       },
       onPressureUpdated: (rawPressure, smoothedPressure) {
         if (!_elevationEngine.isCalibrated) {
+          final baseAnchor = _userCoords.height > 0
+              ? _userCoords.height
+              : _buildingProfile.entranceBaseAnchorHeight;
           _elevationEngine.calibrateBaseline(
             smoothedPressure,
-            _buildingProfile.entranceBaseAnchorHeight,
+            baseAnchor,
           );
           if (kDebugMode) {
             print(
-              '[BAROMETER] Entrance Baseline Calibrated: ${smoothedPressure.toStringAsFixed(2)} hPa @ ${_buildingProfile.entranceBaseAnchorHeight}m',
+              '[BAROMETER] Entrance Baseline Calibrated: ${smoothedPressure.toStringAsFixed(2)} hPa @ ${baseAnchor}m',
             );
           }
         }
 
-        double calculatedHeight = _elevationEngine.calculateAbsoluteHeight(
-          smoothedPressure,
+        double calculatedHeight = _elevationEngine.computeFusedLocationHeight(
+          currentPressureHpa: smoothedPressure,
+          gpsAltitude: _userCoords.height > 0 ? _userCoords.height : null,
+          gpsAccuracy: _sensorService.lastAccuracy > 0 ? _sensorService.lastAccuracy : null,
         );
         FloorLevelConfig resolvedFloor = resolveFloorByHeight(
           calculatedHeight,
@@ -243,6 +262,22 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
   }
 
   Future<void> _loadActiveMallPackage(String mallId) async {
+    if (mallId.trim().isEmpty) {
+      if (mounted) {
+        setState(() {
+          _buildingProfile = const BuildingElevationProfile(
+            buildingId: '',
+            name: '',
+            entranceBaseAnchorHeight: 0.0,
+            floorGapMeters: 0.0,
+            floors: [],
+          );
+          _destinations = const [];
+          _entranceMarkers = const [];
+        });
+      }
+      return;
+    }
     final pkg = await _mallDatabaseService.loadMallPackage(
       mallId,
       userCoords: _userCoords,
@@ -289,7 +324,8 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
         final savedActiveId = prefs.getString('NexNav_active_mall_id');
         MallMetadata activeMall;
 
-        final hasGps = _userCoords.latitude != 0.0 && _userCoords.longitude != 0.0;
+        final hasGps =
+            _userCoords.latitude != 0.0 && _userCoords.longitude != 0.0;
         if (hasGps) {
           // Check for malls within 500m of the user's current GPS location
           final mallsWithin500m = malls.where((m) {
@@ -306,8 +342,22 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
 
           if (mallsWithin500m.isNotEmpty) {
             mallsWithin500m.sort((a, b) {
-              final distA = haversineDistance(_userCoords, GeodeticCoords(latitude: a.latitude, longitude: a.longitude, height: _userCoords.height));
-              final distB = haversineDistance(_userCoords, GeodeticCoords(latitude: b.latitude, longitude: b.longitude, height: _userCoords.height));
+              final distA = haversineDistance(
+                _userCoords,
+                GeodeticCoords(
+                  latitude: a.latitude,
+                  longitude: a.longitude,
+                  height: _userCoords.height,
+                ),
+              );
+              final distB = haversineDistance(
+                _userCoords,
+                GeodeticCoords(
+                  latitude: b.latitude,
+                  longitude: b.longitude,
+                  height: _userCoords.height,
+                ),
+              );
               return distA.compareTo(distB);
             });
             activeMall = mallsWithin500m.first;
@@ -346,10 +396,19 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
           }
         }
       } else {
-        final liveDestinations = await ApiService.instance.fetchDestinations();
-        if (mounted && liveDestinations.isNotEmpty) {
+        await prefs.remove('NexNav_active_mall_id');
+        await _loadActiveMallPackage('');
+        if (mounted) {
           setState(() {
-            _destinations = _deduplicateDestinations(liveDestinations);
+            _buildingProfile = const BuildingElevationProfile(
+              buildingId: '',
+              name: '',
+              entranceBaseAnchorHeight: 0.0,
+              floorGapMeters: 0.0,
+              floors: [],
+            );
+            _destinations = const [];
+            _entranceMarkers = const [];
           });
         }
       }
@@ -486,7 +545,11 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
         ),
       ];
     });
-    if (_buildingProfile.buildingId.isNotEmpty) {
+    final targetMall = (newPoi.mallId != null && newPoi.mallId!.isNotEmpty)
+        ? newPoi.mallId!
+        : _buildingProfile.buildingId;
+    if (targetMall.isNotEmpty) {
+      await ApiService.instance.createDestination(newPoi, mallId: targetMall);
       await _loadActiveMallPackage(_buildingProfile.buildingId);
     }
   }
@@ -516,8 +579,27 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
     }
   }
 
-  void _handleFloorHeightsUpdated(List<FloorHeightData> heights) {
-    if (heights.isEmpty) return;
+  void _handleFloorHeightsUpdated(List<FloorHeightData> heights) async {
+    final targetMall = _buildingProfile.buildingId;
+    if (targetMall.isEmpty) return;
+
+    if (heights.isEmpty) {
+      setState(() {
+        _buildingProfile = BuildingElevationProfile(
+          buildingId: _buildingProfile.buildingId,
+          name: _buildingProfile.name,
+          entranceBaseAnchorHeight: _buildingProfile.entranceBaseAnchorHeight,
+          floorGapMeters: _buildingProfile.floorGapMeters,
+          floors: const <FloorLevelConfig>[],
+        );
+      });
+      await ApiService.instance.deleteAllFloors(targetMall);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('cache_package_$targetMall');
+      await prefs.remove('cache_floors_$targetMall');
+      return;
+    }
+
     final updatedFloors = heights.map((h) {
       String floorName = h.floorNo < 0
           ? 'Basement B${h.floorNo.abs()}'
@@ -553,6 +635,15 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
         floors: updatedFloors,
       );
     });
+    for (final h in heights) {
+      await ApiService.instance.updateFloorHeight(
+        targetMall,
+        h.floorNo,
+        heightToNextM: h.heightToNextM,
+        baseAltitudeM: h.baseAltitudeM,
+        isLocked: h.isLocked,
+      );
+    }
   }
 
   void _showLogoutConfirmationDialog() {

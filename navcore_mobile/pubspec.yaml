@@ -44,5 +44,6 @@ flutter:
     - assets/icon/app_icon.png
     - assets/images/
     - assets/images/shops/
+    - assets/data/
 
 

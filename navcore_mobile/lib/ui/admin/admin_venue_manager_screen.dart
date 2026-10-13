@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:sensors_plus/sensors_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../data/api_service.dart';
 import '../../data/mall_database_service.dart';
@@ -144,12 +145,51 @@ class _AdminVenueManagerScreenState extends State<AdminVenueManagerScreen> {
             ),
             onPressed: () async {
               Navigator.pop(ctx);
+              final deletedId = mall.id.trim();
+              final lowerId = deletedId.toLowerCase();
+
+              // 1. Immediately remove from current UI state
               setState(() {
-                _venues.removeWhere((m) => m.id == mall.id);
+                _venues.removeWhere(
+                  (m) => m.id.trim().toLowerCase() == lowerId,
+                );
               });
-              await ApiService.instance.deleteMall(mall.id);
-              _loadVenuesFromApi();
+
+              // 2. Immediately remove from in-memory catalog
+              widget.mallService.removeMall(deletedId);
+
+              // 3. Clear active mall if this was active
+              final prefs = await SharedPreferences.getInstance();
+              final currentActive =
+                  (prefs.getString('NexNav_active_mall_id') ?? '')
+                      .trim()
+                      .toLowerCase();
+              final remaining = _venues
+                  .where((m) => m.id.trim().toLowerCase() != lowerId)
+                  .toList();
+              if (currentActive == lowerId || mall.isActive || remaining.isEmpty) {
+                await prefs.remove('NexNav_active_mall_id');
+                if (remaining.isNotEmpty) {
+                  final nextMallId = remaining.first.id;
+                  await prefs.setString('NexNav_active_mall_id', nextMallId);
+                  widget.onSelectActiveMall(nextMallId);
+                } else {
+                  widget.onSelectActiveMall('');
+                }
+              }
+
+              // 4. Delete permanently in database (local cache + backend)
+              await ApiService.instance.deleteMall(deletedId);
+
+              // 5. Reload venues while strictly ensuring the deleted venue cannot be restored
+              final refreshed = await widget.mallService.getMallsList();
               if (mounted) {
+                setState(() {
+                  _venues = refreshed
+                      .where((m) => m.id.trim().toLowerCase() != lowerId)
+                      .toList();
+                });
+
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: Text(
