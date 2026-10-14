@@ -239,8 +239,13 @@ class BarometricElevationEngine {
   double get baselineAnchorHeight => _entranceAnchorHeightMeters;
 
   /// Calibrate reference baseline pressure at building entrance or anchor point
-  void calibrateBaseline(double currentPressureHpa, [double baseHeightMeters = 0.0]) {
-    if (currentPressureHpa > 0 && !currentPressureHpa.isNaN && !currentPressureHpa.isInfinite) {
+  void calibrateBaseline(
+    double currentPressureHpa, [
+    double baseHeightMeters = 0.0,
+  ]) {
+    if (currentPressureHpa > 0 &&
+        !currentPressureHpa.isNaN &&
+        !currentPressureHpa.isInfinite) {
       _entranceBaselinePressureHpa = currentPressureHpa;
       _entranceAnchorHeightMeters = baseHeightMeters;
     }
@@ -248,18 +253,26 @@ class BarometricElevationEngine {
 
   /// Calculates real-time height in meters using relative hypsometric equation
   double calculateAbsoluteHeight(double currentPressureHpa) {
-    if (currentPressureHpa <= 0 || currentPressureHpa.isNaN || currentPressureHpa.isInfinite) {
+    if (currentPressureHpa <= 0 ||
+        currentPressureHpa.isNaN ||
+        currentPressureHpa.isInfinite) {
       return _entranceAnchorHeightMeters;
     }
 
-    if (_entranceBaselinePressureHpa == null || _entranceBaselinePressureHpa == 0) {
+    if (_entranceBaselinePressureHpa == null ||
+        _entranceBaselinePressureHpa == 0) {
       // Standard sea level fallback formula (1013.25 hPa)
       return 44330.0 * (1.0 - math.pow(currentPressureHpa / 1013.25, 0.1903));
     }
 
     // Relative height delta (m) from calibrated baseline pressure
-    double deltaMeters = 44330.0 *
-        (1.0 - math.pow(currentPressureHpa / _entranceBaselinePressureHpa!, 0.1903));
+    double deltaMeters =
+        44330.0 *
+        (1.0 -
+            math.pow(
+              currentPressureHpa / _entranceBaselinePressureHpa!,
+              0.1903,
+            ));
 
     return _entranceAnchorHeightMeters + deltaMeters;
   }
@@ -277,7 +290,8 @@ class BarometricElevationEngine {
       if (gpsAccuracy != null && gpsAccuracy > 0 && gpsAccuracy < 20.0) {
         // High confidence GNSS: weight GPS altitude as base datum
         final gpsWeight = (1.0 - (gpsAccuracy / 25.0)).clamp(0.50, 0.85);
-        final fused = (gpsWeight * gpsAltitude) + ((1.0 - gpsWeight) * baroHeight);
+        final fused =
+            (gpsWeight * gpsAltitude) + ((1.0 - gpsWeight) * baroHeight);
         return double.parse(fused.toStringAsFixed(2));
       }
       return double.parse(gpsAltitude.toStringAsFixed(2));
@@ -286,4 +300,3 @@ class BarometricElevationEngine {
     return double.parse(baroHeight.toStringAsFixed(2));
   }
 }
-

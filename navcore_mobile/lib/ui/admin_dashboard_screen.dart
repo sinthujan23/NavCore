@@ -144,6 +144,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       );
     }
 
+    // Load malls list to ensure catalog and active venue are refreshed
+    widget.mallService.getMallsList().then((_) {
+      if (mounted) setState(() {});
+    });
+
     // Refresh telemetry and metrics periodically without generating fake coordinates
     _telemetryTimer = Timer.periodic(const Duration(milliseconds: 1500), (
       timer,
@@ -184,21 +189,46 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   }
 
   MallMetadata? _resolveActiveMall() {
-    // If the catalog is empty, no mall exists in database
-    if (widget.mallService.catalog.isEmpty) return null;
-
     // 1. Check for explicitly active mall in catalog
-    final active =
-        widget.mallService.catalog.where((m) => m.isActive).firstOrNull;
-    if (active != null) return active;
+    if (widget.mallService.catalog.isNotEmpty) {
+      final active =
+          widget.mallService.catalog.where((m) => m.isActive).firstOrNull;
+      if (active != null) return active;
 
-    // 2. Check if buildingProfile.buildingId matches any existing mall in catalog
-    final profileId = widget.buildingProfile.buildingId.trim().toLowerCase();
-    if (profileId.isNotEmpty) {
-      final match = widget.mallService.catalog
-          .where((m) => m.id.trim().toLowerCase() == profileId)
-          .firstOrNull;
-      if (match != null) return match;
+      // 2. Check if buildingProfile.buildingId matches any existing mall in catalog
+      final profileId = widget.buildingProfile.buildingId.trim().toLowerCase();
+      if (profileId.isNotEmpty) {
+        final match = widget.mallService.catalog
+            .where((m) => m.id.trim().toLowerCase() == profileId)
+            .firstOrNull;
+        if (match != null) return match;
+      }
+
+      // 3. Check if buildingProfile.name matches any existing mall in catalog
+      final profileName = widget.buildingProfile.name.trim().toLowerCase();
+      if (profileName.isNotEmpty) {
+        final match = widget.mallService.catalog
+            .where((m) => m.name.trim().toLowerCase() == profileName)
+            .firstOrNull;
+        if (match != null) return match;
+      }
+    }
+
+    // 4. Fallback: if buildingProfile has name configured, synthesize active metadata
+    if (widget.buildingProfile.name.isNotEmpty) {
+      return MallMetadata(
+        id: widget.buildingProfile.buildingId,
+        name: widget.buildingProfile.name,
+        city: '',
+        country: '',
+        latitude: 0.0,
+        longitude: 0.0,
+        floorCount: widget.buildingProfile.floors.length,
+        packageSizeBytesMB: 0.0,
+        category: 'Active Venue',
+        rating: '5.0',
+        isActive: true,
+      );
     }
 
     return null;

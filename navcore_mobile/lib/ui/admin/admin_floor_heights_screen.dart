@@ -9,6 +9,7 @@ import '../../data/api_service.dart';
 import '../../data/floor_height_model.dart';
 import '../../data/geocoding_service.dart';
 import '../../data/mall_api_service.dart';
+import '../../data/mall_database_service.dart';
 
 class AdminFloorHeightsScreen extends StatefulWidget {
   final String mallId;
@@ -37,6 +38,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
   String? _statusMessage;
 
   final Map<String, String> _knownMallNames = {};
+  final Map<String, MallMetadata> _knownMalls = {};
   late List<String> _availableMallIds;
 
   // Real-time Barometer & Sensor State
@@ -60,6 +62,37 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
       );
     }
     return 3.80;
+  }
+
+  /// Resolved mall metadata for currently selected mall
+  MallMetadata? get _selectedMall {
+    final cleanId = _selectedMallId.trim().toLowerCase();
+    for (final entry in _knownMalls.entries) {
+      if (entry.key.trim().toLowerCase() == cleanId ||
+          entry.value.name.trim().toLowerCase() == cleanId) {
+        return entry.value;
+      }
+    }
+    return null;
+  }
+
+  /// Target floor gap: reads configured floor gap from the selected venue package,
+  /// perfectly propagating the distance configured in Edit Venue Package (Image 2)
+  double get _targetFloorGapM {
+    final mall = _selectedMall;
+    if (mall != null && mall.floorGapMeters > 0) {
+      return mall.floorGapMeters;
+    }
+    return _currentFloorGapM;
+  }
+
+  /// Target ground baseline altitude: reads configured ground altitude from the venue package
+  double get _targetGroundAltM {
+    final mall = _selectedMall;
+    if (mall != null && mall.entranceBaseAnchorHeight > 0) {
+      return mall.entranceBaseAnchorHeight;
+    }
+    return _hasLocationFix ? _userLocationAltitudeM : 8.5;
   }
 
   @override
@@ -190,7 +223,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
   }
 
   /// Automatically replaces any uncalibrated dummy defaults (15.0m ground or 4.5m gap)
-  /// with user location calculated elevation and dynamic standard gap
+  /// with venue configured parameters or user location calculated elevation
   void _autoSyncDefaultFloorsToLocation() {
     if (_floors.isEmpty) return;
     final hasDummyFloors = _floors.any(
@@ -202,10 +235,13 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
     );
     if (!hasDummyFloors) return;
 
+    final targetGap = _targetFloorGapM;
+    final targetGround = _targetGroundAltM;
+
     final updated = _floors.map((f) {
-      if (f.isLocked || f.source == 'admin') return f;
+      if (f.isLocked && f.heightToNextM != 4.5 && f.heightToNextM > 0.0) return f;
       final gap = (f.heightToNextM == 4.5 || f.heightToNextM <= 0.0)
-          ? _currentFloorGapM
+          ? targetGap
           : f.heightToNextM;
       return f.copyWith(
         heightToNextM: gap,
@@ -215,13 +251,13 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
 
     final recomputed = _recalculateCumulativeAltitudes(
       updated,
-      groundBaselineAlt: _userLocationAltitudeM,
+      groundBaselineAlt: targetGround,
     );
 
     setState(() {
       _floors = recomputed;
       _statusMessage =
-          'Height auto-calibrated from user location (${_userLocationAltitudeM.toStringAsFixed(2)}m) • Gap ${_currentFloorGapM.toStringAsFixed(2)}m';
+          'Height auto-calibrated (${targetGround.toStringAsFixed(2)}m ground • ${targetGap.toStringAsFixed(2)}m gap)';
     });
     widget.onHeightsUpdated?.call(_floors);
   }
@@ -257,14 +293,13 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
       return double.parse(gpsAltitude.toStringAsFixed(2));
     }
 
-    // Topographic terrain elevation + barometric hypsometric delta (no dummy 15m!)
+    // Topographic terrain elevation + barometric hypsometric delta
     final locationHeight = (terrainElevation + baroAltitudeDelta).clamp(0.0, 5000.0);
     return double.parse(locationHeight.toStringAsFixed(2));
   }
 
-
   /// Recalculates cumulative base altitudes sequentially based on floor gaps:
-  /// Floor 1 Base Altitude = user location height (or entrance anchor)
+  /// Floor 1 Base Altitude = venue anchor / ground baseline height
   /// Floor N Base Altitude = Floor N-1 Base Altitude + Floor N-1 Height To Next
   List<FloorHeightData> _recalculateCumulativeAltitudes(
     List<FloorHeightData> list, {
@@ -280,8 +315,10 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
 
     if (groundBaselineAlt != null && groundBaselineAlt > 0) {
       currentAlt = groundBaselineAlt;
-    } else if (firstFloor.baseAltitudeM > 0 && (firstFloor.isLocked || firstFloor.source == 'admin')) {
+    } else if (firstFloor.baseAltitudeM > 0 && firstFloor.isLocked && firstFloor.baseAltitudeM != 15.0) {
       currentAlt = firstFloor.baseAltitudeM;
+    } else if (_targetGroundAltM > 0) {
+      currentAlt = _targetGroundAltM;
     } else if (_hasLocationFix && _userLocationAltitudeM > 0) {
       currentAlt = _userLocationAltitudeM;
     } else if (_currentUserPosition != null) {
@@ -292,7 +329,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
     } else if (firstFloor.baseAltitudeM > 0 && firstFloor.baseAltitudeM != 15.0) {
       currentAlt = firstFloor.baseAltitudeM;
     } else {
-      currentAlt = _userLocationAltitudeM > 0 ? _userLocationAltitudeM : 8.5;
+      currentAlt = 8.5;
     }
 
     for (int i = 0; i < sorted.length; i++) {
@@ -314,7 +351,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
 
   double _calculateSuggestedFloorGap(FloorHeightData floor) {
     if (_isBarometerActive || _hasLocationFix) {
-      double prevAlt = _userLocationAltitudeM;
+      double prevAlt = _targetGroundAltM;
       final prevIndex = _floors.indexWhere((f) => f.floorNo == floor.floorNo - 1);
       if (prevIndex >= 0) {
         prevAlt = _floors[prevIndex].baseAltitudeM;
@@ -327,7 +364,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
     }
     return (floor.heightToNextM > 0 && floor.heightToNextM != 4.5)
         ? floor.heightToNextM
-        : _currentFloorGapM;
+        : _targetFloorGapM;
   }
 
   Future<void> _initMalls() async {
@@ -336,9 +373,11 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
       if (mounted) {
         setState(() {
           _availableMallIds.clear();
+          _knownMalls.clear();
           for (final m in malls) {
             final mId = m.id.trim();
             if (mId.isNotEmpty) {
+              _knownMalls[mId] = m;
               _knownMallNames[mId] = m.name.isNotEmpty ? m.name : mId;
               if (!_availableMallIds.any(
                 (id) => id.toLowerCase() == mId.toLowerCase(),
@@ -413,7 +452,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
       }
 
       final lowerTarget = targetMall.toLowerCase();
-      final filtered = list
+      var filtered = list
           .where((f) {
             final fMall = f.mallId.trim().toLowerCase();
             return fMall.isEmpty || fMall == lowerTarget;
@@ -424,26 +463,54 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
             }
             return f;
           })
-          .map((f) {
-            if (!f.isLocked && f.source != 'admin') {
-              final gap = (f.heightToNextM == 4.5 || f.heightToNextM <= 0.0)
-                  ? _currentFloorGapM
-                  : f.heightToNextM;
-              final baseAlt = (f.floorNo == 1 && (f.baseAltitudeM == 15.0 || f.baseAltitudeM <= 0.0))
-                  ? _userLocationAltitudeM
-                  : f.baseAltitudeM;
-              return f.copyWith(
-                heightToNextM: gap,
-                baseAltitudeM: baseAlt,
-                source: 'gps_baro_fusion',
-              );
-            }
-            return f;
-          })
           .toList();
 
+      final mall = _selectedMall;
+      final configuredGap = _targetFloorGapM;
+      final configuredGroundAlt = _targetGroundAltM;
+
+      // If floors were empty or unpopulated, auto-generate standard floor sequence
+      if (filtered.isEmpty && mall != null) {
+        final floorCount = mall.floorCount > 0 ? mall.floorCount : 5;
+        double currentAlt = configuredGroundAlt;
+        for (int fn = 1; fn <= floorCount; fn++) {
+          filtered.add(
+            FloorHeightData(
+              mallId: targetMall,
+              floorNo: fn,
+              heightToNextM: configuredGap,
+              baseAltitudeM: double.parse(currentAlt.toStringAsFixed(2)),
+              source: 'admin',
+              confidence: 1.0,
+              isLocked: false,
+              updatedAt: DateTime.now().toIso8601String(),
+            ),
+          );
+          currentAlt += configuredGap;
+        }
+      } else {
+        // Automatically sync floor gaps with configured venue floor gap unless manually locked
+        filtered = filtered.map((f) {
+          final isExplicitlyLocked = f.isLocked && f.heightToNextM != 4.5 && f.heightToNextM > 0.0;
+          final gap = isExplicitlyLocked ? f.heightToNextM : configuredGap;
+          final isGroundLocked = f.floorNo == 1 && f.isLocked && f.baseAltitudeM != 15.0 && f.baseAltitudeM > 0.0;
+          final baseAlt = (f.floorNo == 1 && !isGroundLocked)
+              ? configuredGroundAlt
+              : f.baseAltitudeM;
+
+          return f.copyWith(
+            heightToNextM: gap,
+            baseAltitudeM: baseAlt,
+            source: isExplicitlyLocked ? 'admin' : 'auto_calc',
+          );
+        }).toList();
+      }
+
       filtered.sort((a, b) => a.floorNo.compareTo(b.floorNo));
-      final recomputed = _recalculateCumulativeAltitudes(filtered);
+      final recomputed = _recalculateCumulativeAltitudes(
+        filtered,
+        groundBaselineAlt: configuredGroundAlt,
+      );
 
       if (mounted) {
         setState(() {
@@ -472,13 +539,16 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
     });
 
     try {
+      final targetGap = _targetFloorGapM;
+      final targetGround = _targetGroundAltM;
+
       final updatedList = await widget.apiService.triggerFloorHeightCalculation(
         targetMall,
         lat: _currentUserPosition?.latitude,
         lon: _currentUserPosition?.longitude,
         barometerPressureHpa: _currentPressureHpa,
-        liveAltitudeM: _userLocationAltitudeM,
-        floorGapM: _currentFloorGapM,
+        liveAltitudeM: targetGround,
+        floorGapM: targetGap,
       );
       final lowerTarget = targetMall.toLowerCase();
       final filtered = updatedList.where((f) {
@@ -486,30 +556,29 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
         return fMall.isEmpty || fMall == lowerTarget;
       }).toList();
 
-      // Strictly preserve admin-added floor gaps and locked floors
       final preserved = <FloorHeightData>[];
       for (final f in filtered) {
         final existing = _floors.firstWhere(
           (old) => old.floorNo == f.floorNo,
           orElse: () => f,
         );
-        if (existing.isLocked || existing.source == 'admin') {
+        if (existing.isLocked && existing.heightToNextM != 4.5 && existing.heightToNextM > 0.0) {
           preserved.add(existing);
         } else {
-          final gap = (f.heightToNextM == 4.5 || f.heightToNextM <= 0.0)
-              ? _currentFloorGapM
-              : f.heightToNextM;
+          final gap = (f.isLocked && f.heightToNextM != 4.5 && f.heightToNextM > 0.0)
+              ? f.heightToNextM
+              : targetGap;
           preserved.add(f.copyWith(
             heightToNextM: gap,
-            source: 'gps_baro_fusion',
-            confidence: _isBarometerActive ? 0.95 : 0.85,
+            source: 'auto_calc',
+            confidence: 1.0,
           ));
         }
       }
 
       final recomputed = _recalculateCumulativeAltitudes(
         preserved,
-        groundBaselineAlt: _userLocationAltitudeM,
+        groundBaselineAlt: targetGround,
       );
 
       // Push cascaded cumulative altitudes to backend to keep DB synced
@@ -518,6 +587,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
           targetMall,
           floor.floorNo,
           heightToNextM: floor.heightToNextM,
+          baseAltitudeM: floor.baseAltitudeM,
           isLocked: floor.isLocked,
         ).catchError((_) => floor);
       }
@@ -526,9 +596,8 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
         setState(() {
           _floors = recomputed;
           _isCalculating = false;
-          _statusMessage = _hasLocationFix
-              ? 'Height auto-calculated from user location (${_userLocationAltitudeM.toStringAsFixed(1)}m • Lat ${_currentUserPosition!.latitude.toStringAsFixed(4)}°) & Barometer • Admin gaps preserved!'
-              : 'Auto-calculated with real-time barometer (${_currentPressureHpa.toStringAsFixed(1)} hPa) • Admin gaps preserved!';
+          _statusMessage =
+              'Height auto-calculated: Ground ${targetGround.toStringAsFixed(2)}m • Story Gap ${targetGap.toStringAsFixed(2)}m';
         });
         widget.onHeightsUpdated?.call(_floors);
       }
@@ -743,6 +812,43 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                 spacing: 8,
                 runSpacing: 8,
                 children: [
+                  InkWell(
+                    onTap: () {
+                      textController.text =
+                          _targetFloorGapM.toStringAsFixed(2);
+                    },
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEFF6FF),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFF93C5FD)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            LucideIcons.layers,
+                            size: 13,
+                            color: Color(0xFF1D4ED8),
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            'Venue Gap (${_targetFloorGapM.toStringAsFixed(2)}m)',
+                            style: GoogleFonts.inter(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: const Color(0xFF1D4ED8),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                   InkWell(
                     onTap: () {
                       textController.text =

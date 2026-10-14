@@ -308,6 +308,15 @@ class ShopDetailsScreen extends StatelessWidget {
                           ],
                         ),
                       ),
+                      if (destination.location.latitude != 0.0 ||
+                          destination.location.longitude != 0.0) ...[
+                        const SizedBox(height: 12),
+                        _buildModernSpecTile(
+                          title: 'Geodetic Coordinates',
+                          value:
+                              '${destination.location.latitude.toStringAsFixed(6)}°N, ${destination.location.longitude.toStringAsFixed(6)}°E • Alt: ${destination.location.height.toStringAsFixed(1)}m',
+                        ),
+                      ],
                     ],
                   ),
 

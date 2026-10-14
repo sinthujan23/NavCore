@@ -18,6 +18,7 @@ import 'data/destinations.dart';
 import 'data/floor_height_model.dart';
 import 'data/mall_database_service.dart';
 import 'data/api_service.dart';
+import 'data/geocoding_service.dart';
 
 import 'ui/welcome_screen.dart';
 import 'ui/login_screen.dart';
@@ -141,34 +142,79 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
     // 2. Fetch current real GPS position (cached or live)
     final realPos = await _sensorService.getLastKnownOrCurrentPosition();
     if (realPos != null) {
+      double resolvedInitialHeight = realPos.height;
+      if (resolvedInitialHeight <= 0.0 || resolvedInitialHeight > 4000.0) {
+        resolvedInitialHeight = _buildingProfile.entranceBaseAnchorHeight > 0
+            ? _buildingProfile.entranceBaseAnchorHeight
+            : GeocodingService.resolveTerrainAltitudeFromCoords(
+                realPos.latitude,
+                realPos.longitude,
+              );
+      }
+      final posWithHeight = GeodeticCoords(
+        latitude: realPos.latitude,
+        longitude: realPos.longitude,
+        height: resolvedInitialHeight,
+      );
+      final initialFloor = resolveFloorByHeight(
+        resolvedInitialHeight,
+        _buildingProfile,
+      );
       setState(() {
-        _userCoords = realPos;
+        _userCoords = posWithHeight;
         _kalmanFilter.setPosition(_userCoords);
+        _activeFloorNumber = initialFloor.floorNumber;
       });
+      _elevationEngine.calibrateBaseline(
+        _sensorService.currentPressure,
+        resolvedInitialHeight,
+      );
     }
 
     // 3. Start real hardware sensors (GPS + Magnetometer Compass + Barometer)
     _sensorService.startHardwareStreams(
       onLocationUpdated: (coords, accuracy) {
-        if (!_elevationEngine.isCalibrated && coords.height > 0) {
+        double effectiveAltitude = coords.height;
+        if (effectiveAltitude <= 0.0 || effectiveAltitude > 4000.0) {
+          effectiveAltitude = _buildingProfile.entranceBaseAnchorHeight > 0
+              ? _buildingProfile.entranceBaseAnchorHeight
+              : GeocodingService.resolveTerrainAltitudeFromCoords(
+                  coords.latitude,
+                  coords.longitude,
+                );
+        }
+
+        if (!_elevationEngine.isCalibrated) {
           _elevationEngine.calibrateBaseline(
             _sensorService.currentPressure,
-            coords.height,
+            effectiveAltitude,
           );
         }
+
         final liveFusedHeight = _elevationEngine.computeFusedLocationHeight(
           currentPressureHpa: _sensorService.currentPressure,
-          gpsAltitude: coords.height,
+          gpsAltitude: effectiveAltitude,
           gpsAccuracy: accuracy,
         );
+
+        final targetHeight = _userSelectedFloorHeight ?? liveFusedHeight;
+        final resolvedFloor = resolveFloorByHeight(
+          targetHeight,
+          _buildingProfile,
+        );
+
         setState(() {
           _userCoords = GeodeticCoords(
             latitude: coords.latitude,
             longitude: coords.longitude,
-            height: _userSelectedFloorHeight ?? liveFusedHeight,
+            height: targetHeight,
           );
           _kalmanFilter.setPosition(_userCoords);
+          if (resolvedFloor.floorNumber != _activeFloorNumber) {
+            _activeFloorNumber = resolvedFloor.floorNumber;
+          }
         });
+        _checkAndAutoUpdateMallProximity();
       },
       onHeadingUpdated: (heading) {
         setState(() {
@@ -185,11 +231,13 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
         if (!_elevationEngine.isCalibrated) {
           final baseAnchor = _userCoords.height > 0
               ? _userCoords.height
-              : _buildingProfile.entranceBaseAnchorHeight;
-          _elevationEngine.calibrateBaseline(
-            smoothedPressure,
-            baseAnchor,
-          );
+              : (_buildingProfile.entranceBaseAnchorHeight > 0
+                    ? _buildingProfile.entranceBaseAnchorHeight
+                    : GeocodingService.resolveTerrainAltitudeFromCoords(
+                        _userCoords.latitude,
+                        _userCoords.longitude,
+                      ));
+          _elevationEngine.calibrateBaseline(smoothedPressure, baseAnchor);
           if (kDebugMode) {
             print(
               '[BAROMETER] Entrance Baseline Calibrated: ${smoothedPressure.toStringAsFixed(2)} hPa @ ${baseAnchor}m',
@@ -200,7 +248,9 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
         double calculatedHeight = _elevationEngine.computeFusedLocationHeight(
           currentPressureHpa: smoothedPressure,
           gpsAltitude: _userCoords.height > 0 ? _userCoords.height : null,
-          gpsAccuracy: _sensorService.lastAccuracy > 0 ? _sensorService.lastAccuracy : null,
+          gpsAccuracy: _sensorService.lastAccuracy > 0
+              ? _sensorService.lastAccuracy
+              : null,
         );
         FloorLevelConfig resolvedFloor = resolveFloorByHeight(
           calculatedHeight,
@@ -262,7 +312,11 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
   }
 
   Future<void> _loadActiveMallPackage(String mallId) async {
-    if (mallId.trim().isEmpty) {
+    final prefs = await SharedPreferences.getInstance();
+    final cleanId = mallId.trim();
+    if (cleanId.isEmpty) {
+      await prefs.remove('NexNav_active_mall_id');
+      await _mallDatabaseService.clearActiveMall();
       if (mounted) {
         setState(() {
           _buildingProfile = const BuildingElevationProfile(
@@ -278,16 +332,77 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
       }
       return;
     }
+
+    // Proximity Limit: If not admin and user GPS is valid, verify mall is within 500m
+    if (_currentRole != UserRole.admin &&
+        _userCoords.latitude != 0.0 &&
+        _userCoords.longitude != 0.0) {
+      final mall = _mallDatabaseService.catalog
+          .where((m) => m.id == cleanId)
+          .firstOrNull;
+      if (mall != null) {
+        final dist = _mallDatabaseService.calculateDistanceToMall(
+          _userCoords,
+          mall,
+        );
+        if (dist > 500.0) {
+          debugPrint(
+            '[Main] Proximity limit: mall $cleanId is ${dist.toInt()}m away (>500m). Unloading map.',
+          );
+          await prefs.remove('NexNav_active_mall_id');
+          await _mallDatabaseService.clearActiveMall();
+          if (mounted) {
+            setState(() {
+              _buildingProfile = const BuildingElevationProfile(
+                buildingId: '',
+                name: '',
+                entranceBaseAnchorHeight: 0.0,
+                floorGapMeters: 0.0,
+                floors: [],
+              );
+              _destinations = const [];
+              _entranceMarkers = const [];
+            });
+          }
+          return;
+        }
+      }
+    }
+
+    await prefs.setString('NexNav_active_mall_id', cleanId);
+    await _mallDatabaseService.setActiveMall(cleanId);
+
     final pkg = await _mallDatabaseService.loadMallPackage(
-      mallId,
+      cleanId,
       userCoords: _userCoords,
     );
     if (mounted) {
+      double resolvedUserH = _userCoords.height;
+      if (resolvedUserH <= 0.0 || resolvedUserH > 4000.0) {
+        resolvedUserH = pkg.profile.entranceBaseAnchorHeight > 0
+            ? pkg.profile.entranceBaseAnchorHeight
+            : GeocodingService.resolveTerrainAltitudeFromCoords(
+                _userCoords.latitude,
+                _userCoords.longitude,
+              );
+      }
+      final resolvedFloor = resolveFloorByHeight(resolvedUserH, pkg.profile);
       setState(() {
         _buildingProfile = pkg.profile;
         _destinations = _deduplicateDestinations(pkg.destinations);
         _entranceMarkers = pkg.entranceMarkers;
+        _userCoords = GeodeticCoords(
+          latitude: _userCoords.latitude,
+          longitude: _userCoords.longitude,
+          height: _userSelectedFloorHeight ?? resolvedUserH,
+        );
+        _kalmanFilter.setPosition(_userCoords);
+        _activeFloorNumber = resolvedFloor.floorNumber;
       });
+      _elevationEngine.calibrateBaseline(
+        _sensorService.currentPressure,
+        resolvedUserH,
+      );
     }
   }
 
@@ -322,12 +437,18 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
       final malls = await ApiService.instance.fetchMalls();
       if (malls.isNotEmpty) {
         final savedActiveId = prefs.getString('NexNav_active_mall_id');
-        MallMetadata activeMall;
+        // If an active venue was already selected, only restore unconditionally for Admin
+        if (_currentRole == UserRole.admin &&
+            savedActiveId != null &&
+            savedActiveId.isNotEmpty) {
+          await _loadActiveMallPackage(savedActiveId);
+          return;
+        }
 
         final hasGps =
             _userCoords.latitude != 0.0 && _userCoords.longitude != 0.0;
         if (hasGps) {
-          // Check for malls within 500m of the user's current GPS location
+          // Check for malls strictly within 500m of user's current GPS location
           final mallsWithin500m = malls.where((m) {
             final dist = haversineDistance(
               _userCoords,
@@ -341,59 +462,66 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
           }).toList();
 
           if (mallsWithin500m.isNotEmpty) {
-            mallsWithin500m.sort((a, b) {
-              final distA = haversineDistance(
-                _userCoords,
-                GeodeticCoords(
-                  latitude: a.latitude,
-                  longitude: a.longitude,
-                  height: _userCoords.height,
-                ),
-              );
-              final distB = haversineDistance(
-                _userCoords,
-                GeodeticCoords(
-                  latitude: b.latitude,
-                  longitude: b.longitude,
-                  height: _userCoords.height,
-                ),
-              );
-              return distA.compareTo(distB);
-            });
-            activeMall = mallsWithin500m.first;
+            final matchingSaved = savedActiveId != null
+                ? mallsWithin500m
+                      .where((m) => m.id == savedActiveId)
+                      .firstOrNull
+                : null;
+            final activeMall =
+                matchingSaved ??
+                () {
+                  mallsWithin500m.sort((a, b) {
+                    final distA = haversineDistance(
+                      _userCoords,
+                      GeodeticCoords(
+                        latitude: a.latitude,
+                        longitude: a.longitude,
+                        height: _userCoords.height,
+                      ),
+                    );
+                    final distB = haversineDistance(
+                      _userCoords,
+                      GeodeticCoords(
+                        latitude: b.latitude,
+                        longitude: b.longitude,
+                        height: _userCoords.height,
+                      ),
+                    );
+                    return distA.compareTo(distB);
+                  });
+                  return mallsWithin500m.first;
+                }();
+
             await prefs.setString('NexNav_active_mall_id', activeMall.id);
+            await _loadActiveMallPackage(activeMall.id);
+
+            if (_destinations.isEmpty) {
+              final liveDestinations = await ApiService.instance
+                  .fetchDestinations(mallId: activeMall.id);
+              final fallbackDestinations = liveDestinations.isNotEmpty
+                  ? liveDestinations
+                  : await ApiService.instance.fetchDestinations();
+              final filteredForMall = fallbackDestinations.where((p) {
+                if (p.mallId != null && p.mallId!.isNotEmpty) {
+                  return p.mallId == activeMall.id;
+                }
+                return true;
+              }).toList();
+              if (mounted && filteredForMall.isNotEmpty) {
+                setState(() {
+                  _destinations = _deduplicateDestinations(filteredForMall);
+                });
+              }
+            }
           } else {
-            activeMall = malls.firstWhere(
-              (m) => m.id == savedActiveId,
-              orElse: () => malls.first,
-            );
+            // Above 500m: malls above 500m are NOT loaded in maps!
+            await prefs.remove('NexNav_active_mall_id');
+            await _loadActiveMallPackage('');
           }
         } else {
-          activeMall = malls.firstWhere(
-            (m) => m.id == savedActiveId,
-            orElse: () => malls.first,
-          );
-        }
-
-        await _loadActiveMallPackage(activeMall.id);
-        if (_destinations.isEmpty) {
-          final liveDestinations = await ApiService.instance.fetchDestinations(
-            mallId: activeMall.id,
-          );
-          final fallbackDestinations = liveDestinations.isNotEmpty
-              ? liveDestinations
-              : await ApiService.instance.fetchDestinations();
-          final filteredForMall = fallbackDestinations.where((p) {
-            if (p.mallId != null && p.mallId!.isNotEmpty) {
-              return p.mallId == activeMall.id;
-            }
-            return true;
-          }).toList();
-          if (mounted && filteredForMall.isNotEmpty) {
-            setState(() {
-              _destinations = _deduplicateDestinations(filteredForMall);
-            });
-          }
+          // No GPS fixed yet: malls are NOT loaded until GPS is within 500m
+          await prefs.remove('NexNav_active_mall_id');
+          await _loadActiveMallPackage('');
         }
       } else {
         await prefs.remove('NexNav_active_mall_id');
@@ -420,13 +548,71 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
   Future<void> _autoLoadNearestMallMap() async {
     final pkg = await _mallDatabaseService.autoDownloadAndActivateNearestMall(
       _userCoords,
+      maxRadiusMeters: 500.0,
     );
     if (mounted) {
       setState(() {
         _buildingProfile = pkg.profile;
-        _destinations = pkg.destinations;
+        _destinations = _deduplicateDestinations(pkg.destinations);
         _entranceMarkers = pkg.entranceMarkers;
       });
+    }
+  }
+
+  String? _lastAutoDetectedMallId;
+  DateTime? _lastProximityCheckTime;
+
+  /// Dynamically verifies whether user's current GPS position is within 500m of a mall.
+  /// If within 500m, auto-loads the mall map. If above 500m, unloads the mall map.
+  Future<void> _checkAndAutoUpdateMallProximity() async {
+    final now = DateTime.now();
+    if (_lastProximityCheckTime != null &&
+        now.difference(_lastProximityCheckTime!).inMilliseconds < 2500) {
+      return;
+    }
+    _lastProximityCheckTime = now;
+
+    // Do NOT automatically override/unload the active venue if in Admin mode or Admin Dashboard!
+    if (_currentRole == UserRole.admin ||
+        _authScreenState == AuthScreenState.adminDashboard) {
+      return;
+    }
+
+    final hasGps = _userCoords.latitude != 0.0 && _userCoords.longitude != 0.0;
+    if (!hasGps) return;
+
+    final mallsWithin500m = await _mallDatabaseService.getMallsWithinRadius(
+      _userCoords,
+      radiusMeters: 500.0,
+    );
+
+    if (mallsWithin500m.isNotEmpty) {
+      mallsWithin500m.sort((a, b) {
+        final distA = _mallDatabaseService.calculateDistanceToMall(
+          _userCoords,
+          a,
+        );
+        final distB = _mallDatabaseService.calculateDistanceToMall(
+          _userCoords,
+          b,
+        );
+        return distA.compareTo(distB);
+      });
+      final nearestMall = mallsWithin500m.first;
+      if (_lastAutoDetectedMallId != nearestMall.id) {
+        _lastAutoDetectedMallId = nearestMall.id;
+        await _mallDatabaseService.setActiveMall(nearestMall.id);
+        await _loadActiveMallPackage(nearestMall.id);
+      }
+    } else {
+      // User is outside 500m radius of ALL malls:
+      // Malls above 500m are strictly NOT loaded in maps anywhere in the system!
+      _lastAutoDetectedMallId = null;
+      if (_buildingProfile.buildingId.isNotEmpty) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove('NexNav_active_mall_id');
+        await _loadActiveMallPackage('');
+      }
     }
   }
 
@@ -840,7 +1026,13 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
         sensorService: _sensorService,
         mallService: _mallDatabaseService,
         onSetupCompleted: (coords, mall) async {
-          await _loadActiveMallPackage(mall.id);
+          if (mall != null) {
+            await _loadActiveMallPackage(mall.id);
+          } else {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.remove('NexNav_active_mall_id');
+            await _loadActiveMallPackage('');
+          }
           setState(() {
             _userCoords = coords;
             _kalmanFilter.setPosition(coords);
@@ -852,9 +1044,9 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
     }
 
     // 5. Main Navigation Stack (Home, AR View, Floor Plan, Mall Explorer)
-    final currentFloor = resolveFloorByHeight(
-      _userCoords.height,
-      _buildingProfile,
+    final currentFloor = _buildingProfile.floors.firstWhere(
+      (f) => f.floorNumber == _activeFloorNumber,
+      orElse: () => resolveFloorByHeight(_userCoords.height, _buildingProfile),
     );
 
     final screens = [
@@ -933,6 +1125,9 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
         },
         userEmail: _userEmail,
         onLogout: _showLogoutConfirmationDialog,
+        mallService: _mallDatabaseService,
+        onOpenMallExplorer: () => setState(() => _currentIndex = 3),
+        onRefreshLocation: _autoLoadNearestMallMap,
       ),
       MallExplorerScreen(
         mallService: _mallDatabaseService,

@@ -137,10 +137,45 @@ router.post('/', requireAdmin, (req, res) => {
  */
 router.put('/:id', requireAdmin, (req, res) => {
   const mallId = req.params.id;
-  const updated = db.update('malls', m => m.id === mallId, m => ({ ...m, ...req.body, id: mallId }));
+  const body = req.body;
+  const updated = db.update('malls', m => m.id === mallId, m => ({
+    ...m,
+    ...body,
+    id: mallId,
+    entranceBaseAnchorHeight: body.entranceBaseAnchorHeight !== undefined ? Number(body.entranceBaseAnchorHeight) : m.entranceBaseAnchorHeight,
+    floorGapMeters: body.floorGapMeters !== undefined ? Number(body.floorGapMeters) : m.floorGapMeters,
+  }));
   if (!updated) {
     return res.status(404).json({ error: 'Mall not found' });
   }
+
+  // Automatically recalculate / sync floor heights for this mall if floor gap, ground alt, or floor count changed
+  if (body.floorGapMeters !== undefined || body.entranceBaseAnchorHeight !== undefined || body.floorCount !== undefined) {
+    const gap = Number(updated.floorGapMeters) || 3.8;
+    const baseAlt = (updated.entranceBaseAnchorHeight !== undefined && Number(updated.entranceBaseAnchorHeight) > 0)
+      ? Number(updated.entranceBaseAnchorHeight)
+      : 8.5;
+    const floorCount = Number(updated.floorCount) || 5;
+
+    const remaining = db.filter('floorHeights', f => (f.mallId || '').trim().toLowerCase() !== mallId.toLowerCase());
+    const newFloors = [];
+    let currentAlt = baseAlt;
+    for (let fn = 1; fn <= floorCount; fn++) {
+      newFloors.push({
+        mallId: updated.id,
+        floorNo: fn,
+        heightToNextM: gap,
+        baseAltitudeM: parseFloat(currentAlt.toFixed(2)),
+        source: 'admin',
+        confidence: 1.0,
+        isLocked: false,
+        updatedAt: new Date().toISOString(),
+      });
+      currentAlt += gap;
+    }
+    db.set('floorHeights', [...remaining, ...newFloors]);
+  }
+
   return res.json(updated);
 });
 

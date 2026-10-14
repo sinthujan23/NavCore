@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -8,6 +9,7 @@ import 'package:sensors_plus/sensors_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../data/api_service.dart';
+import '../../data/floor_height_model.dart';
 import '../../data/mall_database_service.dart';
 import '../../data/geocoding_service.dart';
 import '../../engine/ecef_engine.dart';
@@ -52,6 +54,102 @@ class _AdminVenueManagerScreenState extends State<AdminVenueManagerScreen> {
     } catch (_) {}
   }
 
+  Future<void> _activateMall(MallMetadata mall) async {
+    if (mall.isActive) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${mall.name} is already the active venue map',
+            style: GoogleFonts.plusJakartaSans(
+              fontWeight: FontWeight.w600,
+              color: Colors.white,
+            ),
+          ),
+          backgroundColor: const Color(0xFF059669),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 1),
+        ),
+      );
+      return;
+    }
+
+    // 1. Set active in mallService (updates SharedPreferences & in-memory catalog)
+    await widget.mallService.setActiveMall(mall.id);
+
+    // 2. Notify parent to load the active package into building profile
+    await widget.onSelectActiveMall(mall.id);
+
+    // 3. Update the API so active status is persisted on backend
+    try {
+      final activeV = MallMetadata(
+        id: mall.id,
+        name: mall.name,
+        city: mall.city,
+        country: mall.country,
+        latitude: mall.latitude,
+        longitude: mall.longitude,
+        floorCount: mall.floorCount,
+        packageSizeBytesMB: mall.packageSizeBytesMB,
+        category: mall.category,
+        rating: mall.rating,
+        isDownloaded: mall.isDownloaded,
+        isActive: true,
+      );
+      ApiService.instance.updateMall(activeV);
+    } catch (_) {}
+
+    // 4. Update the local UI list immediately so user sees the change right away
+    if (mounted) {
+      setState(() {
+        _venues = _venues.map((v) {
+          final isTarget =
+              (v.id.trim().toLowerCase() == mall.id.trim().toLowerCase());
+          return MallMetadata(
+            id: v.id,
+            name: v.name,
+            city: v.city,
+            country: v.country,
+            latitude: v.latitude,
+            longitude: v.longitude,
+            floorCount: v.floorCount,
+            packageSizeBytesMB: v.packageSizeBytesMB,
+            category: v.category,
+            rating: v.rating,
+            isDownloaded: v.isDownloaded,
+            isActive: isTarget,
+          );
+        }).toList();
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(
+                LucideIcons.checkCircle2,
+                color: Colors.white,
+                size: 18,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '${mall.name} is now the active venue map',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: const Color(0xFF059669),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
   void _openAddVenueScreen([MallMetadata? existingVenue]) {
     Navigator.push(
       context,
@@ -77,6 +175,54 @@ class _AdminVenueManagerScreenState extends State<AdminVenueManagerScreen> {
             } else {
               await ApiService.instance.createMall(newMall);
             }
+
+            // Automatically synchronize and cascade floor heights across the system for this mall
+            final floorCount = newMall.floorCount > 0 ? newMall.floorCount : 5;
+            final gap = newMall.floorGapMeters > 0
+                ? newMall.floorGapMeters
+                : 3.8;
+            final baseAlt = newMall.entranceBaseAnchorHeight > 0
+                ? newMall.entranceBaseAnchorHeight
+                : 8.5;
+
+            final List<FloorHeightData> updatedFloors = [];
+            double curAlt = baseAlt;
+            for (int fn = 1; fn <= floorCount; fn++) {
+              final fh = FloorHeightData(
+                mallId: newMall.id,
+                floorNo: fn,
+                heightToNextM: gap,
+                baseAltitudeM: double.parse(curAlt.toStringAsFixed(2)),
+                source: 'admin',
+                confidence: 1.0,
+                isLocked: true,
+                updatedAt: DateTime.now().toIso8601String(),
+              );
+              updatedFloors.add(fh);
+              curAlt += gap;
+              ApiService.instance
+                  .updateFloorHeight(
+                    newMall.id,
+                    fn,
+                    heightToNextM: gap,
+                    baseAltitudeM: fh.baseAltitudeM,
+                    isLocked: true,
+                  )
+                  .catchError((_) => false);
+            }
+
+            // Immediately persist to local cache and purge stale package cache
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setStringList(
+              'venue_parking_floors_${newMall.id}',
+              newMall.parkingFloors,
+            );
+            await prefs.setString(
+              'cache_floors_${newMall.id}',
+              jsonEncode(updatedFloors.map((f) => f.toJson()).toList()),
+            );
+            await prefs.remove('cache_package_${newMall.id}');
+
             widget.onSelectActiveMall(newMall.id);
             _loadVenuesFromApi();
           },
@@ -167,7 +313,9 @@ class _AdminVenueManagerScreenState extends State<AdminVenueManagerScreen> {
               final remaining = _venues
                   .where((m) => m.id.trim().toLowerCase() != lowerId)
                   .toList();
-              if (currentActive == lowerId || mall.isActive || remaining.isEmpty) {
+              if (currentActive == lowerId ||
+                  mall.isActive ||
+                  remaining.isEmpty) {
                 await prefs.remove('NexNav_active_mall_id');
                 if (remaining.isNotEmpty) {
                   final nextMallId = remaining.first.id;
@@ -242,39 +390,82 @@ class _AdminVenueManagerScreenState extends State<AdminVenueManagerScreen> {
             ),
           ),
         ),
+        titleSpacing: 8,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              'Venue Package Manager',
+              'Venue Packages',
               overflow: TextOverflow.ellipsis,
+              maxLines: 1,
               style: GoogleFonts.plusJakartaSans(
                 fontSize: 15.5,
                 fontWeight: FontWeight.w800,
                 color: const Color(0xFF0F172A),
               ),
             ),
-            Text(
-              '${_venues.length} venue packages registered',
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: const Color(0xFF64748B),
-              ),
+            Builder(
+              builder: (context) {
+                final activeVenue = _venues
+                    .where((m) => m.isActive)
+                    .firstOrNull;
+                return Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (activeVenue != null) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 1.5,
+                        ),
+                        margin: const EdgeInsets.only(right: 6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFECFDF5),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: const Color(0xFFA7F3D0)),
+                        ),
+                        child: Text(
+                          'Active: ${activeVenue.name}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            color: const Color(0xFF047857),
+                          ),
+                        ),
+                      ),
+                    ],
+                    Flexible(
+                      child: Text(
+                        '${_venues.length} venues',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: const Color(0xFF64748B),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
             ),
           ],
         ),
         actions: [
           Padding(
-            padding: const EdgeInsets.only(right: 14, top: 10, bottom: 10),
+            padding: const EdgeInsets.only(right: 12, top: 10, bottom: 10),
             child: Center(
               child: InkWell(
                 onTap: () => _openAddVenueScreen(),
                 borderRadius: BorderRadius.circular(20),
                 child: Container(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 8,
+                    horizontal: 11,
+                    vertical: 7,
                   ),
                   decoration: BoxDecoration(
                     color: const Color(0xFF0F172A),
@@ -293,16 +484,16 @@ class _AdminVenueManagerScreenState extends State<AdminVenueManagerScreen> {
                       const Icon(
                         LucideIcons.plus,
                         color: Colors.white,
-                        size: 14,
+                        size: 13,
                       ),
-                      const SizedBox(width: 5),
+                      const SizedBox(width: 4),
                       Text(
-                        'ADD NEW MALL',
+                        'ADD MALL',
                         style: GoogleFonts.plusJakartaSans(
                           fontSize: 11,
                           fontWeight: FontWeight.w800,
                           color: Colors.white,
-                          letterSpacing: 0.4,
+                          letterSpacing: 0.3,
                         ),
                       ),
                     ],
@@ -544,10 +735,7 @@ class _AdminVenueManagerScreenState extends State<AdminVenueManagerScreen> {
                         children: [
                           Expanded(
                             child: OutlinedButton.icon(
-                              onPressed: () {
-                                widget.onSelectActiveMall(mall.id);
-                                Navigator.pop(context);
-                              },
+                              onPressed: () => _activateMall(mall),
                               icon: Icon(
                                 LucideIcons.checkCircle2,
                                 size: 15,
@@ -638,10 +826,13 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
   late final TextEditingController _floorGapController;
 
   int _floorCount = 5;
+  List<String> _selectedParkingFloors = ['Floor 1'];
+  final List<String> _customBasementFloors = [];
   bool _userEditedId = false;
   bool _isFetchingGps = false;
   bool _isResolvingPlace = false;
   bool _isStationaryLocked = false;
+  bool _isElevationAutoLocked = true;
 
   // Phone motion tracking & continuous auto-sync
   final bool _isMotionSyncActive = true;
@@ -654,6 +845,79 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
 
   // High-accuracy multi-sample GPS convergence & stationary lock anchor
   GeodeticCoords? _lastStabilizedCoords;
+
+  /// Auto-calculates Ground Altitude and Floor Gap based on user's location & terrain datum
+  void _autoCalculateElevationAndLock({
+    double? lat,
+    double? lon,
+    double? rawAltitude,
+    bool force = false,
+  }) {
+    final targetLat =
+        lat ??
+        double.tryParse(_latController.text) ??
+        widget.userCoords?.latitude ??
+        widget.existingVenue?.latitude ??
+        8.502418;
+    final targetLon =
+        lon ??
+        double.tryParse(_lngController.text) ??
+        widget.userCoords?.longitude ??
+        widget.existingVenue?.longitude ??
+        81.181243;
+    final targetAlt =
+        rawAltitude ??
+        (widget.userCoords != null &&
+                widget.userCoords!.height > 0.0 &&
+                widget.userCoords!.height < 4000.0
+            ? widget.userCoords!.height
+            : null);
+
+    // 1. Resolve Ground Altitude based on user's current location & terrain datum
+    double resolvedAlt = 0.0;
+    if (targetAlt != null && targetAlt >= 1.0 && targetAlt < 4000.0) {
+      resolvedAlt = double.parse(targetAlt.toStringAsFixed(1));
+    } else {
+      resolvedAlt = GeocodingService.resolveTerrainAltitudeFromCoords(
+        targetLat,
+        targetLon,
+      );
+    }
+
+    // 2. Resolve Floor Gap based on user's location & architectural model
+    final resolvedGap = GeocodingService.resolveDynamicFloorGapFromCoords(
+      latitude: targetLat,
+      longitude: targetLon,
+    );
+
+    if (force || _isElevationAutoLocked) {
+      setState(() {
+        _heightController.text = resolvedAlt.toStringAsFixed(1);
+        _floorGapController.text = resolvedGap.toStringAsFixed(1);
+        _isElevationAutoLocked = true;
+      });
+    }
+
+    // High-fidelity background geocoding to refine real architectural tags
+    GeocodingService.reverseGeocode(
+          targetLat,
+          targetLon,
+          rawAltitude: resolvedAlt,
+        )
+        .then((geo) {
+          if (mounted && _isElevationAutoLocked) {
+            setState(() {
+              if (geo.groundAltitude > 0.0) {
+                _heightController.text = geo.groundAltitude.toStringAsFixed(1);
+              }
+              if (geo.floorGap > 0.0) {
+                _floorGapController.text = geo.floorGap.toStringAsFixed(1);
+              }
+            });
+          }
+        })
+        .catchError((_) {});
+  }
 
   @override
   void initState() {
@@ -682,24 +946,55 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
         ? 0.0
         : rawInitialAlt;
 
+    final effectiveLat = initialLat ?? widget.userCoords?.latitude ?? 8.502418;
+    final effectiveLng =
+        initialLng ?? widget.userCoords?.longitude ?? 81.181243;
+    final terrainAlt = GeocodingService.resolveTerrainAltitudeFromCoords(
+      effectiveLat,
+      effectiveLng,
+    );
+    final autoGroundAlt = (initialAlt > 0.0) ? initialAlt : terrainAlt;
+    final autoFloorGap = GeocodingService.resolveDynamicFloorGapFromCoords(
+      latitude: effectiveLat,
+      longitude: effectiveLng,
+    );
+
     _latController = TextEditingController(
       text: initialLat != null ? initialLat.toStringAsFixed(6) : '',
     );
     _lngController = TextEditingController(
       text: initialLng != null ? initialLng.toStringAsFixed(6) : '',
     );
+    final venueAlt = (v != null && v.entranceBaseAnchorHeight > 0)
+        ? v.entranceBaseAnchorHeight
+        : autoGroundAlt;
+    final venueGap = (v != null && v.floorGapMeters > 0)
+        ? v.floorGapMeters
+        : autoFloorGap;
+
     _heightController = TextEditingController(
-      text: initialAlt.toStringAsFixed(1),
+      text: venueAlt.toStringAsFixed(1),
     );
-    _floorGapController = TextEditingController(text: '4.5');
+    _floorGapController = TextEditingController(
+      text: venueGap.toStringAsFixed(1),
+    );
     _floorCount = (v != null && v.floorCount > 0) ? v.floorCount : 5;
+    if (v != null && v.parkingFloors.isNotEmpty) {
+      _selectedParkingFloors = List<String>.from(v.parkingFloors);
+      for (final f in _selectedParkingFloors) {
+        if (f.toUpperCase().startsWith('B') &&
+            !_customBasementFloors.contains(f)) {
+          _customBasementFloors.add(f);
+        }
+      }
+    }
 
     if (v != null) {
       _userEditedId = true;
       _lastStabilizedCoords = GeodeticCoords(
         latitude: v.latitude,
         longitude: v.longitude,
-        height: initialAlt,
+        height: venueAlt,
       );
     }
 
@@ -728,12 +1023,34 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
     // Start continuous phone motion listener & live auto-sync
     _startLiveMotionSync();
 
-    // Auto-trigger live GPS convergence on new venue creation
-    if (widget.existingVenue == null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+    // Auto-trigger live GPS & architecture convergence
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (widget.existingVenue == null) {
         _syncLiveGpsAndArchitecture();
-      });
-    }
+      } else {
+        // If existing venue has 0.0 ground altitude or missing floor gap, auto-calculate and lock to location
+        if (widget.existingVenue!.entranceBaseAnchorHeight <= 0.0 ||
+            widget.existingVenue!.floorGapMeters <= 0.0) {
+          _autoCalculateElevationAndLock(force: true);
+        }
+        SharedPreferences.getInstance().then((prefs) {
+          final saved = prefs.getStringList(
+            'venue_parking_floors_${widget.existingVenue!.id}',
+          );
+          if (saved != null && saved.isNotEmpty && mounted) {
+            setState(() {
+              _selectedParkingFloors = List<String>.from(saved);
+              for (final f in _selectedParkingFloors) {
+                if (f.toUpperCase().startsWith('B') &&
+                    !_customBasementFloors.contains(f)) {
+                  _customBasementFloors.add(f);
+                }
+              }
+            });
+          }
+        });
+      }
+    });
   }
 
   @override
@@ -902,12 +1219,14 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
       _latController.text = newCoords.latitude.toStringAsFixed(6);
       _lngController.text = newCoords.longitude.toStringAsFixed(6);
 
-      // Live ground level altitude calculation
-      double calibratedAlt = 0.0;
-      if (pos.altitude > 0.0 && pos.altitude < 4000.0) {
-        calibratedAlt = double.parse(pos.altitude.toStringAsFixed(1));
+      // Auto-calculate elevation and floor gap locked to user's location
+      if (_isElevationAutoLocked) {
+        _autoCalculateElevationAndLock(
+          lat: newCoords.latitude,
+          lon: newCoords.longitude,
+          rawAltitude: pos.altitude,
+        );
       }
-      _heightController.text = calibratedAlt.toStringAsFixed(1);
     });
 
     // Auto-recalculate architecture and reverse geocode when moving (throttled every 3 seconds)
@@ -923,10 +1242,16 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
           .then((geo) {
             if (mounted) {
               setState(() {
-                _heightController.text = geo.groundAltitude.toStringAsFixed(1);
-                _floorGapController.text = geo.floorGap > 0
-                    ? geo.floorGap.toStringAsFixed(1)
-                    : '4.5';
+                if (_isElevationAutoLocked) {
+                  if (geo.groundAltitude > 0) {
+                    _heightController.text = geo.groundAltitude.toStringAsFixed(
+                      1,
+                    );
+                  }
+                  if (geo.floorGap > 0) {
+                    _floorGapController.text = geo.floorGap.toStringAsFixed(1);
+                  }
+                }
                 if (geo.floorCount > 0) {
                   _floorCount = geo.floorCount;
                 }
@@ -1191,10 +1516,21 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
         setState(() {
           _latController.text = finalCoords.latitude.toStringAsFixed(6);
           _lngController.text = finalCoords.longitude.toStringAsFixed(6);
-          _heightController.text = geo.groundAltitude.toStringAsFixed(1);
-          _floorGapController.text = geo.floorGap > 0
-              ? geo.floorGap.toStringAsFixed(1)
-              : '4.5';
+          if (_isElevationAutoLocked) {
+            _autoCalculateElevationAndLock(
+              lat: finalCoords.latitude,
+              lon: finalCoords.longitude,
+              rawAltitude: finalCoords.height,
+              force: true,
+            );
+          } else {
+            if (geo.groundAltitude > 0) {
+              _heightController.text = geo.groundAltitude.toStringAsFixed(1);
+            }
+            if (geo.floorGap > 0) {
+              _floorGapController.text = geo.floorGap.toStringAsFixed(1);
+            }
+          }
           if (geo.floorCount > 0) {
             _floorCount = geo.floorCount;
           }
@@ -1293,6 +1629,17 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
         widget.userCoords?.longitude ??
         0.0;
 
+    final groundAlt =
+        double.tryParse(_heightController.text) ??
+        (widget.userCoords != null && widget.userCoords!.height > 0
+            ? widget.userCoords!.height
+            : 8.5);
+    final floorGap = double.tryParse(_floorGapController.text) ?? 3.8;
+
+    final parkingFloorsList = _selectedParkingFloors.isEmpty
+        ? ['Floor 1']
+        : List<String>.from(_selectedParkingFloors);
+
     final newMall = MallMetadata(
       id: id,
       name: name,
@@ -1312,7 +1659,17 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
       rating: widget.existingVenue?.rating ?? '4.8',
       isDownloaded: widget.existingVenue?.isDownloaded ?? true,
       isActive: widget.existingVenue?.isActive ?? false,
+      entranceBaseAnchorHeight: groundAlt,
+      floorGapMeters: floorGap,
+      parkingFloors: parkingFloorsList,
     );
+
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.setStringList(
+        'venue_parking_floors_${newMall.id}',
+        parkingFloorsList,
+      );
+    });
 
     widget.onSaveVenue(newMall);
     Navigator.pop(context);
@@ -1332,6 +1689,7 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
     required String title,
     required IconData icon,
     required Color iconColor,
+    Widget? headerTrailing,
     required List<Widget> children,
   }) {
     return Container(
@@ -1375,6 +1733,7 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
                   ),
                 ),
               ),
+              ?headerTrailing,
             ],
           ),
           const SizedBox(height: 16),
@@ -1389,6 +1748,9 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
     required TextEditingController controller,
     String? hintText,
     IconData? prefixIcon,
+    Widget? suffixIcon,
+    bool readOnly = false,
+    Color? fillColor,
     int maxLines = 1,
     Function(String)? onChanged,
   }) {
@@ -1409,11 +1771,12 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
         TextFormField(
           controller: controller,
           maxLines: maxLines,
+          readOnly: readOnly,
           onChanged: onChanged,
           style: GoogleFonts.plusJakartaSans(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            color: const Color(0xFF0F172A),
+            fontSize: 13.5,
+            fontWeight: FontWeight.w700,
+            color: readOnly ? const Color(0xFF047857) : const Color(0xFF0F172A),
           ),
           decoration: InputDecoration(
             hintText: hintText,
@@ -1421,27 +1784,54 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
               color: const Color(0xFF94A3B8),
               fontSize: 12.5,
             ),
+            prefixIconConstraints: const BoxConstraints(
+              minWidth: 28,
+              minHeight: 28,
+            ),
+            suffixIconConstraints: const BoxConstraints(
+              minWidth: 28,
+              minHeight: 28,
+            ),
             prefixIcon: prefixIcon != null
-                ? Icon(prefixIcon, size: 16, color: const Color(0xFF64748B))
+                ? Icon(
+                    prefixIcon,
+                    size: 15,
+                    color: readOnly
+                        ? const Color(0xFF059669)
+                        : const Color(0xFF64748B),
+                  )
                 : null,
+            suffixIcon: suffixIcon,
             contentPadding: const EdgeInsets.symmetric(
-              horizontal: 10,
+              horizontal: 12,
               vertical: 12,
             ),
             filled: true,
-            fillColor: const Color(0xFFF8FAFC),
+            fillColor:
+                fillColor ??
+                (readOnly ? const Color(0xFFF0FDF4) : const Color(0xFFF8FAFC)),
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(14),
-              borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+              borderSide: BorderSide(
+                color: readOnly
+                    ? const Color(0xFFA7F3D0)
+                    : const Color(0xFFE2E8F0),
+              ),
             ),
             enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(14),
-              borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+              borderSide: BorderSide(
+                color: readOnly
+                    ? const Color(0xFFA7F3D0)
+                    : const Color(0xFFE2E8F0),
+              ),
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(14),
-              borderSide: const BorderSide(
-                color: Color(0xFF2563EB),
+              borderSide: BorderSide(
+                color: readOnly
+                    ? const Color(0xFF059669)
+                    : const Color(0xFF2563EB),
                 width: 1.5,
               ),
             ),
@@ -1662,26 +2052,35 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
                                     _isStationaryLocked = false;
                                   });
                                   // Recalibrate altitude and architecture for picked coords
-                                  GeocodingService.reverseGeocode(
-                                    coords.latitude,
-                                    coords.longitude,
-                                    rawAltitude: coords.height,
-                                  ).then((geo) {
-                                    if (mounted) {
-                                      setState(() {
-                                        _heightController.text = geo
-                                            .groundAltitude
-                                            .toStringAsFixed(1);
-                                        _floorGapController.text =
-                                            geo.floorGap > 0
-                                            ? geo.floorGap.toStringAsFixed(1)
-                                            : '4.5';
-                                        if (geo.floorCount > 0) {
-                                          _floorCount = geo.floorCount;
-                                        }
-                                      });
-                                    }
-                                  });
+                                  if (_isElevationAutoLocked) {
+                                    _autoCalculateElevationAndLock(
+                                      lat: coords.latitude,
+                                      lon: coords.longitude,
+                                      rawAltitude: coords.height,
+                                      force: true,
+                                    );
+                                  } else {
+                                    GeocodingService.reverseGeocode(
+                                      coords.latitude,
+                                      coords.longitude,
+                                      rawAltitude: coords.height,
+                                    ).then((geo) {
+                                      if (mounted) {
+                                        setState(() {
+                                          _heightController.text = geo
+                                              .groundAltitude
+                                              .toStringAsFixed(1);
+                                          _floorGapController.text =
+                                              geo.floorGap > 0
+                                              ? geo.floorGap.toStringAsFixed(1)
+                                              : '3.8';
+                                          if (geo.floorCount > 0) {
+                                            _floorCount = geo.floorCount;
+                                          }
+                                        });
+                                      }
+                                    });
+                                  }
                                 },
                               ),
                             ),
@@ -1801,6 +2200,13 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
                         onChanged: (_) {
                           _lastStabilizedCoords = null;
                           _isStationaryLocked = false;
+                          final lat = double.tryParse(_latController.text);
+                          final lon = double.tryParse(_lngController.text);
+                          if (lat != null &&
+                              lon != null &&
+                              _isElevationAutoLocked) {
+                            _autoCalculateElevationAndLock(lat: lat, lon: lon);
+                          }
                         },
                       ),
                     ),
@@ -1813,6 +2219,13 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
                         onChanged: (_) {
                           _lastStabilizedCoords = null;
                           _isStationaryLocked = false;
+                          final lat = double.tryParse(_latController.text);
+                          final lon = double.tryParse(_lngController.text);
+                          if (lat != null &&
+                              lon != null &&
+                              _isElevationAutoLocked) {
+                            _autoCalculateElevationAndLock(lat: lat, lon: lon);
+                          }
                         },
                       ),
                     ),
@@ -1827,23 +2240,89 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
               title: 'ELEVATION & MULTI-FLOOR ARCHITECTURE',
               icon: LucideIcons.layers,
               iconColor: const Color(0xFF7C3AED),
+              headerTrailing: InkWell(
+                onTap: () {
+                  setState(() {
+                    _isElevationAutoLocked = !_isElevationAutoLocked;
+                    if (_isElevationAutoLocked) {
+                      _autoCalculateElevationAndLock(force: true);
+                    }
+                  });
+                },
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _isElevationAutoLocked
+                        ? const Color(0xFFECFDF5)
+                        : const Color(0xFFFEF3C7),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: _isElevationAutoLocked
+                          ? const Color(0xFFA7F3D0)
+                          : const Color(0xFFFDE68A),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        _isElevationAutoLocked
+                            ? LucideIcons.lock
+                            : LucideIcons.unlock,
+                        size: 11,
+                        color: _isElevationAutoLocked
+                            ? const Color(0xFF059669)
+                            : const Color(0xFFD97706),
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        _isElevationAutoLocked ? 'AUTO-LOCKED' : 'MANUAL',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.3,
+                          color: _isElevationAutoLocked
+                              ? const Color(0xFF059669)
+                              : const Color(0xFFD97706),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
               children: [
                 Row(
                   children: [
                     Expanded(
                       child: _buildTextInput(
-                        label: 'Ground Alt (m)',
+                        label: _isElevationAutoLocked
+                            ? 'Ground Alt (m) 🔒'
+                            : 'Ground Alt (m)',
                         controller: _heightController,
-                        hintText: '45.0',
+                        hintText: '8.5',
+                        readOnly: _isElevationAutoLocked,
+                        fillColor: _isElevationAutoLocked
+                            ? const Color(0xFFF0FDF4)
+                            : null,
                         onChanged: (_) => setState(() {}),
                       ),
                     ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: _buildTextInput(
-                        label: 'Floor Gap (m)',
+                        label: _isElevationAutoLocked
+                            ? 'Floor Gap (m) 🔒'
+                            : 'Floor Gap (m)',
                         controller: _floorGapController,
-                        hintText: '4.5',
+                        hintText: '3.8',
+                        readOnly: _isElevationAutoLocked,
+                        fillColor: _isElevationAutoLocked
+                            ? const Color(0xFFF0FDF4)
+                            : null,
                         onChanged: (_) => setState(() {}),
                       ),
                     ),
@@ -1929,7 +2408,7 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
                   ],
                 ),
 
-                const SizedBox(height: 14),
+                const SizedBox(height: 12),
 
                 // Computed Architecture Preview Box
                 Container(
@@ -1988,8 +2467,197 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
                           ),
                         ],
                       ),
+                      const SizedBox(height: 4),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Elevation Lock Status:',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 12,
+                              color: const Color(0xFF64748B),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          Text(
+                            _isElevationAutoLocked
+                                ? 'Locked to Location Datum'
+                                : 'Manual Override',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 11.5,
+                              color: _isElevationAutoLocked
+                                  ? const Color(0xFF059669)
+                                  : const Color(0xFFD97706),
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
                     ],
                   ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            // CARD 4: DESIGNATED PARKING FLOORS
+            _buildFormFieldCard(
+              title: 'PARKING FACILITIES & ALLOCATED FLOORS',
+              icon: LucideIcons.car,
+              iconColor: const Color(0xFF2563EB),
+              headerTrailing: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEFF6FF),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFFBFDBFE)),
+                ),
+                child: Text(
+                  '${_selectedParkingFloors.length} Levels Active',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    color: const Color(0xFF2563EB),
+                  ),
+                ),
+              ),
+              children: [
+                Text(
+                  'Select the specific floor levels designated for parking in this venue. Only selected parking floors will appear in Parking Manager and live navigation.',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 12,
+                    color: const Color(0xFF64748B),
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Builder(
+                  builder: (context) {
+                    final selectableFloors = <String>[
+                      ..._customBasementFloors,
+                      for (int i = 1; i <= _floorCount; i++) 'Floor $i',
+                    ];
+
+                    return Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        ...selectableFloors.map((floorName) {
+                          final isSelected =
+                              _selectedParkingFloors.contains(floorName);
+                          return FilterChip(
+                            selected: isSelected,
+                            showCheckmark: true,
+                            checkmarkColor: isSelected
+                                ? Colors.white
+                                : const Color(0xFF2563EB),
+                            label: Text(floorName),
+                            labelStyle: GoogleFonts.plusJakartaSans(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: isSelected
+                                  ? Colors.white
+                                  : const Color(0xFF334155),
+                            ),
+                            selectedColor: const Color(0xFF0F172A),
+                            backgroundColor: const Color(0xFFF8FAFC),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              side: BorderSide(
+                                color: isSelected
+                                    ? const Color(0xFF0F172A)
+                                    : const Color(0xFFCBD5E1),
+                                width: 1,
+                              ),
+                            ),
+                            onSelected: (bool selected) {
+                              setState(() {
+                                if (selected) {
+                                  if (!_selectedParkingFloors.contains(
+                                    floorName,
+                                  )) {
+                                    _selectedParkingFloors.add(floorName);
+                                  }
+                                } else {
+                                  if (_selectedParkingFloors.length > 1) {
+                                    _selectedParkingFloors.remove(floorName);
+                                  } else {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text(
+                                          'At least one parking floor must remain selected.',
+                                        ),
+                                        duration: Duration(seconds: 1),
+                                      ),
+                                    );
+                                  }
+                                }
+                              });
+                            },
+                          );
+                        }),
+                        if (!_customBasementFloors.contains('B1'))
+                          ActionChip(
+                            avatar: const Icon(
+                              LucideIcons.plus,
+                              size: 14,
+                              color: Color(0xFF2563EB),
+                            ),
+                            label: const Text('+ B1 Basement'),
+                            labelStyle: GoogleFonts.plusJakartaSans(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w700,
+                              color: const Color(0xFF2563EB),
+                            ),
+                            backgroundColor: const Color(0xFFEFF6FF),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              side: const BorderSide(color: Color(0xFFBFDBFE)),
+                            ),
+                            onPressed: () {
+                              setState(() {
+                                if (!_customBasementFloors.contains('B1')) {
+                                  _customBasementFloors.add('B1');
+                                }
+                                if (!_selectedParkingFloors.contains('B1')) {
+                                  _selectedParkingFloors.add('B1');
+                                }
+                              });
+                            },
+                          ),
+                        if (_customBasementFloors.contains('B1') &&
+                            !_customBasementFloors.contains('B2'))
+                          ActionChip(
+                            avatar: const Icon(
+                              LucideIcons.plus,
+                              size: 14,
+                              color: Color(0xFF2563EB),
+                            ),
+                            label: const Text('+ B2 Basement'),
+                            labelStyle: GoogleFonts.plusJakartaSans(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w700,
+                              color: const Color(0xFF2563EB),
+                            ),
+                            backgroundColor: const Color(0xFFEFF6FF),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              side: const BorderSide(color: Color(0xFFBFDBFE)),
+                            ),
+                            onPressed: () {
+                              setState(() {
+                                if (!_customBasementFloors.contains('B2')) {
+                                  _customBasementFloors.add('B2');
+                                }
+                                if (!_selectedParkingFloors.contains('B2')) {
+                                  _selectedParkingFloors.add('B2');
+                                }
+                              });
+                            },
+                          ),
+                      ],
+                    );
+                  },
                 ),
               ],
             ),

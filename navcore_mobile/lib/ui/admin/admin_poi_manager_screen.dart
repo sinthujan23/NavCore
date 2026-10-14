@@ -64,7 +64,8 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
     final seenIds = <String>{};
     final result = <DestinationPOI>[];
     for (final p in list) {
-      final key = '${p.name.trim().toLowerCase()}#${p.floorNumber}#${p.mallId ?? ''}';
+      final key =
+          '${p.name.trim().toLowerCase()}#${p.floorNumber}#${p.mallId ?? ''}';
       if (!seen.contains(key) && !seenIds.contains(p.id)) {
         seen.add(key);
         seenIds.add(p.id);
@@ -144,9 +145,15 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
               await ApiService.instance.updateDestination(savedPoi);
               widget.onUpdatePoi(savedPoi);
             } else {
-              final key = '${savedPoi.name.trim().toLowerCase()}#${savedPoi.floorNumber}#${savedPoi.mallId ?? ''}';
+              final key =
+                  '${savedPoi.name.trim().toLowerCase()}#${savedPoi.floorNumber}#${savedPoi.mallId ?? ''}';
               setState(() {
-                _poiList.removeWhere((p) => p.id == savedPoi.id || '${p.name.trim().toLowerCase()}#${p.floorNumber}#${p.mallId ?? ''}' == key);
+                _poiList.removeWhere(
+                  (p) =>
+                      p.id == savedPoi.id ||
+                      '${p.name.trim().toLowerCase()}#${p.floorNumber}#${p.mallId ?? ''}' ==
+                          key,
+                );
                 _poiList.insert(0, savedPoi);
                 _poiList = _deduplicatePois(_poiList);
               });
@@ -228,9 +235,15 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
             ),
             onPressed: () async {
               Navigator.pop(ctx);
-              final key = '${poi.name.trim().toLowerCase()}#${poi.floorNumber}#${poi.mallId ?? ''}';
+              final key =
+                  '${poi.name.trim().toLowerCase()}#${poi.floorNumber}#${poi.mallId ?? ''}';
               setState(() {
-                _poiList.removeWhere((p) => p.id == poi.id || '${p.name.trim().toLowerCase()}#${p.floorNumber}#${p.mallId ?? ''}' == key);
+                _poiList.removeWhere(
+                  (p) =>
+                      p.id == poi.id ||
+                      '${p.name.trim().toLowerCase()}#${p.floorNumber}#${p.mallId ?? ''}' ==
+                          key,
+                );
               });
               await ApiService.instance.deleteDestination(poi.id);
               widget.onDeletePoi(poi.id);
@@ -619,8 +632,12 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
                                     ),
                                   ],
                                 ),
-                                child: Row(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
+                                    Row(
+                                      crossAxisAlignment: CrossAxisAlignment.center,
+                                      children: [
                                     // Floor Indicator Badge
                                     Container(
                                       width: 48,
@@ -726,9 +743,9 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
                                                       0xFFEFF6FF,
                                                     ),
                                                     borderRadius:
-                                                      BorderRadius.circular(
-                                                        6,
-                                                      ),
+                                                        BorderRadius.circular(
+                                                          6,
+                                                        ),
                                                     border: Border.all(
                                                       color: const Color(
                                                         0xFFDBEAFE,
@@ -754,14 +771,14 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
                                                             )
                                                             .toUpperCase(),
                                                     style:
-                                                      GoogleFonts.plusJakartaSans(
-                                                        fontSize: 9.0,
-                                                        fontWeight:
-                                                            FontWeight.w700,
-                                                        color: const Color(
-                                                          0xFF2563EB,
+                                                        GoogleFonts.plusJakartaSans(
+                                                          fontSize: 9.0,
+                                                          fontWeight:
+                                                              FontWeight.w700,
+                                                          color: const Color(
+                                                            0xFF2563EB,
+                                                          ),
                                                         ),
-                                                      ),
                                                   ),
                                                 ),
                                               Row(
@@ -776,28 +793,18 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
                                                   Text(
                                                     '${poi.rating}',
                                                     style:
-                                                      GoogleFonts.plusJakartaSans(
-                                                        fontSize: 10.5,
-                                                        fontWeight:
-                                                            FontWeight.w700,
-                                                        color: const Color(
-                                                          0xFF64748B,
+                                                        GoogleFonts.plusJakartaSans(
+                                                          fontSize: 10.5,
+                                                          fontWeight:
+                                                              FontWeight.w700,
+                                                          color: const Color(
+                                                            0xFF64748B,
+                                                          ),
                                                         ),
-                                                      ),
                                                   ),
                                                 ],
                                               ),
                                             ],
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            '${poi.location.latitude.toStringAsFixed(5)}°N, ${poi.location.longitude.toStringAsFixed(5)}°E • Alt: ${poi.location.height.toStringAsFixed(1)}m',
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: GoogleFonts.jetBrainsMono(
-                                              fontSize: 10,
-                                              color: const Color(0xFF94A3B8),
-                                            ),
                                           ),
                                         ],
                                       ),
@@ -849,7 +856,80 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
                                     ),
                                   ],
                                 ),
-                              );
+
+                                // Dedicated Full-Width Coordinates Section
+                                if (poi.location.latitude != 0.0 ||
+                                    poi.location.longitude != 0.0) ...[
+                                  const SizedBox(height: 8),
+                                  Container(
+                                    width: double.infinity,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 6,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFF8FAFC),
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(
+                                        color: const Color(0xFFE2E8F0),
+                                      ),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        const Icon(
+                                          LucideIcons.mapPin,
+                                          size: 12,
+                                          color: Color(0xFF2563EB),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Expanded(
+                                          child: Wrap(
+                                            alignment: WrapAlignment.spaceBetween,
+                                            crossAxisAlignment:
+                                                WrapCrossAlignment.center,
+                                            spacing: 6,
+                                            runSpacing: 2,
+                                            children: [
+                                              Text(
+                                                '${poi.location.latitude.toStringAsFixed(6)}°N, ${poi.location.longitude.toStringAsFixed(6)}°E',
+                                                style: GoogleFonts.jetBrainsMono(
+                                                  fontSize: 10.5,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: const Color(0xFF334155),
+                                                ),
+                                              ),
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(
+                                                  horizontal: 5,
+                                                  vertical: 1.5,
+                                                ),
+                                                decoration: BoxDecoration(
+                                                  color: const Color(0xFFEFF6FF),
+                                                  borderRadius:
+                                                      BorderRadius.circular(5),
+                                                  border: Border.all(
+                                                    color: const Color(0xFFDBEAFE),
+                                                  ),
+                                                ),
+                                                child: Text(
+                                                  'Alt: ${poi.location.height.toStringAsFixed(1)}m',
+                                                  style: GoogleFonts.jetBrainsMono(
+                                                    fontSize: 10,
+                                                    fontWeight: FontWeight.w700,
+                                                    color: const Color(0xFF1D4ED8),
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          );
                             },
                           ),
                   ),
@@ -907,6 +987,7 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
   late double _activeBaseAltitude;
   bool _isFetchingGps = false;
   bool _isStationaryLocked = false;
+  bool _isCoordinatesPinned = false;
   // Phone motion tracking & continuous auto-sync
   final bool _isMotionSyncActive = true;
   bool _isPhoneInMotion = false;
@@ -936,6 +1017,7 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
   void initState() {
     super.initState();
     final p = widget.existingPoi;
+    _isCoordinatesPinned = p != null;
     _nameController = TextEditingController(text: p?.name ?? '');
     _categoryController = TextEditingController(
       text: p?.category ?? 'RETAIL & FASHION',
@@ -1048,6 +1130,9 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
           _floorNumber = 1;
         }
         if (widget.existingPoi == null &&
+            !_isCoordinatesPinned &&
+            _latController.text.trim().isEmpty &&
+            _lngController.text.trim().isEmpty &&
             selectedMall.latitude != 0.0 &&
             selectedMall.longitude != 0.0) {
           _latController.text = selectedMall.latitude.toStringAsFixed(6);
@@ -1164,6 +1249,10 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
   }
 
   void _onLivePositionUpdate(Position pos) {
+    if (_isCoordinatesPinned) {
+      return; // Do NOT overwrite pinned or custom coordinates with background motion
+    }
+
     if (pos.latitude.isNaN ||
         pos.longitude.isNaN ||
         (pos.latitude == 0.0 && pos.longitude == 0.0)) {
@@ -1414,53 +1503,11 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
     final fixData = await _getLiveGpsCoordinates();
 
     if (fixData != null && mounted) {
-      GeodeticCoords finalCoords = fixData.coords;
-      bool isStationary = false;
-
-      // Check existing coordinate anchor (previous sync or form values)
-      final currentLat = double.tryParse(_latController.text);
-      final currentLng = double.tryParse(_lngController.text);
-      GeodeticCoords? anchorCoords = _lastStabilizedCoords;
-
-      if (anchorCoords == null &&
-          currentLat != null &&
-          currentLng != null &&
-          currentLat != 0.0 &&
-          currentLng != 0.0) {
-        anchorCoords = GeodeticCoords(
-          latitude: currentLat,
-          longitude: currentLng,
-          height: double.tryParse(_heightController.text) ?? finalCoords.height,
-        );
-      }
-
-      if (anchorCoords != null) {
-        final double distMeters = haversineDistance(anchorCoords, finalCoords);
-
-        // STATIONARY NOISE CLAMP & DEADBAND FILTER:
-        // When staying at the same place, successive GPS fixes drift by ~0.5m-3.5m due to multipath noise.
-        if (distMeters <= 2.2) {
-          // Strict lock: preserve the exact coordinates so they never fluctuate at the same spot!
-          finalCoords = anchorCoords;
-          isStationary = true;
-        } else if (distMeters <= 3.8) {
-          // Gentle damping: blend 85% anchor + 15% new reading to stabilize drift
-          final blendedLat =
-              anchorCoords.latitude * 0.85 + finalCoords.latitude * 0.15;
-          final blendedLng =
-              anchorCoords.longitude * 0.85 + finalCoords.longitude * 0.15;
-          finalCoords = GeodeticCoords(
-            latitude: blendedLat,
-            longitude: blendedLng,
-            height: finalCoords.height,
-          );
-          isStationary = true;
-        }
-      }
-
+      final GeodeticCoords finalCoords = fixData.coords;
       _lastStabilizedCoords = finalCoords;
 
       setState(() {
+        _isCoordinatesPinned = true;
         _latController.text = finalCoords.latitude.toStringAsFixed(6);
         _lngController.text = finalCoords.longitude.toStringAsFixed(6);
         final autoDetectedFloor = resolveFloorByHeight(finalCoords.height);
@@ -1472,18 +1519,15 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
 
       if (mounted) {
         final accText = '±${fixData.accuracy.toStringAsFixed(1)}m';
-        final statusMessage = isStationary
-            ? 'Coordinates locked at same place ($accText precision • Anti-jitter active)'
-            : 'Live GPS synchronized: ${_latController.text}, ${_lngController.text} ($accText precision • ${fixData.sampleCount} samples)';
+        final statusMessage =
+            'Live GPS synchronized: ${_latController.text}, ${_lngController.text} ($accText precision • ${fixData.sampleCount} samples)';
 
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Row(
               children: [
-                Icon(
-                  isStationary
-                      ? LucideIcons.shieldCheck
-                      : LucideIcons.checkCircle2,
+                const Icon(
+                  LucideIcons.checkCircle2,
                   color: Colors.white,
                   size: 18,
                 ),
@@ -1499,9 +1543,7 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
                 ),
               ],
             ),
-            backgroundColor: isStationary
-                ? const Color(0xFF0D9488)
-                : const Color(0xFF16A34A),
+            backgroundColor: const Color(0xFF16A34A),
             duration: const Duration(seconds: 3),
           ),
         );
@@ -2225,6 +2267,8 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
                                 isPickerMode: true,
                                 onSelectCoordinates: (coords) {
                                   setState(() {
+                                    _isCoordinatesPinned = true;
+                                    _lastStabilizedCoords = coords;
                                     _latController.text = coords.latitude
                                         .toStringAsFixed(6);
                                     _lngController.text = coords.longitude
@@ -2333,6 +2377,63 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 10),
+                // Pin / Live Motion Coordinate Status Indicator & Toggle
+                InkWell(
+                  onTap: () {
+                    setState(() {
+                      _isCoordinatesPinned = !_isCoordinatesPinned;
+                      if (!_isCoordinatesPinned) {
+                        _syncCurrentLocation();
+                      }
+                    });
+                  },
+                  borderRadius: BorderRadius.circular(10),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _isCoordinatesPinned
+                          ? const Color(0xFFF1F5F9)
+                          : const Color(0xFFEFF6FF),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: _isCoordinatesPinned
+                            ? const Color(0xFFCBD5E1)
+                            : const Color(0xFF93C5FD),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _isCoordinatesPinned
+                              ? LucideIcons.pin
+                              : LucideIcons.radio,
+                          size: 13,
+                          color: _isCoordinatesPinned
+                              ? const Color(0xFF475569)
+                              : const Color(0xFF2563EB),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          _isCoordinatesPinned
+                              ? 'Coordinates Pinned (Tap to enable live auto-track)'
+                              : 'Live Auto-Track Active (Tap to pin coordinates)',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w700,
+                            color: _isCoordinatesPinned
+                                ? const Color(0xFF475569)
+                                : const Color(0xFF2563EB),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
                 const SizedBox(height: 16),
 
                 // 3 Coordinate Inputs
@@ -2344,7 +2445,10 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
                         controller: _latController,
                         hintText: '8.502424',
                         onChanged: (_) {
-                          _lastStabilizedCoords = null;
+                          setState(() {
+                            _isCoordinatesPinned = true;
+                            _lastStabilizedCoords = null;
+                          });
                         },
                       ),
                     ),
@@ -2355,7 +2459,10 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
                         controller: _lngController,
                         hintText: '81.181251',
                         onChanged: (_) {
-                          _lastStabilizedCoords = null;
+                          setState(() {
+                            _isCoordinatesPinned = true;
+                            _lastStabilizedCoords = null;
+                          });
                         },
                       ),
                     ),

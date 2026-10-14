@@ -366,33 +366,34 @@ class RealSensorService {
 
     // 5. Barometer Stream for Barometric Altitude & Indoor Floor Resolution
     try {
-      _barometerSubscription = barometerEventStream(
-        samplingPeriod: const Duration(milliseconds: 100),
-      ).listen(
-        (BarometerEvent event) {
-          double rawPressure = event.pressure;
-          if (rawPressure.isNaN ||
-              rawPressure.isInfinite ||
-              rawPressure <= 0) {
-            return;
-          }
+      _barometerSubscription =
+          barometerEventStream(
+            samplingPeriod: const Duration(milliseconds: 100),
+          ).listen(
+            (BarometerEvent event) {
+              double rawPressure = event.pressure;
+              if (rawPressure.isNaN ||
+                  rawPressure.isInfinite ||
+                  rawPressure <= 0) {
+                return;
+              }
 
-          _rawPressureHpa = rawPressure;
-          _smoothedPressureHpa =
-              (_baroAlpha * rawPressure) +
-              ((1.0 - _baroAlpha) * _smoothedPressureHpa);
+              _rawPressureHpa = rawPressure;
+              _smoothedPressureHpa =
+                  (_baroAlpha * rawPressure) +
+                  ((1.0 - _baroAlpha) * _smoothedPressureHpa);
 
-          if (onPressureUpdated != null) {
-            onPressureUpdated(_rawPressureHpa, _smoothedPressureHpa);
-          }
-        },
-        onError: (err) {
-          if (kDebugMode) {
-            print('Barometer hardware error or sensor unavailable: $err');
-          }
-        },
-        cancelOnError: true,
-      );
+              if (onPressureUpdated != null) {
+                onPressureUpdated(_rawPressureHpa, _smoothedPressureHpa);
+              }
+            },
+            onError: (err) {
+              if (kDebugMode) {
+                print('Barometer hardware error or sensor unavailable: $err');
+              }
+            },
+            cancelOnError: true,
+          );
     } catch (e) {
       if (kDebugMode) {
         print('Barometer hardware not present on device: $e');

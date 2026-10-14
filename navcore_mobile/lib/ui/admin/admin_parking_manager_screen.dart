@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../data/api_service.dart';
+import '../../data/floor_height_model.dart';
 import '../../data/parking_service.dart';
 import '../../data/mall_database_service.dart';
 import '../../engine/ecef_engine.dart';
@@ -20,7 +23,8 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
 
   List<MallMetadata> _malls = [];
   MallMetadata? _activeMall;
-  String _selectedFloorId = 'GF';
+  List<FloorHeightData> _mallFloorHeights = [];
+  String _selectedFloorId = '';
   bool _isLoading = true;
 
   @override
@@ -50,31 +54,54 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
         setState(() {
           _malls = [];
           _activeMall = null;
+          _mallFloorHeights = [];
           _isLoading = false;
         });
       }
       return;
     }
-    final active = malls.firstWhere(
+    var active = malls.firstWhere(
       (m) => m.isActive,
       orElse: () => malls.first,
     );
+
+    try {
+      _mallFloorHeights = await ApiService.instance.fetchFloorHeights(
+        active.id,
+      );
+    } catch (_) {
+      _mallFloorHeights = [];
+    }
 
     await _parkingService.loadLayoutForMallMetadata(
       mallId: active.id,
       baseLat: active.latitude,
       baseLon: active.longitude,
-      basementFloors: active.floorCount >= 5 ? 3 : 2,
     );
+
+    // Load any explicitly designated parking floors for this venue package
+    final prefs = await SharedPreferences.getInstance();
+    final savedParkingFloors = prefs.getStringList(
+      'venue_parking_floors_${active.id}',
+    );
+    if (savedParkingFloors != null && savedParkingFloors.isNotEmpty) {
+      active = active.copyWith(parkingFloors: savedParkingFloors);
+    }
+
+    // Prune legacy dummy slots from cache/memory that do not belong to this mall
+    final validFloors = _getFloorOptionsForMall(active, _mallFloorHeights);
+    await _parkingService.pruneSlotsToValidFloors(active.id, validFloors);
 
     if (mounted) {
       setState(() {
         _malls = malls;
         _activeMall = active;
-        final availableFloors = _parkingService.allFloorSlots.keys.toList();
-        if (availableFloors.isNotEmpty &&
-            !availableFloors.contains(_selectedFloorId)) {
-          _selectedFloorId = availableFloors.first;
+        if (validFloors.isNotEmpty) {
+          if (!validFloors.contains(_selectedFloorId)) {
+            _selectedFloorId = validFloors.first;
+          }
+        } else {
+          _selectedFloorId = 'Floor 1';
         }
         _isLoading = false;
       });
@@ -83,7 +110,7 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
 
   Future<void> _switchActiveMall(String newMallId) async {
     setState(() => _isLoading = true);
-    final selected = _malls.firstWhere(
+    var selected = _malls.firstWhere(
       (m) => m.id == newMallId,
       orElse: () => _malls.first,
     );
@@ -91,21 +118,41 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
 
     final updatedMalls = await _mallService.getMallsList();
 
+    try {
+      _mallFloorHeights = await ApiService.instance.fetchFloorHeights(
+        selected.id,
+      );
+    } catch (_) {
+      _mallFloorHeights = [];
+    }
+
     await _parkingService.loadLayoutForMallMetadata(
       mallId: selected.id,
       baseLat: selected.latitude,
       baseLon: selected.longitude,
-      basementFloors: selected.floorCount >= 5 ? 3 : 2,
     );
+
+    final prefs = await SharedPreferences.getInstance();
+    final savedParkingFloors = prefs.getStringList(
+      'venue_parking_floors_${selected.id}',
+    );
+    if (savedParkingFloors != null && savedParkingFloors.isNotEmpty) {
+      selected = selected.copyWith(parkingFloors: savedParkingFloors);
+    }
+
+    final validFloors = _getFloorOptionsForMall(selected, _mallFloorHeights);
+    await _parkingService.pruneSlotsToValidFloors(selected.id, validFloors);
 
     if (mounted) {
       setState(() {
         _malls = updatedMalls;
         _activeMall = selected;
-        final availableFloors = _parkingService.allFloorSlots.keys.toList();
-        if (availableFloors.isNotEmpty &&
-            !availableFloors.contains(_selectedFloorId)) {
-          _selectedFloorId = availableFloors.first;
+        if (validFloors.isNotEmpty) {
+          if (!validFloors.contains(_selectedFloorId)) {
+            _selectedFloorId = validFloors.first;
+          }
+        } else {
+          _selectedFloorId = 'Floor 1';
         }
         _isLoading = false;
       });
@@ -126,28 +173,276 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
   }
 
   List<String> _getFloorOptions() {
-    final floors = <String>['GF', 'B1', 'B2'];
-    if (_activeMall != null && _activeMall!.floorCount > 1) {
-      for (int i = 1; i <= _activeMall!.floorCount; i++) {
-        final str = 'Floor $i';
-        if (!floors.contains(str)) floors.add(str);
+    return _getFloorOptionsForMall(_activeMall, _mallFloorHeights);
+  }
+
+  List<String> _getFloorOptionsForMall(
+    MallMetadata? mall,
+    List<FloorHeightData> heights,
+  ) {
+    if (mall == null) return [];
+
+    // 1. If designated parking floors are configured in venue package, return strictly those floors
+    if (mall.parkingFloors.isNotEmpty) {
+      return List<String>.from(mall.parkingFloors);
+    }
+
+    final List<String> floors = [];
+
+    final targetId = mall.id.trim().toLowerCase();
+    final matchingHeights = heights.where((h) {
+      final hMall = h.mallId.trim().toLowerCase();
+      return hMall.isEmpty || hMall == targetId;
+    }).toList();
+
+    if (matchingHeights.isNotEmpty) {
+      matchingHeights.sort((a, b) => a.floorNo.compareTo(b.floorNo));
+      for (final h in matchingHeights) {
+        final label = h.floorNo < 0
+            ? 'B${h.floorNo.abs()}'
+            : (h.floorNo == 0 ? 'GF' : 'Floor ${h.floorNo}');
+        if (!floors.contains(label)) {
+          floors.add(label);
+        }
+      }
+    } else {
+      final count = mall.floorCount > 0 ? mall.floorCount : 1;
+      for (int i = 1; i <= count; i++) {
+        floors.add('Floor $i');
       }
     }
-    // Also include any floors currently present in the layout
-    for (final f in _parkingService.allFloorSlots.keys) {
-      if (!floors.contains(f)) floors.add(f);
-    }
+
     return floors;
   }
 
-  void _showAddSlotDialog() {
+  double _resolveFloorAltitude(String floorStr) {
+    if (_activeMall == null) return 45.0;
+    final groundAlt = _activeMall!.entranceBaseAnchorHeight > 0
+        ? _activeMall!.entranceBaseAnchorHeight
+        : 15.0;
+    final gap = _activeMall!.floorGapMeters > 0
+        ? _activeMall!.floorGapMeters
+        : 3.8;
+
+    for (final fh in _mallFloorHeights) {
+      final label = fh.floorNo < 0
+          ? 'B${fh.floorNo.abs()}'
+          : (fh.floorNo == 0 ? 'GF' : 'Floor ${fh.floorNo}');
+      if (label == floorStr || 'F${fh.floorNo}' == floorStr) {
+        return fh.baseAltitudeM;
+      }
+    }
+
+    final digits =
+        int.tryParse(floorStr.replaceAll(RegExp(r'[^0-9]'), '')) ?? 1;
+    if (floorStr.toUpperCase().startsWith('B')) {
+      return groundAlt - (digits * gap);
+    }
+    return groundAlt + ((digits - 1) * gap);
+  }
+
+  void _showAddParkingSlotsSheet({String? presetFloor}) {
     if (_activeMall == null) return;
     final floors = _getFloorOptions();
-    String chosenFloor = floors.contains(_selectedFloorId)
-        ? _selectedFloorId
-        : floors.first;
+    if (floors.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No parking floors configured for this mall venue.'),
+        ),
+      );
+      return;
+    }
+    final targetFloor = (presetFloor != null && floors.contains(presetFloor))
+        ? presetFloor
+        : (floors.contains(_selectedFloorId) ? _selectedFloorId : floors.first);
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEFF6FF),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      LucideIcons.parkingSquare,
+                      color: Color(0xFF2563EB),
+                      size: 22,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Add Parking Slots',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: const Color(0xFF0F172A),
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Target Floor: $targetFloor (${_activeMall?.name})',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: const Color(0xFF64748B),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              ListTile(
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 4,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  side: const BorderSide(color: Color(0xFFE2E8F0)),
+                ),
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF1F5F9),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(
+                    LucideIcons.plusCircle,
+                    color: Color(0xFF2563EB),
+                    size: 20,
+                  ),
+                ),
+                title: Text(
+                  'Add Single Stall',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13.5,
+                    color: const Color(0xFF0F172A),
+                  ),
+                ),
+                subtitle: Text(
+                  'Configure an individual bay on $targetFloor with EV/VIP options',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 11.5,
+                    color: const Color(0xFF64748B),
+                  ),
+                ),
+                trailing: const Icon(
+                  LucideIcons.chevronRight,
+                  size: 18,
+                  color: Color(0xFF94A3B8),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showAddSlotDialog(presetFloor: targetFloor);
+                },
+              ),
+              const SizedBox(height: 10),
+              ListTile(
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 4,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  side: const BorderSide(color: Color(0xFFE2E8F0)),
+                ),
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF1F5F9),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(
+                    LucideIcons.layoutGrid,
+                    color: Color(0xFF0F172A),
+                    size: 20,
+                  ),
+                ),
+                title: Text(
+                  'Generate Row / Panel of Bays',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13.5,
+                    color: const Color(0xFF0F172A),
+                  ),
+                ),
+                subtitle: Text(
+                  'Batch generate sequential bays (e.g. 5, 10, or 20 bays)',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 11.5,
+                    color: const Color(0xFF64748B),
+                  ),
+                ),
+                trailing: const Icon(
+                  LucideIcons.chevronRight,
+                  size: 18,
+                  color: Color(0xFF94A3B8),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showAddPanelDialog(presetFloor: targetFloor);
+                },
+              ),
+              const SizedBox(height: 10),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showAddSlotDialog({String? presetFloor}) {
+    if (_activeMall == null) return;
+    final floors = _getFloorOptions();
+    if (floors.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No floors indicated for this mall venue.'),
+        ),
+      );
+      return;
+    }
+    String chosenFloor = (presetFloor != null && floors.contains(presetFloor))
+        ? presetFloor
+        : (floors.contains(_selectedFloorId) ? _selectedFloorId : floors.first);
+
+    // Auto-detect next sequential slot number for chosenFloor
+    final existingSlotsOnFloor = _parkingService.fetchFloorMap(chosenFloor);
+    int nextNum = 1;
+    if (existingSlotsOnFloor.isNotEmpty) {
+      final numbers = existingSlotsOnFloor.map((s) {
+        final parts = s.id.split('-');
+        return parts.isNotEmpty ? (int.tryParse(parts.last) ?? 0) : 0;
+      }).toList();
+      if (numbers.isNotEmpty) {
+        numbers.sort();
+        nextNum = numbers.last + 1;
+      }
+    }
+
     final sectionController = TextEditingController(text: 'A');
-    final numberController = TextEditingController(text: '1');
+    final numberController = TextEditingController(text: '$nextNum');
     ParkingSlotStatus chosenStatus = ParkingSlotStatus.free;
     bool isEV = false;
     bool isHandicap = false;
@@ -374,6 +669,7 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                 final numStr = slotNum < 10 ? '0$slotNum' : '$slotNum';
                 final slotId = '$chosenFloor-$section-$numStr';
 
+                final floorAlt = _resolveFloorAltitude(chosenFloor);
                 final newSlot = ParkingSlot(
                   id: slotId,
                   floorId: chosenFloor,
@@ -383,7 +679,7 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                   location: GeodeticCoords(
                     latitude: _activeMall!.latitude,
                     longitude: _activeMall!.longitude,
-                    height: 45.0,
+                    height: floorAlt,
                   ),
                   gridRow: 0,
                   gridCol: 0,
@@ -416,14 +712,37 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
     );
   }
 
-  void _showAddPanelDialog() {
+  void _showAddPanelDialog({String? presetFloor}) {
     if (_activeMall == null) return;
     final floors = _getFloorOptions();
-    String chosenFloor = floors.contains(_selectedFloorId)
-        ? _selectedFloorId
-        : floors.first;
+    if (floors.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No floors indicated for this mall venue.'),
+        ),
+      );
+      return;
+    }
+    String chosenFloor = (presetFloor != null && floors.contains(presetFloor))
+        ? presetFloor
+        : (floors.contains(_selectedFloorId) ? _selectedFloorId : floors.first);
+
+    // Auto-detect next sequential start slot number for chosenFloor
+    final existingSlotsOnFloor = _parkingService.fetchFloorMap(chosenFloor);
+    int nextStartNum = 1;
+    if (existingSlotsOnFloor.isNotEmpty) {
+      final numbers = existingSlotsOnFloor.map((s) {
+        final parts = s.id.split('-');
+        return parts.isNotEmpty ? (int.tryParse(parts.last) ?? 0) : 0;
+      }).toList();
+      if (numbers.isNotEmpty) {
+        numbers.sort();
+        nextStartNum = numbers.last + 1;
+      }
+    }
+
     final sectionController = TextEditingController(text: 'A');
-    final startNumController = TextEditingController(text: '1');
+    final startNumController = TextEditingController(text: '$nextStartNum');
     int bayCount = 10;
     bool hasEV = true;
     bool hasHandicap = true;
@@ -662,7 +981,7 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                   count: bayCount,
                   baseLat: _activeMall!.latitude,
                   baseLon: _activeMall!.longitude,
-                  height: 45.0,
+                  height: _resolveFloorAltitude(chosenFloor),
                   isEV: hasEV,
                   isHandicap: hasHandicap,
                 );
@@ -904,6 +1223,7 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
     final evBays = allSlots.where((s) => s.isEVCharging).length;
 
     final occupancyRate = totalBays > 0 ? (occupiedBays / totalBays) : 0.0;
+    final indicatedFloors = _getFloorOptions();
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
@@ -919,27 +1239,6 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
             color: const Color(0xFF0F172A),
           ),
         ),
-        actions: [
-          IconButton(
-            tooltip: 'Add Panel of Bays',
-            icon: const Icon(
-              LucideIcons.layoutGrid,
-              size: 20,
-              color: Color(0xFF0F172A),
-            ),
-            onPressed: _activeMall == null ? null : _showAddPanelDialog,
-          ),
-          IconButton(
-            tooltip: 'Add Single Stall',
-            icon: const Icon(
-              LucideIcons.plusCircle,
-              size: 21,
-              color: Color(0xFF2563EB),
-            ),
-            onPressed: _activeMall == null ? null : _showAddSlotDialog,
-          ),
-          const SizedBox(width: 8),
-        ],
       ),
       body: _isLoading
           ? const Center(
@@ -1113,70 +1412,24 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Real-Time Parking Capacity',
-                                style: GoogleFonts.plusJakartaSans(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w800,
-                                  color: const Color(0xFF0F172A),
-                                ),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                'Vehicle bay tracking for ${_activeMall?.name ?? 'Selected Mall'}',
-                                style: GoogleFonts.plusJakartaSans(
-                                  fontSize: 12,
-                                  color: const Color(0xFF64748B),
-                                ),
-                              ),
-                            ],
-                          ),
-                          PopupMenuButton<String>(
-                            icon: const Icon(
-                              LucideIcons.plus,
-                              color: Color(0xFF2563EB),
+                          Text(
+                            'Real-Time Parking Capacity',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800,
+                              color: const Color(0xFF0F172A),
                             ),
-                            tooltip: 'Add Stalls',
-                            onSelected: (val) {
-                              if (val == 'single') _showAddSlotDialog();
-                              if (val == 'panel') _showAddPanelDialog();
-                            },
-                            itemBuilder: (ctx) => [
-                              const PopupMenuItem(
-                                value: 'single',
-                                child: Row(
-                                  children: [
-                                    Icon(
-                                      LucideIcons.plusCircle,
-                                      size: 16,
-                                      color: Color(0xFF2563EB),
-                                    ),
-                                    SizedBox(width: 8),
-                                    Text('Add Single Stall'),
-                                  ],
-                                ),
-                              ),
-                              const PopupMenuItem(
-                                value: 'panel',
-                                child: Row(
-                                  children: [
-                                    Icon(
-                                      LucideIcons.layoutGrid,
-                                      size: 16,
-                                      color: Color(0xFF0F172A),
-                                    ),
-                                    SizedBox(width: 8),
-                                    Text('Add Bay Panel / Row'),
-                                  ],
-                                ),
-                              ),
-                            ],
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Vehicle bay tracking for ${_activeMall?.name ?? 'Selected Mall'}',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 12,
+                              color: const Color(0xFF64748B),
+                            ),
                           ),
                         ],
                       ),
@@ -1205,263 +1458,10 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                   ),
                 ),
 
-                const SizedBox(height: 20),
-
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'FLOOR-BY-FLOOR BAY ALLOCATION',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w900,
-                        color: const Color(0xFF94A3B8),
-                        letterSpacing: 1.1,
-                      ),
-                    ),
-                    InkWell(
-                      onTap: _showAddPanelDialog,
-                      borderRadius: BorderRadius.circular(8),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 4,
-                          vertical: 2,
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(
-                              LucideIcons.plus,
-                              size: 13,
-                              color: Color(0xFF2563EB),
-                            ),
-                            const SizedBox(width: 2),
-                            Text(
-                              'Add Panel',
-                              style: GoogleFonts.plusJakartaSans(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                                color: const Color(0xFF2563EB),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-
-                const SizedBox(height: 10),
-
-                // EMPTY STATE IF NO SLOTS ADDED YET
-                if (allFloorSlots.isEmpty)
-                  Container(
-                    padding: const EdgeInsets.all(24),
-                    margin: const EdgeInsets.only(bottom: 16),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: const Color(0xFFE2E8F0)),
-                    ),
-                    child: Column(
-                      children: [
-                        const Icon(
-                          LucideIcons.parkingSquare,
-                          size: 40,
-                          color: Color(0xFF94A3B8),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          'No Parking Slots Added Yet',
-                          style: GoogleFonts.plusJakartaSans(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w800,
-                            color: const Color(0xFF0F172A),
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          'This venue has no parking bays configured. Add individual bays or an entire panel row to enable parking tracking.',
-                          textAlign: TextAlign.center,
-                          style: GoogleFonts.plusJakartaSans(
-                            fontSize: 12,
-                            color: const Color(0xFF64748B),
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            ElevatedButton.icon(
-                              onPressed: _showAddSlotDialog,
-                              icon: const Icon(LucideIcons.plus, size: 14),
-                              label: const Text('Add Stall'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF2563EB),
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 14,
-                                  vertical: 10,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            OutlinedButton.icon(
-                              onPressed: _showAddPanelDialog,
-                              icon: const Icon(
-                                LucideIcons.layoutGrid,
-                                size: 14,
-                              ),
-                              label: const Text('Add Panel'),
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: const Color(0xFF0F172A),
-                                side: const BorderSide(
-                                  color: Color(0xFFCBD5E1),
-                                ),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 14,
-                                  vertical: 10,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  )
-                else
-                  // 3. FLOOR-BY-FLOOR ALLOCATION CARDS
-                  ...allFloorSlots.entries.map((entry) {
-                    final floorId = entry.key;
-                    final slots = entry.value;
-                    final capacity = slots.length;
-                    final occupied = slots
-                        .where((s) => s.status == ParkingSlotStatus.occupied)
-                        .length;
-                    final free = slots
-                        .where((s) => s.status == ParkingSlotStatus.free)
-                        .length;
-                    final percent = capacity > 0
-                        ? (occupied / capacity * 100).toInt()
-                        : 0;
-                    final floorEvs = slots.where((s) => s.isEVCharging).length;
-                    final floorHandicaps = slots
-                        .where((s) => s.isHandicapAccessible)
-                        .length;
-
-                    String statusText = 'AVAILABLE';
-                    if (percent > 75) {
-                      statusText = 'HIGH OCCUPANCY';
-                    } else if (percent > 40) {
-                      statusText = 'NORMAL';
-                    }
-
-                    final floorName = floorId == 'GF'
-                        ? 'Ground Surface Parking (GF)'
-                        : (floorId.startsWith('B')
-                              ? '$floorId Basement Level'
-                              : 'Floor $floorId Parking');
-
-                    return Container(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(color: const Color(0xFFE2E8F0)),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Color(0x0A0F172A),
-                            blurRadius: 10,
-                            offset: Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  floorName,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 14.5,
-                                    fontWeight: FontWeight.w800,
-                                    color: const Color(0xFF0F172A),
-                                  ),
-                                ),
-                              ),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 4,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFF1F5F9),
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: Text(
-                                  statusText,
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 10.5,
-                                    fontWeight: FontWeight.w800,
-                                    color: const Color(0xFF334155),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          Wrap(
-                            alignment: WrapAlignment.spaceBetween,
-                            crossAxisAlignment: WrapCrossAlignment.center,
-                            runSpacing: 4,
-                            children: [
-                              Text(
-                                '$occupied / $capacity Bays Occupied ($percent%) • $free Available',
-                                style: GoogleFonts.plusJakartaSans(
-                                  fontSize: 11.5,
-                                  color: const Color(0xFF64748B),
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              Text(
-                                '$floorEvs EV  •  $floorHandicaps Accessible',
-                                style: GoogleFonts.plusJakartaSans(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700,
-                                  color: const Color(0xFF475569),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(6),
-                            child: LinearProgressIndicator(
-                              value: capacity > 0 ? (occupied / capacity) : 0.0,
-                              backgroundColor: const Color(0xFFF1F5F9),
-                              color: const Color(0xFF0F172A),
-                              minHeight: 8,
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  }),
-
                 const SizedBox(height: 16),
 
                 // 4. INTERACTIVE PARKING STALL INSPECTOR & BAY GRID
-                if (allFloorSlots.isNotEmpty)
+                if (indicatedFloors.isNotEmpty)
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
@@ -1473,7 +1473,6 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
                             Text(
                               'BAY LAYOUT INSPECTOR',
@@ -1484,42 +1483,46 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                                 letterSpacing: 0.5,
                               ),
                             ),
-                            SingleChildScrollView(
-                              scrollDirection: Axis.horizontal,
-                              child: Row(
-                                children: allFloorSlots.keys.map((fId) {
-                                  final isSelected = fId == _selectedFloorId;
-                                  return GestureDetector(
-                                    onTap: () {
-                                      setState(() {
-                                        _selectedFloorId = fId;
-                                      });
-                                    },
-                                    child: Container(
-                                      margin: const EdgeInsets.only(left: 4),
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 10,
-                                        vertical: 5,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: isSelected
-                                            ? const Color(0xFF0F172A)
-                                            : const Color(0xFFF1F5F9),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Text(
-                                        fId,
-                                        style: GoogleFonts.plusJakartaSans(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.bold,
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: SingleChildScrollView(
+                                scrollDirection: Axis.horizontal,
+                                child: Row(
+                                  children: indicatedFloors.map((fId) {
+                                    final isSelected = fId == _selectedFloorId;
+                                    return GestureDetector(
+                                      onTap: () {
+                                        setState(() {
+                                          _selectedFloorId = fId;
+                                        });
+                                      },
+                                      child: Container(
+                                        margin: const EdgeInsets.only(left: 4),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 5,
+                                        ),
+                                        decoration: BoxDecoration(
                                           color: isSelected
-                                              ? Colors.white
-                                              : const Color(0xFF475569),
+                                              ? const Color(0xFF0F172A)
+                                              : const Color(0xFFF1F5F9),
+                                          borderRadius:
+                                              BorderRadius.circular(8),
+                                        ),
+                                        child: Text(
+                                          fId,
+                                          style: GoogleFonts.plusJakartaSans(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold,
+                                            color: isSelected
+                                                ? Colors.white
+                                                : const Color(0xFF475569),
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                  );
-                                }).toList(),
+                                    );
+                                  }).toList(),
+                                ),
                               ),
                             ),
                           ],
@@ -1529,13 +1532,27 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                         // Grid of Parking Slots for Selected Floor
                         Builder(
                           builder: (context) {
-                            final currentFloorSlots =
-                                allFloorSlots[_selectedFloorId] ?? [];
+                            final currentFloorSlots = _parkingService
+                                .fetchFloorMap(_selectedFloorId);
                             if (currentFloorSlots.isEmpty) {
-                              return const Padding(
-                                padding: EdgeInsets.all(16.0),
-                                child: Text(
-                                  'No parking stalls generated for this floor.',
+                              return Padding(
+                                padding: const EdgeInsets.all(20.0),
+                                child: Column(
+                                  children: [
+                                    const Icon(
+                                      LucideIcons.parkingSquare,
+                                      size: 32,
+                                      color: Color(0xFF94A3B8),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      'No parking stalls generated for $_selectedFloorId yet.',
+                                      style: GoogleFonts.plusJakartaSans(
+                                        fontSize: 12,
+                                        color: const Color(0xFF64748B),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               );
                             }
@@ -1545,11 +1562,11 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                               physics: const NeverScrollableScrollPhysics(),
                               gridDelegate:
                                   const SliverGridDelegateWithFixedCrossAxisCount(
-                                    crossAxisCount: 4,
-                                    crossAxisSpacing: 8,
-                                    mainAxisSpacing: 8,
-                                    childAspectRatio: 1.35,
-                                  ),
+                                crossAxisCount: 4,
+                                crossAxisSpacing: 8,
+                                mainAxisSpacing: 8,
+                                childAspectRatio: 1.35,
+                              ),
                               itemCount: currentFloorSlots.length,
                               itemBuilder: (context, index) {
                                 final slot = currentFloorSlots[index];
@@ -1643,6 +1660,36 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
 
                 const SizedBox(height: 16),
 
+                // Primary "Add New Parking Slots" Action Button
+                if (indicatedFloors.isNotEmpty) ...[
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: () => _showAddParkingSlotsSheet(
+                        presetFloor: _selectedFloorId,
+                      ),
+                      icon: const Icon(LucideIcons.plusCircle, size: 18),
+                      label: Text(
+                        'Add New Parking Slots on $_selectedFloorId',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF0F172A),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 13),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        elevation: 1,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+
                 // 5. QUICK ACTIONS
                 Row(
                   children: [
@@ -1654,6 +1701,7 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                               _activeMall!.id,
                             );
                             if (mounted) {
+                              // ignore: use_build_context_synchronously
                               // ignore: use_build_context_synchronously
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
@@ -1679,7 +1727,7 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                           ),
                         ),
                         child: Text(
-                          'RESET ALL SLOTS',
+                          'RESET TO FREE',
                           style: GoogleFonts.plusJakartaSans(
                             fontSize: 11,
                             fontWeight: FontWeight.bold,
@@ -1687,7 +1735,74 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () async {
+                          if (_activeMall != null) {
+                            final confirm = await showDialog<bool>(
+                              context: context,
+                              builder: (ctx) => AlertDialog(
+                                title: const Text('Clear All Bays?'),
+                                content: Text(
+                                  'This will delete all configured parking stalls for ${_activeMall?.name}.',
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(ctx, false),
+                                    child: const Text('Cancel'),
+                                  ),
+                                  ElevatedButton(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: const Color(0xFFEF4444),
+                                      foregroundColor: Colors.white,
+                                    ),
+                                    onPressed: () => Navigator.pop(ctx, true),
+                                    child: const Text('Clear All'),
+                                  ),
+                                ],
+                              ),
+                            );
+                            if (confirm == true) {
+                              await _parkingService.clearAllSlotsForMall(
+                                _activeMall!.id,
+                              );
+                              if (mounted) {
+                                // ignore: use_build_context_synchronously
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      'Cleared all parking bays for ${_activeMall?.name}',
+                                    ),
+                                    backgroundColor: const Color(0xFF0F172A),
+                                    behavior: SnackBarBehavior.floating,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                );
+                              }
+                            }
+                          }
+                        },
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          foregroundColor: const Color(0xFFEF4444),
+                          side: const BorderSide(color: Color(0xFFFCA5A5)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: Text(
+                          'CLEAR ALL BAYS',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
                     Expanded(
                       child: ElevatedButton(
                         onPressed: () {

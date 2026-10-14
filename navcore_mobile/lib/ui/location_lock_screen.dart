@@ -9,7 +9,7 @@ import '../data/mall_database_service.dart';
 class LocationLockScreen extends StatefulWidget {
   final RealSensorService sensorService;
   final MallDatabaseService mallService;
-  final Function(GeodeticCoords coords, MallMetadata detectedMall)
+  final Function(GeodeticCoords coords, MallMetadata? detectedMall)
   onSetupCompleted;
 
   const LocationLockScreen({
@@ -28,6 +28,8 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
       1; // 1: Location, 2: Mall Detection, 3: Downloading, 4: Ready
   GeodeticCoords? _acquiredCoords;
   MallMetadata? _detectedMall;
+  MallMetadata? _nearestMallOutside500m;
+  double? _nearestDistanceMeters;
   double _downloadProgress = 0.0;
   String _statusText = 'Finding your location...';
   bool _isProcessing = false;
@@ -43,6 +45,10 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
       _isProcessing = true;
       _currentStep = 1;
       _statusText = 'Finding your location...';
+      _detectedMall = null;
+      _nearestMallOutside500m = null;
+      _nearestDistanceMeters = null;
+      _downloadProgress = 0.0;
     });
 
     // Step 1: Request Location
@@ -60,7 +66,7 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
       height: 0.0,
     );
 
-    // Step 2: Detect Mall within 500m of User's Current Location
+    // Step 2: Detect Mall strictly within 500m of User's Current Location
     final mallsWithin500m = await widget.mallService.getMallsWithinRadius(
       _acquiredCoords!,
       radiusMeters: 500.0,
@@ -73,47 +79,58 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
         _detectedMall!,
       );
       _statusText = 'Found ${_detectedMall!.name} (${distM.toInt()}m away, within 500m)!';
+
+      setState(() {
+        _currentStep = 2;
+      });
+      await Future.delayed(const Duration(milliseconds: 600));
+
+      // Step 3: Load Mall Map (within 500m only)
+      setState(() {
+        _currentStep = 3;
+        _statusText = 'Loading map for ${_detectedMall!.name}...';
+      });
+
+      await widget.mallService.autoDownloadAndActivateNearestMall(
+        _acquiredCoords!,
+        maxRadiusMeters: 500.0,
+        onProgress: (progress) {
+          if (mounted) {
+            setState(() {
+              _downloadProgress = progress;
+            });
+          }
+        },
+      );
+
+      // Step 4: Completed
+      setState(() {
+        _currentStep = 4;
+        _downloadProgress = 1.0;
+        _isProcessing = false;
+        _statusText = 'Map ready! You can now start navigating.';
+      });
     } else {
-      _detectedMall = widget.mallService.findNearestMall(_acquiredCoords!);
+      // Above 500m: malls above 500m are NOT loaded in maps!
+      final nearest = widget.mallService.findNearestMall(_acquiredCoords!);
       final distM = widget.mallService.calculateDistanceToMall(
         _acquiredCoords!,
-        _detectedMall!,
+        nearest,
       );
       final hasGps = _acquiredCoords!.latitude != 0.0 && _acquiredCoords!.longitude != 0.0;
-      _statusText = hasGps
-          ? 'Nearest: ${_detectedMall!.name} (${distM < 1000 ? "${distM.toInt()}m" : "${(distM / 1000).toStringAsFixed(1)}km"} away)'
-          : 'Connected to ${_detectedMall!.name}!';
+
+      setState(() {
+        _detectedMall = null;
+        _nearestMallOutside500m = nearest.id.isNotEmpty ? nearest : null;
+        _nearestDistanceMeters = nearest.id.isNotEmpty ? distM : null;
+        _currentStep = 4;
+        _downloadProgress = 0.0;
+        _isProcessing = false;
+        _statusText = hasGps
+            ? 'Outside 500m coverage (${nearest.name} is ${distM < 1000 ? "${distM.toInt()}m" : "${(distM / 1000).toStringAsFixed(1)}km"} away). Maps only auto-load within 500m.'
+            : 'No GPS location detected. Move within 500m of a mall to load maps.';
+      });
     }
-
-    setState(() {
-      _currentStep = 2;
-    });
-    await Future.delayed(const Duration(milliseconds: 600));
-
-    // Step 3: Load Mall Map
-    setState(() {
-      _currentStep = 3;
-      _statusText = 'Loading map for ${_detectedMall!.name}...';
-    });
-
-    await widget.mallService.autoDownloadAndActivateNearestMall(
-      _acquiredCoords!,
-      onProgress: (progress) {
-        if (mounted) {
-          setState(() {
-            _downloadProgress = progress;
-          });
-        }
-      },
-    );
-
-    // Step 4: Completed
-    setState(() {
-      _currentStep = 4;
-      _downloadProgress = 1.0;
-      _isProcessing = false;
-      _statusText = 'Map ready! You can now start navigating.';
-    });
   }
 
   @override
@@ -207,17 +224,23 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
                 2,
                 'Identifying Your Mall',
                 _detectedMall != null
-                    ? _detectedMall!.name
-                    : 'Looking for nearby mall...',
+                    ? '${_detectedMall!.name} (Within 500m)'
+                    : (_nearestMallOutside500m != null
+                        ? 'Nearest: ${_nearestMallOutside500m!.name} (${_nearestDistanceMeters != null ? (_nearestDistanceMeters! < 1000 ? "${_nearestDistanceMeters!.toInt()}m" : "${(_nearestDistanceMeters! / 1000).toStringAsFixed(1)}km") : ">500m"})'
+                        : 'Looking for nearby mall...'),
                 LucideIcons.building2,
               ),
               const SizedBox(height: 14),
               _buildStepRow(
                 3,
                 'Loading Indoor Map',
-                _currentStep >= 3
-                    ? '${(_downloadProgress * 100).toInt()}% Loaded'
-                    : 'Preparing map...',
+                _detectedMall != null
+                    ? (_currentStep >= 3
+                        ? '${(_downloadProgress * 100).toInt()}% Loaded'
+                        : 'Preparing map...')
+                    : (_currentStep == 4
+                        ? 'Not loaded (Outside 500m limit)'
+                        : 'Preparing map...'),
                 LucideIcons.downloadCloud,
               ),
 
@@ -263,9 +286,13 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
                         ),
                       )
                     else
-                      const Icon(
-                        LucideIcons.checkCircle2,
-                        color: Color(0xFF16A34A),
+                      Icon(
+                        _detectedMall != null
+                            ? LucideIcons.checkCircle2
+                            : LucideIcons.info,
+                        color: _detectedMall != null
+                            ? const Color(0xFF16A34A)
+                            : const Color(0xFFF59E0B),
                         size: 20,
                       ),
                     const SizedBox(width: 12),
@@ -275,7 +302,9 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
                         style: TextStyle(
                           color: _isProcessing
                               ? const Color(0xFF2563EB)
-                              : const Color(0xFF16A34A),
+                              : (_detectedMall != null
+                                  ? const Color(0xFF16A34A)
+                                  : const Color(0xFFB45309)),
                           fontSize: 13,
                           fontWeight: FontWeight.w600,
                         ),
@@ -305,18 +334,22 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
                   onPressed: _currentStep == 4
                       ? () => widget.onSetupCompleted(
                           _acquiredCoords!,
-                          _detectedMall!,
+                          _detectedMall,
                         )
                       : _startStartupFlow,
                   icon: Icon(
                     _currentStep == 4
-                        ? LucideIcons.compass
+                        ? (_detectedMall != null
+                            ? LucideIcons.compass
+                            : LucideIcons.arrowRight)
                         : LucideIcons.refreshCw,
                     size: 20,
                   ),
                   label: Text(
                     _currentStep == 4
-                        ? 'Start Navigation'
+                        ? (_detectedMall != null
+                            ? 'Start Navigation'
+                            : 'Continue to App (No Map Loaded)')
                         : (_isProcessing
                               ? 'Loading...'
                               : 'Try Again'),

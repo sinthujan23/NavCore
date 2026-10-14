@@ -1,13 +1,16 @@
 import 'dart:math' as math;
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../engine/floor_tracker.dart';
 import '../engine/ecef_engine.dart';
 import '../engine/bearing_engine.dart';
 import '../data/destinations.dart';
 import '../data/parking_service.dart';
+import '../data/mall_database_service.dart';
 import 'shop_details_screen.dart';
 import 'dpad_control_widget.dart';
 import 'theme/app_theme.dart';
@@ -26,6 +29,9 @@ class FloorPlanScreen extends StatefulWidget {
   final VoidCallback? onBackClicked;
   final String userEmail;
   final VoidCallback? onLogout;
+  final MallDatabaseService? mallService;
+  final VoidCallback? onOpenMallExplorer;
+  final VoidCallback? onRefreshLocation;
 
   const FloorPlanScreen({
     super.key,
@@ -41,6 +47,9 @@ class FloorPlanScreen extends StatefulWidget {
     this.onBackClicked,
     this.userEmail = '',
     this.onLogout,
+    this.mallService,
+    this.onOpenMallExplorer,
+    this.onRefreshLocation,
   });
 
   @override
@@ -56,6 +65,7 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
   final double _zoomScale = 1.0;
   final bool _showDpad = false;
   final ParkingService _parkingService = ParkingService();
+  Timer? _parkingAutoRefreshTimer;
 
   late AnimationController _pulseController;
 
@@ -69,16 +79,241 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
     }
   }
 
+  String? _resolveActiveMallId() {
+    if (widget.buildingProfile.buildingId.isNotEmpty) {
+      return widget.buildingProfile.buildingId;
+    }
+    if (widget.mallService != null) {
+      final active = widget.mallService!.catalog.where((m) => m.isActive);
+      if (active.isNotEmpty) return active.first.id;
+      if (widget.mallService!.catalog.isNotEmpty) {
+        return widget.mallService!.catalog.first.id;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _loadParkingSlots() async {
+    String? mallId = _resolveActiveMallId();
+    if (mallId == null || mallId.isEmpty) {
+      final prefs = await SharedPreferences.getInstance();
+      mallId = prefs.getString('NexNav_active_mall_id');
+    }
+    if (mallId == null || mallId.isEmpty) {
+      if (widget.destinations.isNotEmpty) {
+        mallId = '1';
+      }
+    }
+    if (mallId != null && mallId.isNotEmpty) {
+      await _parkingService.loadSlotsForMall(mallId);
+    }
+  }
+
+  String _getFloorIdString(FloorLevelConfig floor) {
+    final cleanFloorId = floor.floorId.trim().toUpperCase();
+    if (cleanFloorId == 'P' ||
+        cleanFloorId.startsWith('P') ||
+        cleanFloorId.contains('PARK')) {
+      return cleanFloorId;
+    }
+    final nameUpper = floor.name.trim().toUpperCase();
+    if (nameUpper == 'P' ||
+        nameUpper.startsWith('P') ||
+        nameUpper.contains('PARK')) {
+      return cleanFloorId.isNotEmpty ? cleanFloorId : 'P';
+    }
+    if (nameUpper.contains('BASEMENT 1') || nameUpper == 'B1') return 'B1';
+    if (nameUpper.contains('BASEMENT 2') || nameUpper == 'B2') return 'B2';
+    if (nameUpper.contains('BASEMENT 3') || nameUpper == 'B3') return 'B3';
+    if (nameUpper.contains('GROUND') || nameUpper == 'GF' || nameUpper == 'G') {
+      return 'GF';
+    }
+    if (floor.floorNumber == -1) {
+      return cleanFloorId.isNotEmpty ? cleanFloorId : 'B1';
+    }
+    if (floor.floorNumber == -2) {
+      return cleanFloorId.isNotEmpty ? cleanFloorId : 'B2';
+    }
+    if (floor.floorNumber == -3) {
+      return cleanFloorId.isNotEmpty ? cleanFloorId : 'B3';
+    }
+    if (floor.floorNumber < 0) return 'B${floor.floorNumber.abs()}';
+    if (floor.floorNumber == 0) return 'GF';
+    if (nameUpper.startsWith('FLOOR ')) return 'F${floor.floorNumber}';
+    if (nameUpper.startsWith('LEVEL ')) return 'L${floor.floorNumber}';
+    return floor.floorId.isNotEmpty ? floor.floorId : 'F${floor.floorNumber}';
+  }
+
+  String _getFloorPillLabel(FloorLevelConfig floor) {
+    final fIdUpper = floor.floorId.trim().toUpperCase();
+    final fNameUpper = floor.name.trim().toUpperCase();
+    if (fIdUpper == 'P' ||
+        fNameUpper == 'P' ||
+        fNameUpper == 'PARKING P' ||
+        fNameUpper == 'PARKING') {
+      return 'P';
+    }
+    if (fIdUpper.startsWith('P') && fIdUpper.length <= 4) {
+      return fIdUpper;
+    }
+    if (fNameUpper.startsWith('PARKING ')) {
+      final suffix = fNameUpper.replaceFirst('PARKING ', '').trim();
+      if (suffix.isNotEmpty && suffix.length <= 3) return suffix;
+      return 'P';
+    }
+    if (fNameUpper.contains('PARK')) {
+      return 'P';
+    }
+    if (floor.floorNumber < 0) {
+      return 'B${floor.floorNumber.abs()}';
+    }
+    if (floor.floorNumber == 0) {
+      return 'GF';
+    }
+    return 'F${floor.floorNumber}';
+  }
+
+  List<FloorLevelConfig> get _effectiveFloorLevels {
+    final List<FloorLevelConfig> floors = [];
+
+    // Find any parking floors present in buildingProfile
+    final profileParkingFloors = widget.buildingProfile.floors.where((f) {
+      final fId = f.floorId.trim().toUpperCase();
+      final fName = f.name.trim().toUpperCase();
+      return fId.startsWith('P') ||
+          fName.startsWith('P') ||
+          fName.contains('PARK');
+    }).toList();
+
+    // Collect all parking floor keys from parkingService
+    final Set<String> detectedParkingFloorIds = <String>{};
+    for (final key in _parkingService.allFloorSlots.keys) {
+      final k = key.trim().toUpperCase();
+      if (k.startsWith('P') || k.contains('PARK') || k.startsWith('B')) {
+        detectedParkingFloorIds.add(key.trim());
+      }
+    }
+
+    final double groundAlt = widget.buildingProfile.entranceBaseAnchorHeight;
+
+    // Add Parking floor 'P' (and any other detected parking floors like P1, B1)
+    if (profileParkingFloors.isNotEmpty) {
+      floors.addAll(profileParkingFloors);
+    } else {
+      for (final pId in detectedParkingFloorIds) {
+        final upper = pId.toUpperCase();
+        final int fNum = upper == 'P'
+            ? -1
+            : (int.tryParse(upper.replaceAll(RegExp(r'[^0-9]'), '')) != null
+                  ? -(int.parse(upper.replaceAll(RegExp(r'[^0-9]'), '')))
+                  : -1);
+        floors.add(
+          FloorLevelConfig(
+            floorId: pId,
+            floorNumber: fNum,
+            name: upper == 'P' ? 'Parking Floor P' : 'Parking $pId',
+            relativeVectorMeters: -3.8,
+            absoluteHeightMeters: groundAlt - 3.8,
+            bandMinMeters: groundAlt - 6.0,
+            bandMaxMeters: groundAlt - 1.0,
+            storesCount: 0,
+          ),
+        );
+      }
+    }
+
+    // Add retail building floors from building profile (F1, F2, ...)
+    for (final f in widget.buildingProfile.floors) {
+      final isAlreadyAdded = floors.any(
+        (existing) =>
+            existing.floorId.trim().toUpperCase() ==
+                f.floorId.trim().toUpperCase() ||
+            (existing.floorNumber == f.floorNumber && existing.floorNumber > 0),
+      );
+      if (!isAlreadyAdded) {
+        floors.add(f);
+      }
+    }
+
+    return floors;
+  }
+
+  List<ParkingSlot> _getSlotsForDisplayFloor(FloorLevelConfig floor) {
+    final primaryId = _getFloorIdString(floor);
+    final primarySlots = _parkingService.fetchFloorMap(primaryId);
+    if (primarySlots.isNotEmpty) return primarySlots;
+
+    final isParkFloor =
+        primaryId.startsWith('P') ||
+        floor.floorId.toUpperCase().startsWith('P') ||
+        floor.name.toUpperCase().contains('PARK') ||
+        floor.floorNumber < 0;
+
+    final candidateKeys = <String>{
+      primaryId,
+      floor.floorId,
+      floor.name,
+      '${floor.floorNumber}',
+      if (isParkFloor) ...['P', 'P1', 'P2', 'Parking', 'B1', 'B2', 'GF'],
+      if (floor.floorNumber < 0) 'B${floor.floorNumber.abs()}',
+      if (floor.floorNumber < 0) 'Basement ${floor.floorNumber.abs()}',
+      if (floor.floorNumber == 0) ...['GF', 'G', 'Ground', 'Ground Floor'],
+      if (floor.floorNumber > 0) ...[
+        'F${floor.floorNumber}',
+        'L${floor.floorNumber}',
+        'Floor ${floor.floorNumber}',
+        'Level ${floor.floorNumber}',
+      ],
+    };
+
+    for (final candidate in candidateKeys) {
+      if (candidate.trim().isEmpty) continue;
+      final s = _parkingService.fetchFloorMap(candidate);
+      if (s.isNotEmpty) return s;
+    }
+
+    final allSlots = _parkingService.allFloorSlots.values
+        .expand((l) => l)
+        .toList();
+    final matched = allSlots.where((s) {
+      final sFloor = s.floorId.trim().toUpperCase();
+      for (final c in candidateKeys) {
+        if (sFloor == c.trim().toUpperCase()) return true;
+      }
+      return false;
+    }).toList();
+
+    if (matched.isNotEmpty) return matched;
+
+    // Fallback: If viewing a parking floor and slots exist for this venue, show them!
+    if (isParkFloor && allSlots.isNotEmpty) {
+      return allSlots;
+    }
+
+    return [];
+  }
+
   @override
   void initState() {
     super.initState();
+    final effectiveUser =
+        widget.userEmail.isNotEmpty ? widget.userEmail : 'user-default';
+    _parkingService.authenticateUser(userId: effectiveUser, token: 'session');
     _parkingService.addListener(_onParkingStateChanged);
+    _loadParkingSlots();
+    _parkingAutoRefreshTimer = Timer.periodic(const Duration(seconds: 6), (_) {
+      if (mounted) {
+        _loadParkingSlots();
+      }
+    });
+
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1400),
     )..repeat(reverse: true);
 
-    if (widget.targetDestination != null) {
+    if (widget.targetDestination != null &&
+        widget.buildingProfile.floors.isNotEmpty) {
       _selectedPOI = widget.targetDestination;
       final matchingFloor = widget.buildingProfile.floors.firstWhere(
         (f) => f.floorNumber == widget.targetDestination!.floorNumber,
@@ -91,20 +326,31 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
   @override
   void didUpdateWidget(FloorPlanScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.buildingProfile.buildingId !=
+            oldWidget.buildingProfile.buildingId ||
+        widget.currentFloor != oldWidget.currentFloor) {
+      _loadParkingSlots();
+    }
     if (widget.targetDestination != oldWidget.targetDestination) {
       _selectedPOI = widget.targetDestination;
-      if (widget.targetDestination != null) {
+      if (widget.targetDestination != null &&
+          widget.buildingProfile.floors.isNotEmpty) {
         final matchingFloor = widget.buildingProfile.floors.firstWhere(
           (f) => f.floorNumber == widget.targetDestination!.floorNumber,
           orElse: () => widget.currentFloor,
         );
         _overrideFloor = matchingFloor;
       }
+    } else if (oldWidget.currentFloor.floorNumber !=
+            widget.currentFloor.floorNumber &&
+        widget.targetDestination == null) {
+      _overrideFloor = widget.currentFloor;
     }
   }
 
   @override
   void dispose() {
+    _parkingAutoRefreshTimer?.cancel();
     _parkingService.removeListener(_onParkingStateChanged);
     _pulseController.dispose();
     super.dispose();
@@ -116,20 +362,335 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
     }
   }
 
+  Widget _buildOutOfRangeView() {
+    final hasGps =
+        widget.userCoords.latitude != 0.0 && widget.userCoords.longitude != 0.0;
+    MallMetadata? nearestMall;
+    double? nearestDistance;
+    if (widget.mallService != null && hasGps) {
+      nearestMall = widget.mallService!.findNearestMall(widget.userCoords);
+      if (nearestMall.id.isNotEmpty) {
+        nearestDistance = widget.mallService!.calculateDistanceToMall(
+          widget.userCoords,
+          nearestMall,
+        );
+      }
+    }
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8FAFC),
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0.5,
+        titleSpacing: widget.onBackClicked != null ? 0 : 16,
+        leading: widget.onBackClicked != null
+            ? IconButton(
+                icon: const Icon(
+                  LucideIcons.arrowLeft,
+                  color: Color(0xFF0F172A),
+                ),
+                onPressed: () {
+                  clearSelection();
+                  widget.onBackClicked?.call();
+                },
+              )
+            : null,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Indoor Floor Map',
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 15,
+                fontWeight: FontWeight.w800,
+                color: const Color(0xFF0F172A),
+              ),
+            ),
+            Text(
+              'Proximity: 500m Limit',
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+                color: const Color(0xFF64748B),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          if (widget.onLogout != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: IconButton(
+                icon: const Icon(
+                  LucideIcons.logOut,
+                  size: 18,
+                  color: Color(0xFFEF4444),
+                ),
+                onPressed: widget.onLogout,
+                tooltip: 'Log out',
+              ),
+            ),
+        ],
+      ),
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // Radar Pulse Icon
+              Container(
+                width: 96,
+                height: 96,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFFEFF6FF),
+                  border: Border.all(
+                    color: const Color(0xFFBFDBFE),
+                    width: 2.5,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF2563EB).withValues(alpha: 0.15),
+                      blurRadius: 24,
+                      spreadRadius: 4,
+                    ),
+                  ],
+                ),
+                child: const Center(
+                  child: Icon(
+                    LucideIcons.radar,
+                    size: 44,
+                    color: Color(0xFF2563EB),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 22),
+
+              // Title
+              Text(
+                'No Mall Within 500m',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  color: const Color(0xFF0F172A),
+                  letterSpacing: -0.5,
+                ),
+              ),
+              const SizedBox(height: 10),
+
+              // Description
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 340),
+                child: Text(
+                  'Indoor maps only auto-load when you are within 500m of a supported shopping mall. Malls above 500m are not loaded in maps.',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 13,
+                    height: 1.5,
+                    color: const Color(0xFF64748B),
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // Nearest Mall Distance Status Card
+              if (nearestMall != null && nearestDistance != null)
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: const Color(0xFFE2E8F0)),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x0A000000),
+                        blurRadius: 10,
+                        offset: Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFEF2F2),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(
+                              LucideIcons.mapPinOff,
+                              size: 18,
+                              color: Color(0xFFEF4444),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Nearest: ${nearestMall.name}',
+                                  style: GoogleFonts.plusJakartaSans(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    color: const Color(0xFF0F172A),
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Distance: ${nearestDistance < 1000 ? "${nearestDistance.toInt()}m" : "${(nearestDistance / 1000).toStringAsFixed(1)}km"} away (> 500m)',
+                                  style: GoogleFonts.plusJakartaSans(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: const Color(0xFFEF4444),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 7,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF8FAFC),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          'Move within 500m of this mall to auto-load the interactive floor plan.',
+                          textAlign: TextAlign.center,
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 11,
+                            color: const Color(0xFF64748B),
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+              const SizedBox(height: 24),
+
+              // Action Buttons
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  if (widget.onOpenMallExplorer != null)
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF2563EB),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 14,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        elevation: 0,
+                      ),
+                      onPressed: widget.onOpenMallExplorer,
+                      icon: const Icon(LucideIcons.globe, size: 16),
+                      label: Text(
+                        'Explore All Malls',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  if (widget.onRefreshLocation != null) ...[
+                    const SizedBox(width: 10),
+                    OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF0F172A),
+                        side: const BorderSide(color: Color(0xFFCBD5E1)),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 14,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                      onPressed: widget.onRefreshLocation,
+                      icon: const Icon(LucideIcons.refreshCw, size: 15),
+                      label: Text(
+                        'Refresh GPS',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final bool isParkingFloor = displayFloor.floorNumber < 0;
+    final bool isNoMallLoaded =
+        widget.buildingProfile.buildingId.isEmpty ||
+        widget.buildingProfile.floors.isEmpty;
+
+    final hasGps =
+        widget.userCoords.latitude != 0.0 && widget.userCoords.longitude != 0.0;
+    double? distM;
+    if (hasGps &&
+        widget.mallService != null &&
+        widget.buildingProfile.buildingId.isNotEmpty) {
+      final m = widget.mallService!.catalog
+          .where((m) => m.id == widget.buildingProfile.buildingId)
+          .firstOrNull;
+      if (m != null) {
+        distM = widget.mallService!.calculateDistanceToMall(
+          widget.userCoords,
+          m,
+        );
+      }
+    } else if (hasGps && widget.destinations.isNotEmpty) {
+      distM = haversineDistance(
+        widget.userCoords,
+        widget.destinations.first.location,
+      );
+    }
+
+    final bool isOutside500m = distM != null && distM > 500.0;
+    if (isNoMallLoaded || isOutside500m) {
+      return _buildOutOfRangeView();
+    }
+    final List<ParkingSlot> floorSlots = _getSlotsForDisplayFloor(displayFloor);
+    final bool isParkingFloor =
+        displayFloor.floorNumber < 0 ||
+        displayFloor.floorId.trim().toUpperCase().startsWith('P') ||
+        displayFloor.name.trim().toUpperCase().contains('PARK') ||
+        floorSlots.isNotEmpty;
     final currentFloorPOIs = widget.destinations
         .where((poi) => poi.floorNumber == displayFloor.floorNumber)
         .toList();
 
-    final String floorId = displayFloor.floorNumber == -1
-        ? 'B1'
-        : (displayFloor.floorNumber == -2 ? 'B2' : 'B1');
-
-    final List<ParkingSlot> floorSlots = isParkingFloor
-        ? _parkingService.fetchFloorMap(floorId)
-        : <ParkingSlot>[];
+    final String floorId = _getFloorIdString(displayFloor);
 
     final MyVehicleLocation? myVehicle = _parkingService.currentVehicleLocation;
     final int freeSlotsCount = floorSlots
@@ -167,16 +728,44 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                 color: const Color(0xFF0F172A),
               ),
             ),
-            Text(
-              widget.buildingProfile.name.isNotEmpty && widget.buildingProfile.name != 'Venue'
-                  ? widget.buildingProfile.name
-                  : 'Indoor Navigation Floor Plan',
-              overflow: TextOverflow.ellipsis,
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-                color: const Color(0xFF64748B),
-              ),
+            Builder(
+              builder: (context) {
+                double? distM;
+                if (widget.userCoords.latitude != 0.0 &&
+                    widget.mallService != null) {
+                  final m = widget.mallService!.catalog
+                      .where((m) => m.id == widget.buildingProfile.buildingId)
+                      .firstOrNull;
+                  if (m != null) {
+                    distM = widget.mallService!.calculateDistanceToMall(
+                      widget.userCoords,
+                      m,
+                    );
+                  }
+                }
+                final distStr = distM != null
+                    ? (distM < 1000
+                          ? ' • ${distM.toInt()}m away'
+                          : ' • ${(distM / 1000).toStringAsFixed(1)}km away')
+                    : '';
+                final isRemote = distM != null && distM > 500.0;
+                final venueName =
+                    widget.buildingProfile.name.isNotEmpty &&
+                        widget.buildingProfile.name != 'Venue'
+                    ? widget.buildingProfile.name
+                    : 'Indoor Navigation Floor Plan';
+                return Text(
+                  '$venueName$distStr',
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: isRemote
+                        ? const Color(0xFF2563EB)
+                        : const Color(0xFF64748B),
+                  ),
+                );
+              },
             ),
           ],
         ),
@@ -215,10 +804,7 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                           height: 28,
                           decoration: const BoxDecoration(
                             gradient: LinearGradient(
-                              colors: [
-                                Color(0xFF2563EB),
-                                Color(0xFF1D4ED8),
-                              ],
+                              colors: [Color(0xFF2563EB), Color(0xFF1D4ED8)],
                               begin: Alignment.topLeft,
                               end: Alignment.bottomRight,
                             ),
@@ -256,9 +842,7 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                           decoration: BoxDecoration(
                             color: const Color(0xFFFEF2F2),
                             shape: BoxShape.circle,
-                            border: Border.all(
-                              color: const Color(0xFFFEE2E2),
-                            ),
+                            border: Border.all(color: const Color(0xFFFEE2E2)),
                           ),
                           child: const Center(
                             child: Icon(
@@ -288,17 +872,29 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                 Expanded(
                   child: ListView.builder(
                     scrollDirection: Axis.horizontal,
-                    itemCount: widget.buildingProfile.floors.length,
+                    itemCount: _effectiveFloorLevels.length,
                     itemBuilder: (context, idx) {
-                      final floor = widget.buildingProfile.floors[idx];
-                      final isSelected =
-                          floor.floorNumber == displayFloor.floorNumber;
+                      final floor = _effectiveFloorLevels[idx];
+                      final bool isSelected =
+                          (floor.floorId.isNotEmpty &&
+                              displayFloor.floorId.isNotEmpty &&
+                              floor.floorId.trim().toUpperCase() ==
+                                  displayFloor.floorId.trim().toUpperCase()) ||
+                          (floor.floorId == displayFloor.floorId &&
+                              floor.floorNumber == displayFloor.floorNumber);
+                      final String fId = _getFloorIdString(floor);
                       final isParkedFloor =
                           myVehicle != null &&
-                          ((floor.floorNumber == -1 &&
-                                  myVehicle.floorId.contains('B1')) ||
-                              (floor.floorNumber == -2 &&
-                                  myVehicle.floorId.contains('B2')));
+                          (myVehicle.floorId.trim().toUpperCase() ==
+                                  fId.trim().toUpperCase() ||
+                              myVehicle.floorId.trim().toUpperCase() ==
+                                  floor.floorId.trim().toUpperCase() ||
+                              myVehicle.floorName.trim().toUpperCase().contains(
+                                floor.name.trim().toUpperCase(),
+                              ));
+                      final String pillText = _getFloorPillLabel(floor);
+                      final bool isParkingPill =
+                          pillText == 'P' || pillText.startsWith('P');
 
                       return GestureDetector(
                         onTap: () {
@@ -327,14 +923,21 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                                 ? null
                                 : (isParkedFloor
                                       ? const Color(0xFFDCFCE7)
-                                      : const Color(0xFFF1F5F9)),
+                                      : (isParkingPill
+                                            ? const Color(0xFFF0FDF4)
+                                            : const Color(0xFFF1F5F9))),
                             borderRadius: BorderRadius.circular(10),
                             border: isParkedFloor && !isSelected
                                 ? Border.all(
                                     color: const Color(0xFF22C55E),
                                     width: 1.5,
                                   )
-                                : null,
+                                : (isParkingPill && !isSelected
+                                      ? Border.all(
+                                          color: const Color(0xFF86EFAC),
+                                          width: 1.0,
+                                        )
+                                      : null),
                             boxShadow: isSelected
                                 ? [
                                     BoxShadow(
@@ -358,11 +961,16 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                                   color: Color(0xFF16A34A),
                                 ),
                                 const SizedBox(width: 4),
+                              ] else if (isParkingPill && !isSelected) ...[
+                                const Icon(
+                                  LucideIcons.parkingCircle,
+                                  size: 12,
+                                  color: Color(0xFF16A34A),
+                                ),
+                                const SizedBox(width: 4),
                               ],
                               Text(
-                                floor.floorNumber < 0
-                                    ? 'B${floor.floorNumber.abs()}'
-                                    : 'F${floor.floorNumber}',
+                                pillText,
                                 style: GoogleFonts.plusJakartaSans(
                                   fontSize: 12,
                                   fontWeight: FontWeight.w800,
@@ -370,7 +978,9 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                                       ? Colors.white
                                       : (isParkedFloor
                                             ? const Color(0xFF15803D)
-                                            : const Color(0xFF334155)),
+                                            : (isParkingPill
+                                                  ? const Color(0xFF166534)
+                                                  : const Color(0xFF334155))),
                                 ),
                               ),
                             ],
@@ -414,7 +1024,8 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                   Padding(
                     padding: const EdgeInsets.only(left: 6),
                     child: InkWell(
-                      onTap: () => _showFloorDirectoryModal(context, currentFloorPOIs),
+                      onTap: () =>
+                          _showFloorDirectoryModal(context, currentFloorPOIs),
                       borderRadius: BorderRadius.circular(10),
                       child: Container(
                         padding: const EdgeInsets.symmetric(
@@ -559,11 +1170,7 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                     'Beauty',
                     LucideIcons.sparkles,
                   ),
-                  _buildCategoryFilterChip(
-                    'TECH',
-                    'Tech',
-                    LucideIcons.laptop,
-                  ),
+                  _buildCategoryFilterChip('TECH', 'Tech', LucideIcons.laptop),
                   _buildCategoryFilterChip(
                     'SERVICES',
                     'Services',
@@ -713,7 +1320,8 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
 
                         // User Location Position Pin with Motion Pulsing Radar & Badge
                         () {
-                          final activeMallAnchor = widget.destinations.isNotEmpty
+                          final activeMallAnchor =
+                              widget.destinations.isNotEmpty
                               ? widget.destinations.first.location
                               : widget.userCoords;
                           final effectiveUser = getEffectiveUserCoords(
@@ -955,50 +1563,97 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                                                 const SizedBox(width: 8),
                                                 Builder(
                                                   builder: (context) {
-                                                    final activeAnchor = widget.destinations.isNotEmpty
-                                                        ? widget.destinations.first.location
+                                                    final activeAnchor =
+                                                        widget
+                                                            .destinations
+                                                            .isNotEmpty
+                                                        ? widget
+                                                              .destinations
+                                                              .first
+                                                              .location
                                                         : widget.userCoords;
-                                                    final effectiveUser = getEffectiveUserCoords(
-                                                      widget.userCoords,
-                                                      activeAnchor,
-                                                    );
-                                                    final storeDistMeters = calculateAccurate3DDistance(
-                                                      effectiveUser,
-                                                      _selectedPOI!.location,
-                                                      userFloorNumber: widget.currentFloor.floorNumber,
-                                                      targetFloorNumber: _selectedPOI!.floorNumber,
-                                                    );
+                                                    final effectiveUser =
+                                                        getEffectiveUserCoords(
+                                                          widget.userCoords,
+                                                          activeAnchor,
+                                                        );
+                                                    final storeDistMeters =
+                                                        calculateAccurate3DDistance(
+                                                          effectiveUser,
+                                                          _selectedPOI!
+                                                              .location,
+                                                          userFloorNumber:
+                                                              widget
+                                                                  .currentFloor
+                                                                  .floorNumber,
+                                                          targetFloorNumber:
+                                                              _selectedPOI!
+                                                                  .floorNumber,
+                                                        );
                                                     return Row(
-                                                      mainAxisSize: MainAxisSize.min,
+                                                      mainAxisSize:
+                                                          MainAxisSize.min,
                                                       children: [
                                                         const Icon(
-                                                          LucideIcons.navigation,
+                                                          LucideIcons
+                                                              .navigation,
                                                           size: 10,
-                                                          color: Color(0xFF2563EB),
-                                                        ),
-                                                        const SizedBox(width: 3),
-                                                        Text(
-                                                          '${storeDistMeters.toStringAsFixed(0)}m away',
-                                                          style: GoogleFonts.plusJakartaSans(
-                                                            fontSize: 10.5,
-                                                            fontWeight: FontWeight.w700,
-                                                            color: const Color(0xFF2563EB),
+                                                          color: Color(
+                                                            0xFF2563EB,
                                                           ),
                                                         ),
-                                                        if (_selectedPOI!.floorNumber != widget.currentFloor.floorNumber) ...[
-                                                          const SizedBox(width: 5),
+                                                        const SizedBox(
+                                                          width: 3,
+                                                        ),
+                                                        Text(
+                                                          '${storeDistMeters.toStringAsFixed(0)}m away',
+                                                          style:
+                                                              GoogleFonts.plusJakartaSans(
+                                                                fontSize: 10.5,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w700,
+                                                                color:
+                                                                    const Color(
+                                                                      0xFF2563EB,
+                                                                    ),
+                                                              ),
+                                                        ),
+                                                        if (_selectedPOI!
+                                                                .floorNumber !=
+                                                            widget
+                                                                .currentFloor
+                                                                .floorNumber) ...[
+                                                          const SizedBox(
+                                                            width: 5,
+                                                          ),
                                                           Container(
-                                                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                                                            padding:
+                                                                const EdgeInsets.symmetric(
+                                                                  horizontal: 5,
+                                                                  vertical: 1.5,
+                                                                ),
                                                             decoration: BoxDecoration(
-                                                              color: const Color(0xFFEFF6FF),
-                                                              borderRadius: BorderRadius.circular(5),
+                                                              color:
+                                                                  const Color(
+                                                                    0xFFEFF6FF,
+                                                                  ),
+                                                              borderRadius:
+                                                                  BorderRadius.circular(
+                                                                    5,
+                                                                  ),
                                                             ),
                                                             child: Text(
                                                               'Floor ${_selectedPOI!.floorNumber}',
                                                               style: GoogleFonts.plusJakartaSans(
                                                                 fontSize: 9,
-                                                                fontWeight: FontWeight.bold,
-                                                                color: const Color(0xFF1D4ED8),
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .bold,
+                                                                color:
+                                                                    const Color(
+                                                                      0xFF1D4ED8,
+                                                                    ),
                                                               ),
                                                             ),
                                                           ),
@@ -1360,112 +2015,39 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
     List<ParkingSlot> slots,
     MyVehicleLocation? myVehicle,
   ) {
-    const double roomTopPadding = 50.0;
-    final double availableHeight = height - roomTopPadding - 46.0;
-    final double slotH = availableHeight * 0.135;
-    final double gapY = (availableHeight - (slotH * 6)) / 5;
-    final double slotW = (width * 0.34 - 18) / 2;
+    final stalls = ParkingLayoutCalculator.calculateStalls(
+      width: width,
+      height: height,
+      floorNumber: displayFloor.floorNumber,
+      floorName: displayFloor.name,
+      slots: slots,
+      fallbackCoords: widget.userCoords,
+    );
 
     final List<Widget> widgets = [];
+    for (final stall in stalls) {
+      final bool isMyCar =
+          myVehicle != null &&
+          myVehicle.slotId == stall.slot.id &&
+          myVehicle.status == 'parked';
 
-    // Left Wing
-    for (int row = 0; row < 6; row++) {
-      for (int col = 0; col < 2; col++) {
-        final int num = row * 2 + col + 1;
-        final String numStr = num < 10 ? '0$num' : '$num';
-        final String code = '$floorId-A-$numStr';
-        final double slotX = 20.0 + col * (slotW + 3);
-        final double slotY = roomTopPadding + row * (slotH + gapY);
-
-        final slotObj = slots.firstWhere(
-          (s) => s.id == code,
-          orElse: () => ParkingSlot(
-            id: code,
-            floorId: floorId,
-            section: 'A',
-            slotNumber: num,
-            status: ParkingSlotStatus.free,
-            location: widget.userCoords,
-            gridRow: row,
-            gridCol: col,
-            isEVCharging: num == 1 || num == 2,
-            isHandicapAccessible: num == 3 || num == 4,
-            sensorId: 'IOT-$code',
-          ),
-        );
-
-        final bool isMyCar =
-            myVehicle != null &&
-            myVehicle.slotId == code &&
-            myVehicle.status == 'parked';
-
-        widgets.add(
-          Positioned(
-            left: slotX,
-            top: slotY,
-            width: slotW,
-            height: slotH,
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                borderRadius: BorderRadius.circular(6),
-                onTap: () => _showParkingSlotModal(context, slotObj, isMyCar),
-                child: Container(),
-              ),
+      widgets.add(
+        Positioned(
+          left: stall.rect.left,
+          top: stall.rect.top,
+          width: stall.rect.width,
+          height: stall.rect.height,
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(6),
+              onTap: () => _showParkingSlotModal(context, stall.slot, isMyCar),
+              child: Container(),
             ),
           ),
-        );
-      }
+        ),
+      );
     }
-
-    // Right Wing
-    for (int row = 0; row < 6; row++) {
-      for (int col = 0; col < 2; col++) {
-        final int num = row * 2 + col + 1;
-        final String numStr = num < 10 ? '0$num' : '$num';
-        final String code = '$floorId-B-$numStr';
-        final double slotX = width * 0.65 + col * (slotW + 3);
-        final double slotY = roomTopPadding + row * (slotH + gapY);
-
-        final slotObj = slots.firstWhere(
-          (s) => s.id == code,
-          orElse: () => ParkingSlot(
-            id: code,
-            floorId: floorId,
-            section: 'B',
-            slotNumber: num,
-            status: ParkingSlotStatus.free,
-            location: widget.userCoords,
-            gridRow: row,
-            gridCol: col,
-            sensorId: 'IOT-$code',
-          ),
-        );
-
-        final bool isMyCar =
-            myVehicle != null &&
-            myVehicle.slotId == code &&
-            myVehicle.status == 'parked';
-
-        widgets.add(
-          Positioned(
-            left: slotX,
-            top: slotY,
-            width: slotW,
-            height: slotH,
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                borderRadius: BorderRadius.circular(6),
-                onTap: () => _showParkingSlotModal(context, slotObj, isMyCar),
-                child: Container(),
-              ),
-            ),
-          ),
-        );
-      }
-    }
-
     return widgets;
   }
 
@@ -1875,18 +2457,36 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                         if (confirmUnparkAndPark != true) {
                           return;
                         }
-                        await _parkingService.clearVehicleLocation();
+                        final activeMallId = _resolveActiveMallId();
+                        final currentUserId = widget.userEmail.isNotEmpty
+                            ? widget.userEmail
+                            : (_parkingService.currentUserId.isNotEmpty
+                                ? _parkingService.currentUserId
+                                : 'user-default');
+
+                        await _parkingService.clearVehicleLocation(
+                          userId: currentUserId,
+                          mallId: activeMallId,
+                        );
                       }
+
+                      final activeMallId = _resolveActiveMallId();
+                      final currentUserId = widget.userEmail.isNotEmpty
+                          ? widget.userEmail
+                          : (_parkingService.currentUserId.isNotEmpty
+                              ? _parkingService.currentUserId
+                              : 'user-default');
 
                       await _parkingService.saveVehicleLocation(
                         MyVehicleLocation(
-                          userId: _parkingService.currentUserId,
+                          userId: currentUserId,
                           slotId: slot.id,
                           floorId: slot.floorId,
                           floorName: displayFloor.name,
                           location: slot.location,
                           timestamp: DateTime.now(),
                         ),
+                        mallId: activeMallId,
                       );
                       if (context.mounted) {
                         Navigator.pop(context);
@@ -2011,7 +2611,17 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                     ),
                   ),
                   onPressed: () async {
-                    await _parkingService.clearVehicleLocation();
+                    final activeMallId = _resolveActiveMallId();
+                    final currentUserId = widget.userEmail.isNotEmpty
+                        ? widget.userEmail
+                        : (_parkingService.currentUserId.isNotEmpty
+                            ? _parkingService.currentUserId
+                            : 'user-default');
+
+                    await _parkingService.clearVehicleLocation(
+                      userId: currentUserId,
+                      mallId: activeMallId,
+                    );
                     if (context.mounted) {
                       Navigator.pop(context);
                       ScaffoldMessenger.of(context).showSnackBar(
@@ -2294,6 +2904,197 @@ class RoomCategoryProfile {
   });
 }
 
+class ComputedParkingStall {
+  final ParkingSlot slot;
+  final Rect rect;
+  final bool isEV;
+  final bool isHandicap;
+
+  const ComputedParkingStall({
+    required this.slot,
+    required this.rect,
+    required this.isEV,
+    required this.isHandicap,
+  });
+}
+
+class ParkingLayoutCalculator {
+  static List<ComputedParkingStall> calculateStalls({
+    required double width,
+    required double height,
+    required int floorNumber,
+    required String floorName,
+    required List<ParkingSlot> slots,
+    required GeodeticCoords fallbackCoords,
+  }) {
+    final stalls = <ComputedParkingStall>[];
+    final String prefix = _resolveFloorPrefix(floorNumber, floorName);
+
+    final List<ParkingSlot> effectiveSlots;
+    if (slots.isNotEmpty) {
+      effectiveSlots = List<ParkingSlot>.from(slots);
+    } else if (floorNumber < 0 ||
+        prefix.startsWith('P') ||
+        floorName.toUpperCase().contains('PARK')) {
+      effectiveSlots = [];
+      for (int i = 1; i <= 12; i++) {
+        final numStr = i < 10 ? '0$i' : '$i';
+        effectiveSlots.add(
+          ParkingSlot(
+            id: '$prefix-A-$numStr',
+            floorId: prefix,
+            section: 'A',
+            slotNumber: i,
+            status: ParkingSlotStatus.free,
+            location: fallbackCoords,
+            gridRow: (i - 1) ~/ 2,
+            gridCol: (i - 1) % 2,
+            isEVCharging: i == 1 || i == 2,
+            isHandicapAccessible: i == 3 || i == 4,
+            sensorId: 'IOT-$prefix-A-$numStr',
+          ),
+        );
+      }
+      for (int i = 1; i <= 12; i++) {
+        final numStr = i < 10 ? '0$i' : '$i';
+        effectiveSlots.add(
+          ParkingSlot(
+            id: '$prefix-B-$numStr',
+            floorId: prefix,
+            section: 'B',
+            slotNumber: i,
+            status: ParkingSlotStatus.free,
+            location: fallbackCoords,
+            gridRow: (i - 1) ~/ 2,
+            gridCol: (i - 1) % 2,
+            isEVCharging: false,
+            isHandicapAccessible: false,
+            sensorId: 'IOT-$prefix-B-$numStr',
+          ),
+        );
+      }
+    } else {
+      return stalls;
+    }
+
+    final leftSlots = <ParkingSlot>[];
+    final rightSlots = <ParkingSlot>[];
+
+    final hasSectionB = effectiveSlots.any(
+      (s) => s.section.trim().toUpperCase() == 'B' || s.id.contains('-B-'),
+    );
+    final hasSectionA = effectiveSlots.any(
+      (s) => s.section.trim().toUpperCase() == 'A' || s.id.contains('-A-'),
+    );
+
+    if (hasSectionA && hasSectionB) {
+      for (final s in effectiveSlots) {
+        final sec = s.section.trim().toUpperCase();
+        if (sec == 'B' || sec == 'D' || sec == 'F' || s.id.contains('-B-')) {
+          rightSlots.add(s);
+        } else {
+          leftSlots.add(s);
+        }
+      }
+    } else {
+      final sorted = List<ParkingSlot>.from(effectiveSlots)
+        ..sort((a, b) {
+          final secComp = a.section.compareTo(b.section);
+          if (secComp != 0) return secComp;
+          return a.slotNumber.compareTo(b.slotNumber);
+        });
+      if (sorted.length <= 12 && !hasSectionB) {
+        leftSlots.addAll(sorted);
+      } else {
+        final half = (sorted.length + 1) ~/ 2;
+        leftSlots.addAll(sorted.take(half));
+        rightSlots.addAll(sorted.skip(half));
+      }
+    }
+
+    leftSlots.sort(
+      (a, b) => a.slotNumber != b.slotNumber
+          ? a.slotNumber.compareTo(b.slotNumber)
+          : a.id.compareTo(b.id),
+    );
+    rightSlots.sort(
+      (a, b) => a.slotNumber != b.slotNumber
+          ? a.slotNumber.compareTo(b.slotNumber)
+          : a.id.compareTo(b.id),
+    );
+
+    const double roomTopPadding = 50.0;
+    final double availableHeight = height - roomTopPadding - 46.0;
+    final int maxRows = math.max(
+      6,
+      math.max((leftSlots.length + 1) ~/ 2, (rightSlots.length + 1) ~/ 2),
+    );
+
+    final double slotH = maxRows <= 6
+        ? availableHeight * 0.135
+        : (availableHeight * 0.81) / maxRows;
+    final double gapY = maxRows <= 6
+        ? (availableHeight - (slotH * 6)) / 5
+        : (availableHeight - (slotH * maxRows)) / (maxRows - 1);
+    final double slotW = (width * 0.34 - 18) / 2;
+
+    for (int i = 0; i < leftSlots.length; i++) {
+      final s = leftSlots[i];
+      final int row = i ~/ 2;
+      final int col = i % 2;
+      final double x = 20.0 + col * (slotW + 3);
+      final double y = roomTopPadding + row * (slotH + gapY);
+      stalls.add(
+        ComputedParkingStall(
+          slot: s,
+          rect: Rect.fromLTWH(x, y, slotW, slotH),
+          isEV: s.isEVCharging,
+          isHandicap: s.isHandicapAccessible,
+        ),
+      );
+    }
+
+    for (int i = 0; i < rightSlots.length; i++) {
+      final s = rightSlots[i];
+      final int row = i ~/ 2;
+      final int col = i % 2;
+      final double x = width * 0.65 + col * (slotW + 3);
+      final double y = roomTopPadding + row * (slotH + gapY);
+      stalls.add(
+        ComputedParkingStall(
+          slot: s,
+          rect: Rect.fromLTWH(x, y, slotW, slotH),
+          isEV: s.isEVCharging,
+          isHandicap: s.isHandicapAccessible,
+        ),
+      );
+    }
+
+    return stalls;
+  }
+
+  static String _resolveFloorPrefix(int floorNumber, String floorName) {
+    final nameUpper = floorName.trim().toUpperCase();
+    if (nameUpper == 'P' ||
+        nameUpper.startsWith('P') ||
+        nameUpper.contains('PARK')) {
+      return 'P';
+    }
+    if (nameUpper.contains('BASEMENT 1') || nameUpper == 'B1') return 'B1';
+    if (nameUpper.contains('BASEMENT 2') || nameUpper == 'B2') return 'B2';
+    if (nameUpper.contains('BASEMENT 3') || nameUpper == 'B3') return 'B3';
+    if (nameUpper.contains('GROUND') || nameUpper == 'GF' || nameUpper == 'G') {
+      return 'GF';
+    }
+    if (floorNumber == -1) return 'P';
+    if (floorNumber == -2) return 'B2';
+    if (floorNumber == -3) return 'B3';
+    if (floorNumber < 0) return 'B${floorNumber.abs()}';
+    if (floorNumber == 0) return 'GF';
+    return 'F$floorNumber';
+  }
+}
+
 class ArchitecturalFloorPainter extends CustomPainter {
   final int floorNumber;
   final String floorName;
@@ -2319,7 +3120,11 @@ class ArchitecturalFloorPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final bool isParkingFloor = floorNumber < 0;
+    final bool isParkingFloor =
+        floorNumber < 0 ||
+        floorName.trim().toUpperCase().contains('PARK') ||
+        floorName.trim().toUpperCase().startsWith('P') ||
+        parkingSlots.isNotEmpty;
 
     // 1. Canvas Background
     final bgPaint = Paint()
@@ -2485,8 +3290,6 @@ class ArchitecturalFloorPainter extends CustomPainter {
       maxWidth: rampRect.width - 4,
       textAlign: TextAlign.center,
     );
-
-
   }
 
   void _paintRetailPlan(Canvas canvas, Size size, double roomTopPadding) {
@@ -2566,10 +3369,6 @@ class ArchitecturalFloorPainter extends CustomPainter {
     Size size,
     double roomTopPadding,
   ) {
-    final double availableHeight = size.height - roomTopPadding - 46.0;
-    final double slotH = availableHeight * 0.135;
-    final double gapY = (availableHeight - (slotH * 6)) / 5;
-
     final dashPaint = Paint()
       ..color = const Color(0xFFFBBF24)
       ..strokeWidth = 1.2
@@ -2591,102 +3390,30 @@ class ArchitecturalFloorPainter extends CustomPainter {
       textAlign: TextAlign.center,
     );
 
-    final double slotW = (size.width * 0.34 - 18) / 2;
-    final String prefix = floorNumber == -1
-        ? 'B1'
-        : (floorNumber == -2 ? 'B2' : 'B');
+    final stalls = ParkingLayoutCalculator.calculateStalls(
+      width: size.width,
+      height: size.height,
+      floorNumber: floorNumber,
+      floorName: floorName,
+      slots: parkingSlots,
+      fallbackCoords: userCoords,
+    );
 
-    // Left Wing: Zone A
-    for (int row = 0; row < 6; row++) {
-      for (int col = 0; col < 2; col++) {
-        final int num = row * 2 + col + 1;
-        final String numStr = num < 10 ? '0$num' : '$num';
-        final String code = '$prefix-A-$numStr';
-        final double slotX = 20.0 + col * (slotW + 3);
-        final double slotY = roomTopPadding + row * (slotH + gapY);
-        final Rect slotRect = Rect.fromLTWH(slotX, slotY, slotW, slotH);
+    for (final stall in stalls) {
+      final bool isMyCar =
+          myVehicle != null &&
+          myVehicle!.slotId == stall.slot.id &&
+          myVehicle!.status == 'parked';
 
-        final bool isEV = num == 1 || num == 2;
-        final bool isHandicap = num == 3 || num == 4;
-
-        final slotObj = parkingSlots.firstWhere(
-          (s) => s.id == code,
-          orElse: () => ParkingSlot(
-            id: code,
-            floorId: prefix,
-            section: 'A',
-            slotNumber: num,
-            status: ParkingSlotStatus.free,
-            location: const GeodeticCoords(
-              latitude: 0,
-              longitude: 0,
-              height: 0,
-            ),
-            gridRow: row,
-            gridCol: col,
-            sensorId: 'IOT-$code',
-          ),
-        );
-
-        final bool isMyCar =
-            myVehicle != null &&
-            myVehicle!.slotId == code &&
-            myVehicle!.status == 'parked';
-
-        _drawSingleParkingStall(
-          canvas,
-          slotRect,
-          code,
-          isEV: isEV,
-          isHandicap: isHandicap,
-          status: slotObj.status,
-          isMyCar: isMyCar,
-        );
-      }
-    }
-
-    // Right Wing: Zone B
-    for (int row = 0; row < 6; row++) {
-      for (int col = 0; col < 2; col++) {
-        final int num = row * 2 + col + 1;
-        final String numStr = num < 10 ? '0$num' : '$num';
-        final String code = '$prefix-B-$numStr';
-        final double slotX = size.width * 0.65 + col * (slotW + 3);
-        final double slotY = roomTopPadding + row * (slotH + gapY);
-        final Rect slotRect = Rect.fromLTWH(slotX, slotY, slotW, slotH);
-
-        final slotObj = parkingSlots.firstWhere(
-          (s) => s.id == code,
-          orElse: () => ParkingSlot(
-            id: code,
-            floorId: prefix,
-            section: 'B',
-            slotNumber: num,
-            status: ParkingSlotStatus.free,
-            location: const GeodeticCoords(
-              latitude: 0,
-              longitude: 0,
-              height: 0,
-            ),
-            gridRow: row,
-            gridCol: col,
-            sensorId: 'IOT-$code',
-          ),
-        );
-
-        final bool isMyCar =
-            myVehicle != null &&
-            myVehicle!.slotId == code &&
-            myVehicle!.status == 'parked';
-
-        _drawSingleParkingStall(
-          canvas,
-          slotRect,
-          code,
-          status: slotObj.status,
-          isMyCar: isMyCar,
-        );
-      }
+      _drawSingleParkingStall(
+        canvas,
+        stall.rect,
+        stall.slot.id,
+        isEV: stall.isEV,
+        isHandicap: stall.isHandicap,
+        status: stall.slot.status,
+        isMyCar: isMyCar,
+      );
     }
   }
 
@@ -2720,6 +3447,9 @@ class ArchitecturalFloorPainter extends CustomPainter {
     } else if (status == ParkingSlotStatus.occupied) {
       fillPaintColor = const Color(0xFF334155);
       borderPaintColor = const Color(0xFF64748B);
+    } else if (status == ParkingSlotStatus.reserved) {
+      fillPaintColor = const Color(0xFF292524);
+      borderPaintColor = const Color(0xFFF59E0B);
     }
 
     final fillPaint = Paint()..color = fillPaintColor;
@@ -2788,8 +3518,6 @@ class ArchitecturalFloorPainter extends CustomPainter {
       fontWeight: FontWeight.bold,
     );
   }
-
-
 
   RoomCategoryProfile _getProfileForCategory(String category) {
     final cat = category.toUpperCase();
@@ -2874,4 +3602,3 @@ class ArchitecturalFloorPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
-

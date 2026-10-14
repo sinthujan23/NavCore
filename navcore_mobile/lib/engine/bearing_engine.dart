@@ -67,15 +67,26 @@ GeodeticCoords getEffectiveUserCoords(
 }) {
   final hasGps = userCoords.latitude != 0.0 && userCoords.longitude != 0.0;
   final hasAnchor = mallAnchor.latitude != 0.0 && mallAnchor.longitude != 0.0;
+  final fallbackH = (userCoords.height > 0.0 && userCoords.height < 4000.0)
+      ? userCoords.height
+      : (mallAnchor.height > 0.0 ? mallAnchor.height : 8.5);
 
   if (hasGps && hasAnchor) {
     final dist = haversineDistance(userCoords, mallAnchor);
     if (dist <= maxProximityMeters) {
-      // User is physically near/inside the venue: use real live GPS coordinates
-      return userCoords;
+      // User is physically near/inside the venue: use real live GPS coordinates with valid elevation
+      return GeodeticCoords(
+        latitude: userCoords.latitude,
+        longitude: userCoords.longitude,
+        height: fallbackH,
+      );
     }
   } else if (hasGps && !hasAnchor) {
-    return userCoords;
+    return GeodeticCoords(
+      latitude: userCoords.latitude,
+      longitude: userCoords.longitude,
+      height: fallbackH,
+    );
   }
 
   // Outdoor testing fallback / uncalibrated GPS (> 300m away):
@@ -95,7 +106,7 @@ GeodeticCoords getEffectiveUserCoords(
   return GeodeticCoords(
     latitude: anchorLat + deltaLat,
     longitude: anchorLon + deltaLon,
-    height: (userCoords.height != 0.0) ? userCoords.height : mallAnchor.height,
+    height: fallbackH,
   );
 }
 
@@ -115,11 +126,13 @@ double calculateAccurate3DDistance(
   double elevationDelta;
   if (userAbsoluteAltitudeM != null && targetAbsoluteAltitudeM != null) {
     elevationDelta = (targetAbsoluteAltitudeM - userAbsoluteAltitudeM).abs();
-  } else if (targetLocation.height != 0.0 && userCoords.height != 0.0 &&
-             (targetLocation.height - userCoords.height).abs() < 50.0) {
+  } else if (targetLocation.height != 0.0 &&
+      userCoords.height != 0.0 &&
+      (targetLocation.height - userCoords.height).abs() < 50.0) {
     elevationDelta = (targetLocation.height - userCoords.height).abs();
   } else {
-    elevationDelta = ((targetFloorNumber - userFloorNumber) * heightPerFloorMeters).abs();
+    elevationDelta =
+        ((targetFloorNumber - userFloorNumber) * heightPerFloorMeters).abs();
   }
 
   return sqrt(hDist * hDist + elevationDelta * elevationDelta);

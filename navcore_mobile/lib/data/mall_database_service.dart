@@ -19,6 +19,9 @@ class MallMetadata {
   final String rating;
   final bool isDownloaded;
   final bool isActive;
+  final double entranceBaseAnchorHeight;
+  final double floorGapMeters;
+  final List<String> parkingFloors;
 
   const MallMetadata({
     required this.id,
@@ -33,7 +36,65 @@ class MallMetadata {
     required this.rating,
     this.isDownloaded = false,
     this.isActive = false,
+    this.entranceBaseAnchorHeight = 0.0,
+    this.floorGapMeters = 3.8,
+    this.parkingFloors = const ['Floor 1'],
   });
+
+  MallMetadata copyWith({
+    String? id,
+    String? name,
+    String? city,
+    String? country,
+    double? latitude,
+    double? longitude,
+    int? floorCount,
+    double? packageSizeBytesMB,
+    String? category,
+    String? rating,
+    bool? isDownloaded,
+    bool? isActive,
+    double? entranceBaseAnchorHeight,
+    double? floorGapMeters,
+    List<String>? parkingFloors,
+  }) {
+    return MallMetadata(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      city: city ?? this.city,
+      country: country ?? this.country,
+      latitude: latitude ?? this.latitude,
+      longitude: longitude ?? this.longitude,
+      floorCount: floorCount ?? this.floorCount,
+      packageSizeBytesMB: packageSizeBytesMB ?? this.packageSizeBytesMB,
+      category: category ?? this.category,
+      rating: rating ?? this.rating,
+      isDownloaded: isDownloaded ?? this.isDownloaded,
+      isActive: isActive ?? this.isActive,
+      entranceBaseAnchorHeight:
+          entranceBaseAnchorHeight ?? this.entranceBaseAnchorHeight,
+      floorGapMeters: floorGapMeters ?? this.floorGapMeters,
+      parkingFloors: parkingFloors ?? this.parkingFloors,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'city': city,
+    'country': country,
+    'latitude': latitude,
+    'longitude': longitude,
+    'floorCount': floorCount,
+    'packageSizeBytesMB': packageSizeBytesMB,
+    'category': category,
+    'rating': rating,
+    'isDownloaded': isDownloaded,
+    'isActive': isActive,
+    'entranceBaseAnchorHeight': entranceBaseAnchorHeight,
+    'floorGapMeters': floorGapMeters,
+    'parkingFloors': parkingFloors,
+  };
 }
 
 class FullMallPackage {
@@ -69,25 +130,19 @@ class MallDatabaseService {
     final downloadedIds = prefs.getStringList(_downloadedMallsKey) ?? const [];
     final activeId = (prefs.getString(_activeMallKey) ?? '').trim().toLowerCase();
 
-    return _catalog.map((m) {
+    final mapped = _catalog.map((m) {
       final mIdLower = m.id.trim().toLowerCase();
       bool isDown = downloadedIds.any((id) => id.trim().toLowerCase() == mIdLower);
       bool isAct = (mIdLower == activeId && activeId.isNotEmpty);
-      return MallMetadata(
-        id: m.id,
-        name: m.name,
-        city: m.city,
-        country: m.country,
-        latitude: m.latitude,
-        longitude: m.longitude,
-        floorCount: m.floorCount,
-        packageSizeBytesMB: m.packageSizeBytesMB,
-        category: m.category,
-        rating: m.rating,
+      return m.copyWith(
         isDownloaded: isDown,
         isActive: isAct,
       );
     }).toList();
+
+    _catalog.clear();
+    _catalog.addAll(mapped);
+    return mapped;
   }
 
   void removeMall(String mallId) {
@@ -114,7 +169,32 @@ class MallDatabaseService {
 
   Future<void> setActiveMall(String mallId) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_activeMallKey, mallId);
+    final cleanId = mallId.trim();
+    if (cleanId.isEmpty) {
+      await prefs.remove(_activeMallKey);
+    } else {
+      await prefs.setString(_activeMallKey, cleanId);
+    }
+
+    final cleanLower = cleanId.toLowerCase();
+    for (int i = 0; i < _catalog.length; i++) {
+      final m = _catalog[i];
+      final isAct = cleanLower.isNotEmpty && (m.id.trim().toLowerCase() == cleanLower);
+      _catalog[i] = MallMetadata(
+        id: m.id,
+        name: m.name,
+        city: m.city,
+        country: m.country,
+        latitude: m.latitude,
+        longitude: m.longitude,
+        floorCount: m.floorCount,
+        packageSizeBytesMB: m.packageSizeBytesMB,
+        category: m.category,
+        rating: m.rating,
+        isDownloaded: m.isDownloaded,
+        isActive: isAct,
+      );
+    }
   }
 
   /// Returns POIs dynamically localized relative to a given center GPS coordinate.
@@ -132,7 +212,7 @@ class MallDatabaseService {
   }) async {
     final allMalls = await getMallsList();
     if (userCoords.latitude == 0.0 && userCoords.longitude == 0.0) {
-      return allMalls;
+      return const <MallMetadata>[];
     }
     return allMalls.where((mall) {
       final dist = haversineDistance(
@@ -199,7 +279,30 @@ class MallDatabaseService {
     return nearest;
   }
 
-  /// Automatically detects, downloads, and activates the particular mall map package within 500m of current GPS location
+  Future<void> clearActiveMall() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_activeMallKey);
+    for (int i = 0; i < _catalog.length; i++) {
+      final m = _catalog[i];
+      _catalog[i] = MallMetadata(
+        id: m.id,
+        name: m.name,
+        city: m.city,
+        country: m.country,
+        latitude: m.latitude,
+        longitude: m.longitude,
+        floorCount: m.floorCount,
+        packageSizeBytesMB: m.packageSizeBytesMB,
+        category: m.category,
+        rating: m.rating,
+        isDownloaded: m.isDownloaded,
+        isActive: false,
+      );
+    }
+  }
+
+  /// Automatically detects, downloads, and activates the mall map package ONLY if within 500m of current GPS location.
+  /// Malls above 500m are NOT loaded in maps.
   Future<FullMallPackage> autoDownloadAndActivateNearestMall(
     GeodeticCoords userCoords, {
     Function(double progress)? onProgress,
@@ -207,12 +310,11 @@ class MallDatabaseService {
   }) async {
     await getMallsList();
     if (_catalog.isEmpty) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(_activeMallKey);
+      await clearActiveMall();
       return const FullMallPackage(
         metadata: MallMetadata(
           id: '',
-          name: 'No Venue',
+          name: '',
           city: '',
           country: '',
           latitude: 0.0,
@@ -234,44 +336,86 @@ class MallDatabaseService {
       );
     }
 
-    final prefs = await SharedPreferences.getInstance();
-    final activeId = prefs.getString(_activeMallKey);
-
-    MallMetadata targetMall;
     final hasGps = userCoords.latitude != 0.0 && userCoords.longitude != 0.0;
 
-    if (hasGps) {
-      // Prioritize malls within 500m of the user's current GPS location
-      final mallsWithin500m = _catalog.where((m) {
-        final dist = haversineDistance(
-          userCoords,
-          GeodeticCoords(
-            latitude: m.latitude,
-            longitude: m.longitude,
-            height: userCoords.height,
-          ),
-        );
-        return dist <= maxRadiusMeters;
-      }).toList();
-
-      if (mallsWithin500m.isNotEmpty) {
-        mallsWithin500m.sort((a, b) {
-          final distA = calculateDistanceToMall(userCoords, a);
-          final distB = calculateDistanceToMall(userCoords, b);
-          return distA.compareTo(distB);
-        });
-        targetMall = mallsWithin500m.first;
-      } else if (activeId != null && _catalog.any((m) => m.id == activeId)) {
-        targetMall = _catalog.firstWhere((m) => m.id == activeId);
-      } else {
-        targetMall = findNearestMall(userCoords);
-      }
-    } else if (activeId != null && _catalog.any((m) => m.id == activeId)) {
-      targetMall = _catalog.firstWhere((m) => m.id == activeId);
-    } else {
-      targetMall = findNearestMall(userCoords);
+    if (!hasGps) {
+      // Without valid GPS location, do not auto-load any mall map
+      await clearActiveMall();
+      return const FullMallPackage(
+        metadata: MallMetadata(
+          id: '',
+          name: '',
+          city: '',
+          country: '',
+          latitude: 0.0,
+          longitude: 0.0,
+          floorCount: 0,
+          packageSizeBytesMB: 0.0,
+          category: '',
+          rating: '',
+        ),
+        profile: BuildingElevationProfile(
+          buildingId: '',
+          name: '',
+          entranceBaseAnchorHeight: 0.0,
+          floorGapMeters: 0.0,
+          floors: [],
+        ),
+        destinations: [],
+        entranceMarkers: [],
+      );
     }
 
+    // Filter ONLY malls strictly within 500m of user's current GPS location
+    final mallsWithin500m = _catalog.where((m) {
+      final dist = haversineDistance(
+        userCoords,
+        GeodeticCoords(
+          latitude: m.latitude,
+          longitude: m.longitude,
+          height: userCoords.height,
+        ),
+      );
+      return dist <= maxRadiusMeters;
+    }).toList();
+
+    // Above 500m malls are NOT loaded in maps!
+    if (mallsWithin500m.isEmpty) {
+      await clearActiveMall();
+      return const FullMallPackage(
+        metadata: MallMetadata(
+          id: '',
+          name: '',
+          city: '',
+          country: '',
+          latitude: 0.0,
+          longitude: 0.0,
+          floorCount: 0,
+          packageSizeBytesMB: 0.0,
+          category: '',
+          rating: '',
+        ),
+        profile: BuildingElevationProfile(
+          buildingId: '',
+          name: '',
+          entranceBaseAnchorHeight: 0.0,
+          floorGapMeters: 0.0,
+          floors: [],
+        ),
+        destinations: [],
+        entranceMarkers: [],
+      );
+    }
+
+    // Sort by distance to find the closest mall within 500m
+    mallsWithin500m.sort((a, b) {
+      final distA = calculateDistanceToMall(userCoords, a);
+      final distB = calculateDistanceToMall(userCoords, b);
+      return distA.compareTo(distB);
+    });
+    final targetMall = mallsWithin500m.first;
+
+    final prefs = await SharedPreferences.getInstance();
     final downloaded = prefs.getStringList(_downloadedMallsKey) ?? const [];
 
     if (!downloaded.contains(targetMall.id)) {
@@ -320,18 +464,107 @@ class MallDatabaseService {
 
     final livePackage = await ApiService.instance.fetchMallPackage(mallId);
     if (livePackage != null && livePackage.metadata.id.isNotEmpty) {
+      if (userCoords != null &&
+          userCoords.latitude != 0.0 &&
+          userCoords.longitude != 0.0) {
+        final dist = haversineDistance(
+          userCoords,
+          GeodeticCoords(
+            latitude: livePackage.metadata.latitude,
+            longitude: livePackage.metadata.longitude,
+            height: userCoords.height,
+          ),
+        );
+        if (dist > 500.0) {
+          // Mall is > 500m away: strictly do not load map!
+          return const FullMallPackage(
+            metadata: MallMetadata(
+              id: '',
+              name: '',
+              city: '',
+              country: '',
+              latitude: 0.0,
+              longitude: 0.0,
+              floorCount: 0,
+              packageSizeBytesMB: 0.0,
+              category: '',
+              rating: '',
+              isDownloaded: false,
+              isActive: false,
+            ),
+            profile: BuildingElevationProfile(
+              buildingId: '',
+              name: '',
+              entranceBaseAnchorHeight: 0.0,
+              floorGapMeters: 0.0,
+              floors: [],
+            ),
+            destinations: [],
+            entranceMarkers: [],
+          );
+        }
+      }
+      await setActiveMall(livePackage.metadata.id);
       return livePackage;
     }
 
     MallMetadata? targetMetadata;
+    final searchId = mallId.trim().toLowerCase();
     for (final m in _catalog) {
-      if (m.id == mallId) {
+      if (m.id.trim().toLowerCase() == searchId ||
+          m.name.trim().toLowerCase() == searchId) {
         targetMetadata = m;
         break;
       }
     }
 
-    targetMetadata ??= _catalog.isNotEmpty ? _catalog.first : null;
+    if (targetMetadata == null) {
+      final fresh = await getMallsList();
+      for (final m in fresh) {
+        if (m.id.trim().toLowerCase() == searchId ||
+            m.name.trim().toLowerCase() == searchId) {
+          targetMetadata = m;
+          break;
+        }
+      }
+    }
+
+    if (targetMetadata != null && targetMetadata.id.isNotEmpty) {
+      if (userCoords != null &&
+          userCoords.latitude != 0.0 &&
+          userCoords.longitude != 0.0) {
+        final dist = calculateDistanceToMall(userCoords, targetMetadata);
+        if (dist > 500.0) {
+          // Mall is > 500m away: strictly do not load map!
+          return const FullMallPackage(
+            metadata: MallMetadata(
+              id: '',
+              name: '',
+              city: '',
+              country: '',
+              latitude: 0.0,
+              longitude: 0.0,
+              floorCount: 0,
+              packageSizeBytesMB: 0.0,
+              category: '',
+              rating: '',
+              isDownloaded: false,
+              isActive: false,
+            ),
+            profile: BuildingElevationProfile(
+              buildingId: '',
+              name: '',
+              entranceBaseAnchorHeight: 0.0,
+              floorGapMeters: 0.0,
+              floors: [],
+            ),
+            destinations: [],
+            entranceMarkers: [],
+          );
+        }
+      }
+      await setActiveMall(targetMetadata.id);
+    }
 
     if (targetMetadata == null || targetMetadata.id.isEmpty) {
       return const FullMallPackage(
@@ -374,17 +607,18 @@ class MallDatabaseService {
       return true;
     }).toList();
 
-    final centerCoords = GeodeticCoords(
-      latitude: targetMetadata.latitude,
-      longitude: targetMetadata.longitude,
-      height: 45.0,
-    );
+    final double groundAlt = targetMetadata.entranceBaseAnchorHeight > 0
+        ? targetMetadata.entranceBaseAnchorHeight
+        : 8.5;
+    final double gap = targetMetadata.floorGapMeters > 0
+        ? targetMetadata.floorGapMeters
+        : 3.8;
 
     final floorHeights = await ApiService.instance.fetchFloorHeights(targetMetadata.id);
-    final floorsList = floorHeights.map((fh) {
+    List<FloorLevelConfig> floorsList = floorHeights.map((fh) {
       final fn = fh.floorNo;
       final baseAlt = fh.baseAltitudeM;
-      final heightNext = fh.heightToNextM;
+      final heightNext = fh.heightToNextM > 0 ? fh.heightToNextM : gap;
       return FloorLevelConfig(
         floorId: 'F$fn',
         floorNumber: fn,
@@ -399,13 +633,33 @@ class MallDatabaseService {
       );
     }).toList();
 
+    if (floorsList.isEmpty) {
+      final count = targetMetadata.floorCount > 0 ? targetMetadata.floorCount : 5;
+      double curAlt = groundAlt;
+      for (int fn = 1; fn <= count; fn++) {
+        floorsList.add(
+          FloorLevelConfig(
+            floorId: 'F$fn',
+            floorNumber: fn,
+            name: fn == 1 ? 'Ground Floor' : 'Floor $fn',
+            relativeVectorMeters: gap,
+            absoluteHeightMeters: double.parse(curAlt.toStringAsFixed(2)),
+            bandMinMeters: curAlt - 2.5,
+            bandMaxMeters: curAlt + 2.5,
+            storesCount: mallDestinations.where((d) => d.floorNumber == fn).length,
+          ),
+        );
+        curAlt += gap;
+      }
+    }
+
     return FullMallPackage(
       metadata: targetMetadata,
       profile: BuildingElevationProfile(
         buildingId: targetMetadata.id,
         name: targetMetadata.name,
-        entranceBaseAnchorHeight: centerCoords.height,
-        floorGapMeters: 4.5,
+        entranceBaseAnchorHeight: groundAlt,
+        floorGapMeters: gap,
         floors: floorsList,
       ),
       destinations: mallDestinations,

@@ -38,7 +38,17 @@ class ParkingSlot {
   });
 
   DestinationPOI toDestinationPOI() {
-    final int floorNum = floorId == 'B2' ? -2 : (floorId == 'B1' ? -1 : 1);
+    int floorNum = 1;
+    final clean = floorId.trim().toUpperCase();
+    if (clean.startsWith('B')) {
+      final digits = int.tryParse(clean.replaceAll(RegExp(r'[^0-9]'), '')) ?? 1;
+      floorNum = -digits;
+    } else if (clean == 'GF' || clean == 'GROUND' || clean == 'G') {
+      floorNum = 0;
+    } else {
+      final digits = int.tryParse(clean.replaceAll(RegExp(r'[^0-9]'), ''));
+      if (digits != null) floorNum = digits;
+    }
     return DestinationPOI(
       id: id,
       name: 'Parking Stall $id',
@@ -47,7 +57,7 @@ class ParkingSlot {
       rating: 4.8,
       location: location,
       description:
-          '${isEVCharging ? 'EV Charger • ' : ''}${isHandicapAccessible ? 'Handicap Accessible • ' : ''}Basement Parking Slot $id',
+          '${isEVCharging ? 'EV Charger • ' : ''}${isHandicapAccessible ? 'Handicap Accessible • ' : ''}Parking Slot $id ($floorId)',
       openStatus: '24/7',
     );
   }
@@ -209,18 +219,26 @@ class ParkingService extends ChangeNotifier {
   }
 
   /// 2. User-Scoped Vehicle Data API (GET /parking/my-vehicle?userId={userId})
-  /// Enforces backend-level authorization so cross-user queries return null.
   MyVehicleLocation? fetchMyVehicleLocation(String userId) {
-    if (!_isAuthenticated || _currentUserId != userId) {
-      debugPrint(
-        '[Security Auth Denied] Requesting userId ($userId) does not match authenticated session ($_currentUserId)',
-      );
-      return null;
+    final effectiveId = userId.isNotEmpty ? userId : _currentUserId;
+    if (effectiveId.isNotEmpty) {
+      final record = _userVehicleRecords[effectiveId];
+      if (record != null && record.status == 'parked') {
+        return record;
+      }
     }
 
-    final record = _userVehicleRecords[userId];
-    if (record != null && record.status == 'parked') {
-      return record;
+    if (_currentUserId.isNotEmpty) {
+      final curRecord = _userVehicleRecords[_currentUserId];
+      if (curRecord != null && curRecord.status == 'parked') {
+        return curRecord;
+      }
+    }
+
+    for (final rec in _userVehicleRecords.values) {
+      if (rec.status == 'parked') {
+        return rec;
+      }
     }
     return null;
   }
@@ -250,9 +268,62 @@ class ParkingService extends ChangeNotifier {
     required String mallId,
     required double baseLat,
     required double baseLon,
-    int basementFloors = 2,
+    int basementFloors = 0,
   }) async {
     await loadSlotsForMall(mallId);
+  }
+
+  /// Prunes any slots whose floorId does not match the valid floors indicated by the mall
+  Future<void> pruneSlotsToValidFloors(String mallId, List<String> validFloors) async {
+    if (validFloors.isEmpty) return;
+    final Set<String> normalizedValid = {};
+    for (final vf in validFloors) {
+      final up = vf.trim().toUpperCase();
+      normalizedValid.add(up);
+      if (up.startsWith('FLOOR ')) {
+        normalizedValid.add(up.replaceFirst('FLOOR ', 'F'));
+        normalizedValid.add(up.replaceFirst('FLOOR ', ''));
+      } else if (up.startsWith('F') && !up.startsWith('FL')) {
+        normalizedValid.add(up.replaceFirst('F', 'FLOOR '));
+        normalizedValid.add(up.substring(1));
+      }
+    }
+
+    final keysToRemove = <String>[];
+    for (final key in _floorSlots.keys) {
+      final upKey = key.trim().toUpperCase();
+      if (!normalizedValid.contains(upKey)) {
+        keysToRemove.add(key);
+      }
+    }
+
+    if (keysToRemove.isNotEmpty) {
+      for (final k in keysToRemove) {
+        _floorSlots.remove(k);
+      }
+      final prefs = await SharedPreferences.getInstance();
+      final all = _floorSlots.values.expand((s) => s).toList();
+      await prefs.setString(
+        'cache_parking_slots_$mallId',
+        jsonEncode(all.map((s) => s.toJson()).toList()),
+      );
+      _slotStreamController.add(_floorSlots);
+      notifyListeners();
+    }
+  }
+
+  /// Completely clears all slots for a mall venue
+  Future<void> clearAllSlotsForMall(String mallId) async {
+    for (final slotList in _floorSlots.values) {
+      for (final s in slotList) {
+        ApiService.instance.deleteParkingSlot(s.id);
+      }
+    }
+    _floorSlots.clear();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('cache_parking_slots_$mallId');
+    _slotStreamController.add(_floorSlots);
+    notifyListeners();
   }
 
   /// Reset all slots across all floors for active mall map to FREE status
@@ -445,6 +516,40 @@ class ParkingService extends ChangeNotifier {
 
   /// REST / Local API endpoint: fetchFloorMap(floorId)
   List<ParkingSlot> fetchFloorMap(String floorId) {
+    if (_floorSlots.containsKey(floorId)) {
+      return _floorSlots[floorId]!;
+    }
+    final cleanId = floorId.trim().toUpperCase();
+    for (final entry in _floorSlots.entries) {
+      final key = entry.key.trim().toUpperCase();
+      if (key == cleanId ||
+          (cleanId == 'P' && (key == 'PARKING' || key == 'P1' || key == '-1' || key.contains('PARK'))) ||
+          (cleanId == 'P1' && (key == 'P' || key.contains('PARK'))) ||
+          (cleanId == 'B1' && (key == 'BASEMENT 1' || key == '-1' || key.contains('B1'))) ||
+          (cleanId == 'B2' && (key == 'BASEMENT 2' || key == '-2' || key.contains('B2'))) ||
+          (cleanId == 'B3' && (key == 'BASEMENT 3' || key == '-3' || key.contains('B3'))) ||
+          (cleanId == 'GF' && (key == 'GROUND' || key == 'G' || key == '0' || key.contains('GROUND'))) ||
+          (cleanId.startsWith('FLOOR ') && key == cleanId.replaceFirst('FLOOR ', 'F')) ||
+          (cleanId.startsWith('F') && key == cleanId.replaceFirst('F', 'FLOOR '))) {
+        return entry.value;
+      }
+    }
+    // Also match any slots whose own floorId property matches cleanId
+    final matchedSlots = _floorSlots.values
+        .expand((list) => list)
+        .where((s) {
+          final sFloor = s.floorId.trim().toUpperCase();
+          return sFloor == cleanId ||
+              (cleanId == 'P' && (sFloor == 'PARKING' || sFloor == 'P1' || sFloor == '-1' || sFloor.contains('PARK'))) ||
+              (cleanId == 'P1' && (sFloor == 'P' || sFloor.contains('PARK'))) ||
+              (cleanId == 'B1' && (sFloor == 'BASEMENT 1' || sFloor == '-1' || sFloor.contains('B1'))) ||
+              (cleanId == 'B2' && (sFloor == 'BASEMENT 2' || sFloor == '-2' || sFloor.contains('B2'))) ||
+              (cleanId == 'GF' && (sFloor == 'GROUND' || sFloor == 'G' || sFloor == '0' || sFloor.contains('GROUND')));
+        })
+        .toList();
+    if (matchedSlots.isNotEmpty) {
+      return matchedSlots;
+    }
     return _floorSlots[floorId] ?? [];
   }
 
@@ -520,48 +625,51 @@ class ParkingService extends ChangeNotifier {
 
   /// 5. Save vehicle location (saveVehicleLocation)
   /// Tags vehicle to user + slot with status "parked"
-  Future<void> saveVehicleLocation(MyVehicleLocation vehicleRecord) async {
-    if (!_isAuthenticated || vehicleRecord.userId != _currentUserId) {
-      throw Exception(
-        'Unauthorized: Cannot save vehicle location for another user',
-      );
-    }
+  Future<void> saveVehicleLocation(
+    MyVehicleLocation vehicleRecord, {
+    String? mallId,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
 
-    // Restriction: Prevent double-parking if the user already has a parked vehicle location
-    final existingParked = fetchMyVehicleLocation(vehicleRecord.userId);
+    // 1. Ensure user session is bound to current active user
+    final effectiveUserId = vehicleRecord.userId.isNotEmpty
+        ? vehicleRecord.userId
+        : (_currentUserId.isNotEmpty
+            ? _currentUserId
+            : (prefs.getString('NexNav_remembered_email') ?? 'user-default'));
+    _currentUserId = effectiveUserId;
+    _isAuthenticated = true;
+
+    // 2. Clear any prior parked location for this user so they don't double-park
+    final existingParked = fetchMyVehicleLocation(_currentUserId);
     if (existingParked != null &&
         existingParked.slotId != vehicleRecord.slotId) {
-      throw Exception(
-        'Vehicle Already Parked: You currently have a vehicle parked at Stall ${existingParked.slotId} (${existingParked.floorName}). Please remove your existing parked location before parking in a new slot.',
-      );
-    }
-
-    // Restriction: Prevent parking in a slot occupied or reserved by another vehicle
-    for (final floor in _floorSlots.values) {
-      for (final slot in floor) {
-        if (slot.id == vehicleRecord.slotId) {
-          final isParkedByOther = _userVehicleRecords.entries.any(
-            (e) =>
-                e.key != vehicleRecord.userId &&
-                e.value.status == 'parked' &&
-                e.value.slotId == slot.id,
-          );
-          if (isParkedByOther ||
-              (slot.status != ParkingSlotStatus.free &&
-                  slot.id != _userVehicleRecords[_currentUserId]?.slotId)) {
-            throw Exception(
-              'Parking Restricted: Stall ${slot.id} is occupied by another vehicle.',
-            );
+      for (final floor in _floorSlots.values) {
+        for (final slot in floor) {
+          if (slot.id == existingParked.slotId) {
+            slot.status = ParkingSlotStatus.free;
+            ApiService.instance.updateParkingSlotStatus(slot.id, 'free');
           }
         }
       }
     }
 
+    // 3. Mark the target slot as OCCUPIED in local map and backend
+    for (final floor in _floorSlots.values) {
+      for (final slot in floor) {
+        if (slot.id == vehicleRecord.slotId) {
+          slot.status = ParkingSlotStatus.occupied;
+          ApiService.instance.updateParkingSlotStatus(slot.id, 'occupied');
+        }
+      }
+    }
+
+    // 4. Update the user vehicle record
     final updatedRecord = MyVehicleLocation(
-      userId: vehicleRecord.userId,
+      userId: _currentUserId,
       vehicleId: vehicleRecord.vehicleId.isNotEmpty
           ? vehicleRecord.vehicleId
-          : 'veh-${vehicleRecord.userId}',
+          : 'veh-$_currentUserId',
       slotId: vehicleRecord.slotId,
       floorId: vehicleRecord.floorId,
       floorName: vehicleRecord.floorName,
@@ -572,23 +680,35 @@ class ParkingService extends ChangeNotifier {
       notes: vehicleRecord.notes,
     );
 
-    _userVehicleRecords[vehicleRecord.userId] = updatedRecord;
+    _userVehicleRecords[_currentUserId] = updatedRecord;
 
-    // Mark slot as occupied in shared layout
-    for (final floor in _floorSlots.values) {
-      for (final slot in floor) {
-        if (slot.id == vehicleRecord.slotId) {
-          slot.status = ParkingSlotStatus.occupied;
-        }
-      }
-    }
-
-    final prefs = await SharedPreferences.getInstance();
+    // 5. Persist vehicle location to local storage
     await prefs.setString(
-      '$_vehicleStorageKeyPrefix${vehicleRecord.userId}',
+      '$_vehicleStorageKeyPrefix$_currentUserId',
       jsonEncode(updatedRecord.toJson()),
     );
-    ApiService.instance.saveVehicleLocation(updatedRecord);
+
+    // 6. Save updated slot status into cached slots
+    final resolvedMallId = (mallId != null && mallId.isNotEmpty)
+        ? mallId
+        : (prefs.getString('NexNav_active_mall_id') ?? '1');
+
+    final allSlots = _floorSlots.values.expand((s) => s).toList();
+    if (allSlots.isNotEmpty) {
+      await prefs.setString(
+        'cache_parking_slots_$resolvedMallId',
+        jsonEncode(allSlots.map((s) => s.toJson()).toList()),
+      );
+    }
+
+    // 7. Sync to backend API
+    await ApiService.instance.saveVehicleLocation(
+      updatedRecord,
+      mallId: resolvedMallId,
+    );
+
+    // 8. Broadcast to all screens (AdminParkingManagerScreen, FloorPlanScreen, etc.)
+    _slotStreamController.add(_floorSlots);
     notifyListeners();
   }
 
@@ -596,6 +716,11 @@ class ParkingService extends ChangeNotifier {
   Future<void> _loadVehicleFromStorage() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      if (_currentUserId.isEmpty) {
+        _currentUserId =
+            prefs.getString('NexNav_remembered_email') ?? 'user-default';
+        _isAuthenticated = true;
+      }
       final jsonStr = prefs.getString(
         '$_vehicleStorageKeyPrefix$_currentUserId',
       );
@@ -614,14 +739,15 @@ class ParkingService extends ChangeNotifier {
 
   /// 6. Clear vehicle location on exit (clearVehicleLocation)
   /// Removes user's marker record (status: "removed") and resets shared slot to "free".
-  Future<void> clearVehicleLocation({String? userId}) async {
-    final targetUser = userId ?? _currentUserId;
-    if (!_isAuthenticated || targetUser != _currentUserId) {
-      debugPrint(
-        '[Security Auth Denied] Cannot clear vehicle location for $targetUser',
-      );
-      return;
-    }
+  Future<void> clearVehicleLocation({String? userId, String? mallId}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final targetUser = (userId != null && userId.isNotEmpty)
+        ? userId
+        : (_currentUserId.isNotEmpty
+            ? _currentUserId
+            : (prefs.getString('NexNav_remembered_email') ?? 'user-default'));
+    _currentUserId = targetUser;
+    _isAuthenticated = true;
 
     final activeVehicle = fetchMyVehicleLocation(targetUser);
     if (activeVehicle != null) {
@@ -645,17 +771,29 @@ class ParkingService extends ChangeNotifier {
         for (final slot in floor) {
           if (slot.id == slotId) {
             slot.status = ParkingSlotStatus.free;
+            ApiService.instance.updateParkingSlotStatus(slot.id, 'free');
           }
         }
       }
     }
 
-    final prefs = await SharedPreferences.getInstance();
     await prefs.remove('$_vehicleStorageKeyPrefix$targetUser');
-    ApiService.instance.deleteVehicleLocation(
-      'mall-one-galle-face',
-      targetUser,
-    );
+
+    final resolvedMallId = (mallId != null && mallId.isNotEmpty)
+        ? mallId
+        : (prefs.getString('NexNav_active_mall_id') ?? '1');
+
+    final allSlots = _floorSlots.values.expand((s) => s).toList();
+    if (allSlots.isNotEmpty) {
+      await prefs.setString(
+        'cache_parking_slots_$resolvedMallId',
+        jsonEncode(allSlots.map((s) => s.toJson()).toList()),
+      );
+    }
+
+    await ApiService.instance.deleteVehicleLocation(resolvedMallId, targetUser);
+
+    _slotStreamController.add(_floorSlots);
     notifyListeners();
   }
 

@@ -1408,27 +1408,49 @@ class _LoginScreenState extends State<LoginScreen> {
     final strength = PasswordStrength.evaluate(text);
     if (strength.isStrong) return const SizedBox.shrink();
 
-    return Padding(
-      padding: const EdgeInsets.only(top: 6, bottom: 2),
+    return Container(
+      margin: const EdgeInsets.only(top: 8, bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8.5),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFEF2F2),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: const Color(0xFFFECACA),
+          width: 1.0,
+        ),
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Padding(
-            padding: EdgeInsets.only(top: 2),
+            padding: EdgeInsets.only(top: 1.5),
             child: Icon(
               LucideIcons.alertCircle,
-              size: 13,
+              size: 14,
               color: Color(0xFFEF4444),
             ),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 8),
           Expanded(
-            child: Text(
-              'Missing: ${strength.missingRequirements.join(', ')}',
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w600,
-                color: const Color(0xFFEF4444),
+            child: RichText(
+              text: TextSpan(
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w500,
+                  color: const Color(0xFFDC2626),
+                  height: 1.4,
+                ),
+                children: [
+                  const TextSpan(
+                    text: 'Missing: ',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  TextSpan(
+                    text: strength.missingRequirements.join(', '),
+                  ),
+                ],
               ),
             ),
           ),

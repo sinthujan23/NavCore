@@ -337,6 +337,42 @@ class ApiService {
   // MALLS & PACKAGES
   // ==========================================
 
+  List<String> _extractParkingFloors(dynamic item, SharedPreferences prefs) {
+    if (item is! Map) return const ['Floor 1'];
+    final mallId = item['id']?.toString() ?? '';
+    final localList = prefs.getStringList('venue_parking_floors_$mallId');
+    if (localList != null && localList.isNotEmpty) {
+      return localList;
+    }
+    final raw = item['parkingFloors'] ?? item['parking_floors'];
+    if (raw is List) {
+      final list = raw
+          .map((e) => e.toString().trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
+      if (list.isNotEmpty) return list;
+    } else if (raw is String && raw.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is List) {
+          final list = decoded
+              .map((e) => e.toString().trim())
+              .where((s) => s.isNotEmpty)
+              .toList();
+          if (list.isNotEmpty) return list;
+        }
+      } catch (_) {
+        final list = raw
+            .split(',')
+            .map((s) => s.trim())
+            .where((s) => s.isNotEmpty)
+            .toList();
+        if (list.isNotEmpty) return list;
+      }
+    }
+    return const ['Floor 1'];
+  }
+
   Future<List<MallMetadata>> fetchMalls() async {
     final prefs = await SharedPreferences.getInstance();
     final deletedIds = (prefs.getStringList(_deletedMallsKey) ?? [])
@@ -371,6 +407,15 @@ class ApiService {
             rating: item['rating'] ?? '4.8 ★',
             isDownloaded: item['isDownloaded'] ?? true,
             isActive: item['isActive'] ?? false,
+            entranceBaseAnchorHeight:
+                (item['entranceBaseAnchorHeight'] as num?)?.toDouble() ??
+                (item['entrance_base_anchor_height'] as num?)?.toDouble() ??
+                0.0,
+            floorGapMeters:
+                (item['floorGapMeters'] as num?)?.toDouble() ??
+                (item['floor_gap_meters'] as num?)?.toDouble() ??
+                3.8,
+            parkingFloors: _extractParkingFloors(item, prefs),
           );
         }).toList();
 
@@ -406,6 +451,15 @@ class ApiService {
               rating: item['rating'] ?? '4.8 ★',
               isDownloaded: item['isDownloaded'] ?? true,
               isActive: item['isActive'] ?? false,
+              entranceBaseAnchorHeight:
+                  (item['entranceBaseAnchorHeight'] as num?)?.toDouble() ??
+                  (item['entrance_base_anchor_height'] as num?)?.toDouble() ??
+                  0.0,
+              floorGapMeters:
+                  (item['floorGapMeters'] as num?)?.toDouble() ??
+                  (item['floor_gap_meters'] as num?)?.toDouble() ??
+                  3.8,
+              parkingFloors: _extractParkingFloors(item, prefs),
             );
           })
           .toList();
@@ -437,6 +491,15 @@ class ApiService {
               rating: item['rating'] ?? '4.8 ★',
               isDownloaded: item['isDownloaded'] ?? true,
               isActive: item['isActive'] ?? false,
+              entranceBaseAnchorHeight:
+                  (item['entranceBaseAnchorHeight'] as num?)?.toDouble() ??
+                  (item['entrance_base_anchor_height'] as num?)?.toDouble() ??
+                  0.0,
+              floorGapMeters:
+                  (item['floorGapMeters'] as num?)?.toDouble() ??
+                  (item['floor_gap_meters'] as num?)?.toDouble() ??
+                  3.8,
+              parkingFloors: _extractParkingFloors(item, prefs),
             );
           })
           .toList();
@@ -477,6 +540,8 @@ class ApiService {
         'category': mall.category,
         'rating': mall.rating,
         'isActive': mall.isActive,
+        'entranceBaseAnchorHeight': mall.entranceBaseAnchorHeight,
+        'floorGapMeters': mall.floorGapMeters,
       };
       final existIdx = catalogList.indexWhere(
         (m) => (m['id']?.toString() ?? '').trim().toLowerCase() == lowerId,
@@ -504,6 +569,8 @@ class ApiService {
               'packageSizeBytesMB': mall.packageSizeBytesMB,
               'category': mall.category,
               'rating': mall.rating,
+              'entranceBaseAnchorHeight': mall.entranceBaseAnchorHeight,
+              'floorGapMeters': mall.floorGapMeters,
             }),
           )
           .timeout(const Duration(seconds: 8));
@@ -540,6 +607,8 @@ class ApiService {
             'category': mall.category,
             'rating': mall.rating,
             'isActive': mall.isActive,
+            'entranceBaseAnchorHeight': mall.entranceBaseAnchorHeight,
+            'floorGapMeters': mall.floorGapMeters,
           };
           if (existIdx != -1) {
             catalogList[existIdx] = mallMap;
@@ -567,6 +636,8 @@ class ApiService {
               'category': mall.category,
               'rating': mall.rating,
               'isActive': mall.isActive,
+              'entranceBaseAnchorHeight': mall.entranceBaseAnchorHeight,
+              'floorGapMeters': mall.floorGapMeters,
             }),
           )
           .timeout(const Duration(seconds: 8));
@@ -1341,18 +1412,22 @@ class ApiService {
 
       final count = mall.floorCount > 0 ? mall.floorCount : 3;
       final synth = <FloorHeightData>[];
-      final baseAlt = (mall.latitude != 0 && mall.longitude != 0)
-          ? GeocodingService.resolveTerrainAltitudeFromCoords(
-              mall.latitude,
-              mall.longitude,
-            )
-          : 8.5;
-      final gap = (mall.latitude != 0 && mall.longitude != 0)
-          ? GeocodingService.resolveDynamicFloorGapFromCoords(
-              latitude: mall.latitude,
-              longitude: mall.longitude,
-            )
-          : 3.8;
+      final baseAlt = (mall.entranceBaseAnchorHeight > 0)
+          ? mall.entranceBaseAnchorHeight
+          : ((mall.latitude != 0 && mall.longitude != 0)
+              ? GeocodingService.resolveTerrainAltitudeFromCoords(
+                  mall.latitude,
+                  mall.longitude,
+                )
+              : 8.5);
+      final gap = (mall.floorGapMeters > 0)
+          ? mall.floorGapMeters
+          : ((mall.latitude != 0 && mall.longitude != 0)
+              ? GeocodingService.resolveDynamicFloorGapFromCoords(
+                  latitude: mall.latitude,
+                  longitude: mall.longitude,
+                )
+              : 3.8);
       double curAlt = baseAlt;
       for (int i = 1; i <= count; i++) {
         synth.add(
@@ -1617,13 +1692,16 @@ class ApiService {
 
   Future<bool> saveVehicleLocation(
     MyVehicleLocation vehicle, {
-    String mallId = 'mall-one-galle-face',
+    String? mallId,
   }) async {
     try {
       final baseUrl = await getBaseUrl();
+      final targetMall = (mallId != null && mallId.isNotEmpty)
+          ? mallId
+          : ((await SharedPreferences.getInstance()).getString('NexNav_active_mall_id') ?? '1');
       final response = await http
           .post(
-            Uri.parse('$baseUrl/parking/$mallId/vehicle'),
+            Uri.parse('$baseUrl/parking/$targetMall/vehicle'),
             headers: await _headers(),
             body: jsonEncode(vehicle.toJson()),
           )
@@ -1671,12 +1749,15 @@ class ApiService {
     }
   }
 
-  Future<bool> deleteVehicleLocation(String mallId, String userId) async {
+  Future<bool> deleteVehicleLocation(String? mallId, String userId) async {
     try {
       final baseUrl = await getBaseUrl();
+      final targetMall = (mallId != null && mallId.isNotEmpty)
+          ? mallId
+          : ((await SharedPreferences.getInstance()).getString('NexNav_active_mall_id') ?? '1');
       final response = await http
           .delete(
-            Uri.parse('$baseUrl/parking/$mallId/vehicle/$userId'),
+            Uri.parse('$baseUrl/parking/$targetMall/vehicle/$userId'),
             headers: await _headers(),
           )
           .timeout(const Duration(seconds: 5));

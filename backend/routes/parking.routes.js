@@ -6,8 +6,13 @@ const db = require('../db/dataStore');
  * GET /api/parking/:mallId/slots
  */
 router.get('/:mallId/slots', (req, res) => {
-  const mallId = req.params.mallId;
-  const slots = db.filter('parkingSlots', s => s.mallId === mallId);
+  const reqMall = (req.params.mallId || '').trim().toLowerCase();
+  const slots = db.filter('parkingSlots', s => {
+    const sMall = (s.mallId || '').trim().toLowerCase();
+    return sMall === reqMall ||
+           sMall === reqMall.replace(/^mall-/, '') ||
+           reqMall === sMall.replace(/^mall-/, '');
+  });
   return res.json(slots);
 });
 
@@ -21,7 +26,7 @@ router.post('/:mallId/slots', (req, res) => {
   const newSlot = {
     id: body.id || `slot-${Date.now()}`,
     mallId,
-    floorId: body.floorId || 'GF',
+    floorId: body.floorId || 'P',
     section: body.section || 'A',
     slotNumber: Number(body.slotNumber) || 1,
     status: body.status || 'free',
@@ -32,11 +37,16 @@ router.post('/:mallId/slots', (req, res) => {
     gridCol: Number(body.gridCol) || 0,
     isEVCharging: Boolean(body.isEVCharging),
     isHandicapAccessible: Boolean(body.isHandicapAccessible),
-    sensorId: body.sensorId || `SNS-${body.floorId || 'GF'}-${body.section || 'A'}${body.slotNumber || 1}`,
+    sensorId: body.sensorId || `SNS-${body.floorId || 'P'}-${body.section || 'A'}${body.slotNumber || 1}`,
     createdAt: new Date().toISOString()
   };
 
-  db.push('parkingSlots', newSlot);
+  const existingIndex = (db.get('parkingSlots') || []).findIndex(s => s.id === newSlot.id);
+  if (existingIndex !== -1) {
+    db.update('parkingSlots', s => s.id === newSlot.id, () => newSlot);
+  } else {
+    db.push('parkingSlots', newSlot);
+  }
   return res.status(201).json(newSlot);
 });
 
@@ -52,7 +62,7 @@ router.post('/:mallId/slots/bulk', (req, res) => {
     const newSlot = {
       id: s.id || `slot-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
       mallId,
-      floorId: s.floorId || 'GF',
+      floorId: s.floorId || 'P',
       section: s.section || 'A',
       slotNumber: Number(s.slotNumber) || 1,
       status: s.status || 'free',
@@ -66,7 +76,12 @@ router.post('/:mallId/slots/bulk', (req, res) => {
       sensorId: s.sensorId || `SNS-${s.floorId || 'GF'}-${s.section || 'A'}${s.slotNumber || 1}`,
       createdAt: new Date().toISOString()
     };
-    db.push('parkingSlots', newSlot);
+    const existingIndex = (db.get('parkingSlots') || []).findIndex(x => x.id === newSlot.id);
+    if (existingIndex !== -1) {
+      db.update('parkingSlots', x => x.id === newSlot.id, () => newSlot);
+    } else {
+      db.push('parkingSlots', newSlot);
+    }
     added.push(newSlot);
   }
   return res.status(201).json(added);

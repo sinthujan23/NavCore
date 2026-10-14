@@ -122,28 +122,33 @@ class RestMallBackendApi implements MallBackendApi {
     final currentList = List<FloorHeightData>.from(_getOrCreateDefaultHeights(mallId));
     currentList.sort((a, b) => a.floorNo.compareTo(b.floorNo));
     final updatedList = <FloorHeightData>[];
-    double cumulativeAlt = currentList.isNotEmpty && currentList.first.baseAltitudeM > 0
-        ? currentList.first.baseAltitudeM
-        : 8.5;
+    double cumulativeAlt = (liveAltitudeM != null && liveAltitudeM > 0)
+        ? liveAltitudeM
+        : (currentList.isNotEmpty && currentList.first.baseAltitudeM > 0
+            ? currentList.first.baseAltitudeM
+            : 8.5);
 
     for (int i = 0; i < currentList.length; i++) {
       final item = currentList[i];
-      double h = item.heightToNextM;
+      final isManualLocked = item.isLocked && item.heightToNextM != 4.5;
+      final double h = (floorGapM != null && floorGapM > 0 && !isManualLocked)
+          ? floorGapM
+          : item.heightToNextM;
       String src = item.source;
       double conf = item.confidence;
-      final isAdmin = item.isLocked || item.source == 'admin';
 
-      if (!isAdmin) {
+      if (!isManualLocked) {
         src = 'barometer';
         conf = barometerPressureHpa != null ? 0.95 : 0.85;
       }
 
       updatedList.add(
         item.copyWith(
+          heightToNextM: h,
           baseAltitudeM: cumulativeAlt,
           source: src,
           confidence: conf,
-          isLocked: isAdmin,
+          isLocked: isManualLocked,
           updatedAt: DateTime.now().toIso8601String(),
         ),
       );

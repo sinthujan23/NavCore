@@ -109,7 +109,9 @@ class _ARViewportScreenState extends State<ARViewportScreen>
     for (final p in list) {
       final cleanId = p.id.trim();
       final nameKey = '${p.name.trim().toLowerCase()}#${p.floorNumber}';
-      if (cleanId.isNotEmpty && !seenIds.contains(cleanId) && !seenNames.contains(nameKey)) {
+      if (cleanId.isNotEmpty &&
+          !seenIds.contains(cleanId) &&
+          !seenNames.contains(nameKey)) {
         seenIds.add(cleanId);
         seenNames.add(nameKey);
         result.add(p);
@@ -131,18 +133,57 @@ class _ARViewportScreenState extends State<ARViewportScreen>
             activeMallId.isEmpty ||
             activeMallId == 'mall' ||
             !allMalls.any((m) => m.id == activeMallId)) {
-          activeMallId = allMalls.first.id;
-          await prefs.setString('NexNav_active_mall_id', activeMallId);
+          // No active mall within 500m: do NOT auto load or force allMalls.first
+          if (mounted) {
+            setState(() {
+              _liveDestinations = const [];
+              _shopMarkerManager.loadShops(const []);
+              _isLoadingBackend = false;
+            });
+          }
+          return;
+        }
+
+        final matchingMall = allMalls
+            .where((m) => m.id == activeMallId)
+            .firstOrNull;
+        final hasGps =
+            widget.userCoords.latitude != 0.0 &&
+            widget.userCoords.longitude != 0.0;
+        if (hasGps && matchingMall != null) {
+          final dist = haversineDistance(
+            widget.userCoords,
+            GeodeticCoords(
+              latitude: matchingMall.latitude,
+              longitude: matchingMall.longitude,
+              height: widget.userCoords.height,
+            ),
+          );
+          if (dist > 500.0) {
+            // Mall is above 500m: maps must NOT be loaded or visible!
+            if (mounted) {
+              setState(() {
+                _liveDestinations = const [];
+                _shopMarkerManager.loadShops(const []);
+                _isLoadingBackend = false;
+              });
+            }
+            return;
+          }
         }
       } else {
-        activeMallId = (activeMallId == null || activeMallId.isEmpty || activeMallId == 'mall')
-            ? '1'
-            : activeMallId;
+        if (mounted) {
+          setState(() {
+            _liveDestinations = const [];
+            _shopMarkerManager.loadShops(const []);
+            _isLoadingBackend = false;
+          });
+        }
+        return;
       }
 
-      List<DestinationPOI> fetched = await ApiService.instance.fetchDestinations(
-        mallId: activeMallId,
-      );
+      List<DestinationPOI> fetched = await ApiService.instance
+          .fetchDestinations(mallId: activeMallId);
       if (fetched.isEmpty) {
         fetched = await ApiService.instance.fetchDestinations();
       }
@@ -284,7 +325,9 @@ class _ARViewportScreenState extends State<ARViewportScreen>
           _liveDestinations = updatedList;
         }
         _shopMarkerManager.loadShops(
-          _liveDestinations.isNotEmpty ? _liveDestinations : widget.destinations,
+          _liveDestinations.isNotEmpty
+              ? _liveDestinations
+              : widget.destinations,
         );
         if (widget.targetDestination != oldWidget.targetDestination) {
           _selectedPOI = widget.targetDestination;
@@ -439,11 +482,25 @@ class _ARViewportScreenState extends State<ARViewportScreen>
   @override
   Widget build(BuildContext context) {
     // Prefer live database destinations from nexnav.hashnate.com, falling back to widget.destinations
-    final List<DestinationPOI> rawDestinations = _liveDestinations.isNotEmpty
-        ? _liveDestinations
-        : widget.destinations;
-    final List<DestinationPOI> allDestinations =
-        _deduplicateDestinations(rawDestinations);
+    final List<DestinationPOI> candidateDestinations = _deduplicateDestinations(
+      _liveDestinations.isNotEmpty ? _liveDestinations : widget.destinations,
+    );
+
+    // Strictly enforce 500m limit: if user is outside 500m of the active mall, maps are not loaded or visible
+    final bool isUserOutside500m = () {
+      final hasGps =
+          widget.userCoords.latitude != 0.0 &&
+          widget.userCoords.longitude != 0.0;
+      if (!hasGps) return false;
+      if (candidateDestinations.isEmpty) return true;
+      final anchor = candidateDestinations.first.location;
+      final dist = haversineDistance(widget.userCoords, anchor);
+      return dist > 500.0;
+    }();
+
+    final List<DestinationPOI> allDestinations = isUserOutside500m
+        ? const <DestinationPOI>[]
+        : candidateDestinations;
 
     // Real-world dynamic mall anchor fallback (anchors user position to active Sri Lanka mall)
     final activeMallAnchor = allDestinations.isNotEmpty
@@ -704,22 +761,22 @@ class _ARViewportScreenState extends State<ARViewportScreen>
 
     const double targetBadgeWidth = 210.0;
     const double targetBadgeTotalHeight = 135.0; // Card box + chevron arrows
-    final double targetBadgeLeft = (targetBadgePosX - (targetBadgeWidth / 2.0)).clamp(
-      12.0,
-      math.max(12.0, screenWidth - targetBadgeWidth - 12.0),
-    );
+    final double targetBadgeLeft = (targetBadgePosX - (targetBadgeWidth / 2.0))
+        .clamp(12.0, math.max(12.0, screenWidth - targetBadgeWidth - 12.0));
     final Rect? targetBadgeRect = (_isNavigatingActive && activePOI != null)
-        ? Rect.fromLTWH(targetBadgeLeft, targetBadgePosY, targetBadgeWidth, targetBadgeTotalHeight)
+        ? Rect.fromLTWH(
+            targetBadgeLeft,
+            targetBadgePosY,
+            targetBadgeWidth,
+            targetBadgeTotalHeight,
+          )
         : null;
 
-    // Filter ambient POIs: When active navigation is engaged, the target POI is rendered exclusively
-    // as the primary 3D Target Badge, avoiding confusing duplicate cards on screen.
-    final ambientFiltered = uniqueFiltered.where((poi) {
-      if (_isNavigatingActive && activePOI != null && poi.id == activePOI.id) {
-        return false;
-      }
-      return true;
-    }).toList();
+    // Filter ambient POIs: When active navigation is engaged, ambient shop/place cards are hidden completely
+    // so only the active navigation pathway and target destination are visible in the AR viewport.
+    final ambientFiltered = _isNavigatingActive
+        ? <DestinationPOI>[]
+        : uniqueFiltered;
 
     final poiMetadata = ambientFiltered.map((poi) {
       final bearing = calculateBearingAngle(effectiveUserCoords, poi.location);
@@ -813,7 +870,8 @@ class _ARViewportScreenState extends State<ARViewportScreen>
       // 4. High-Accuracy 3D Perspective Projection:
       // Horizontal pinhole camera projection accurately aligned with real bearing
       final double relAngleRad = (relAngle * math.pi) / 180.0;
-      final double rawScreenX = (screenWidth / 2.0) +
+      final double rawScreenX =
+          (screenWidth / 2.0) +
           (math.tan(relAngleRad.clamp(-1.25, 1.25)) * focalPx) -
           (cardWidth / 2.0);
 
@@ -822,27 +880,39 @@ class _ARViewportScreenState extends State<ARViewportScreen>
       final double floorHeightDelta =
           (poi.floorNumber - widget.currentFloor.floorNumber).toDouble();
       final double floorOffset = (floorHeightDelta * 32.0).clamp(-110.0, 110.0);
-      final double rawScreenY = (screenHeight * 0.48) +
+      final double rawScreenY =
+          (screenHeight * 0.48) +
           pitchOffset -
           floorOffset -
           (cardHeight / 2.0);
 
       // 5. Dynamic Depth & Camera-Motion Scaling ("increase and decrease" logic)
       // A) Distance Depth Scaling: closer places (1-3m) scale up to 1.25x, farther places (>20m) scale down to 0.75x
-      final double distanceScaleFactor = (1.25 /
-              (1.0 + math.log(math.max(1.0, distM.toDouble()) / 3.0) * 0.35))
-          .clamp(0.72, 1.25);
+      final double distanceScaleFactor =
+          (1.25 /
+                  (1.0 +
+                      math.log(math.max(1.0, distM.toDouble()) / 3.0) * 0.35))
+              .clamp(0.72, 1.25);
 
       // B) Camera Motion Alignment Scaling: when centered in camera viewport, scale increases (+12%)
-      final double alignFactor = (1.0 - (relAngle.abs() / 35.0)).clamp(0.0, 1.0);
+      final double alignFactor = (1.0 - (relAngle.abs() / 35.0)).clamp(
+        0.0,
+        1.0,
+      );
       final double motionScaleFactor = 0.90 + (alignFactor * 0.20);
-      final double totalCardScale =
-          (distanceScaleFactor * motionScaleFactor).clamp(0.68, 1.30);
+      final double totalCardScale = (distanceScaleFactor * motionScaleFactor)
+          .clamp(0.68, 1.30);
 
       // 6. High-Visibility Camera Motion Opacity:
       // Crisp 1.0 opacity when facing places, smoothly adapting to 0.75 near peripheral edges
-      final double angleFactor = (1.0 - ((relAngle.abs() - 35.0) / 50.0)).clamp(0.0, 1.0);
-      final double motionVisibility = (0.75 + (angleFactor * 0.25)).clamp(0.70, 1.0);
+      final double angleFactor = (1.0 - ((relAngle.abs() - 35.0) / 50.0)).clamp(
+        0.0,
+        1.0,
+      );
+      final double motionVisibility = (0.75 + (angleFactor * 0.25)).clamp(
+        0.70,
+        1.0,
+      );
 
       double cardOpacity = motionVisibility;
       bool isPitchFocused = true;
@@ -913,7 +983,9 @@ class _ARViewportScreenState extends State<ARViewportScreen>
         uniqueRawPositioned.add(item);
       }
     }
-    final List<Map<String, dynamic>> positionedCards = List.from(uniqueRawPositioned);
+    final List<Map<String, dynamic>> positionedCards = List.from(
+      uniqueRawPositioned,
+    );
 
     for (int pass = 0; pass < 5; pass++) {
       bool hadCollision = false;
@@ -926,10 +998,7 @@ class _ARViewportScreenState extends State<ARViewportScreen>
         final double wA = baseCardW * scaleA;
         final double hA = baseCardH * scaleA;
 
-        curX = curX.clamp(
-          10.0,
-          math.max(10.0, screenWidth - wA - 10.0),
-        );
+        curX = curX.clamp(10.0, math.max(10.0, screenWidth - wA - 10.0));
         curY = curY.clamp(
           topSafeLimit,
           math.max(topSafeLimit, bottomSafeLimit - hA),
@@ -986,8 +1055,14 @@ class _ARViewportScreenState extends State<ARViewportScreen>
 
             if (poiA.floorNumber > poiB.floorNumber) {
               final double newY = exY - hA - minGapY;
-              bool violatesBadge = targetBadgeRect != null &&
-                  Rect.fromLTWH(curX, newY, wA, hA).overlaps(targetBadgeRect.inflate(10.0));
+              bool violatesBadge =
+                  targetBadgeRect != null &&
+                  Rect.fromLTWH(
+                    curX,
+                    newY,
+                    wA,
+                    hA,
+                  ).overlaps(targetBadgeRect.inflate(10.0));
               if (newY >= topSafeLimit && !violatesBadge) {
                 curY = newY;
               } else {
@@ -1019,10 +1094,18 @@ class _ARViewportScreenState extends State<ARViewportScreen>
             } else {
               final double shiftYUp = exY - hA - minGapY;
               final double shiftYDown = exY + hB + minGapY;
-              bool upViolatesBadge = targetBadgeRect != null &&
-                  Rect.fromLTWH(curX, shiftYUp, wA, hA).overlaps(targetBadgeRect.inflate(10.0));
+              bool upViolatesBadge =
+                  targetBadgeRect != null &&
+                  Rect.fromLTWH(
+                    curX,
+                    shiftYUp,
+                    wA,
+                    hA,
+                  ).overlaps(targetBadgeRect.inflate(10.0));
 
-              if (shiftYUp >= topSafeLimit && !upViolatesBadge && (i % 2 == 0)) {
+              if (shiftYUp >= topSafeLimit &&
+                  !upViolatesBadge &&
+                  (i % 2 == 0)) {
                 curY = shiftYUp;
               } else if (shiftYDown + hA <= bottomSafeLimit) {
                 curY = shiftYDown;
@@ -1068,8 +1151,10 @@ class _ARViewportScreenState extends State<ARViewportScreen>
         final double moveDist =
             (Offset(rawTargetX, rawTargetY) - prevPos).distance;
         // Responsive lerp: fast camera motions track immediately, small motions smoothly interpolate without freezing
-        final double lerpAlpha =
-            (0.55 + (moveDist / 50.0) * 0.30).clamp(0.55, 0.85);
+        final double lerpAlpha = (0.55 + (moveDist / 50.0) * 0.30).clamp(
+          0.55,
+          0.85,
+        );
         finalX = prevPos.dx + (rawTargetX - prevPos.dx) * lerpAlpha;
         finalY = prevPos.dy + (rawTargetY - prevPos.dy) * lerpAlpha;
       }
@@ -1283,15 +1368,14 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                       12.0,
                       math.max(12.0, screenWidth - badgeWidth - 12.0),
                     );
-                final double targetBadgeScale = (1.20 /
-                        (1.0 +
-                            math.log(math.max(
-                                      1.0,
-                                      safeDist.toDouble(),
-                                    ) /
-                                    3.0) *
-                                0.28))
-                    .clamp(0.85, 1.25);
+                final double targetBadgeScale =
+                    (1.20 /
+                            (1.0 +
+                                math.log(
+                                      math.max(1.0, safeDist.toDouble()) / 3.0,
+                                    ) *
+                                    0.28))
+                        .clamp(0.85, 1.25);
                 return AnimatedPositioned(
                   duration: const Duration(milliseconds: 120),
                   curve: Curves.easeOutCubic,
@@ -1303,165 +1387,166 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                      // Glowing 3D AR Distance Box
-                      Container(
-                        width: badgeWidth,
-                        padding: const EdgeInsets.symmetric(
-                          vertical: 14,
-                          horizontal: 16,
-                        ),
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            colors: isParkedCar
-                                ? [
-                                    const Color(0xFF10B981),
-                                    const Color(0xFF059669),
-                                  ]
-                                : [
-                                    const Color(0xFF00E5FF),
-                                    const Color(0xFF00B0FF),
-                                  ],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
+                        // Glowing 3D AR Distance Box
+                        Container(
+                          width: badgeWidth,
+                          padding: const EdgeInsets.symmetric(
+                            vertical: 14,
+                            horizontal: 16,
                           ),
-                          borderRadius: BorderRadius.circular(24),
-                          boxShadow: [
-                            BoxShadow(
-                              color:
-                                  (isParkedCar
-                                          ? const Color(0xFF10B981)
-                                          : const Color(0xFF00E5FF))
-                                      .withValues(alpha: 0.6),
-                              blurRadius: 20,
-                              spreadRadius: 2,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: isParkedCar
+                                  ? [
+                                      const Color(0xFF10B981),
+                                      const Color(0xFF059669),
+                                    ]
+                                  : [
+                                      const Color(0xFF00E5FF),
+                                      const Color(0xFF00B0FF),
+                                    ],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
                             ),
-                          ],
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  isParkedCar
-                                      ? LucideIcons.car
-                                      : LucideIcons.target,
-                                  color: Colors.white,
-                                  size: 14,
-                                ),
-                                const SizedBox(width: 6),
-                                Expanded(
-                                  child: Text(
-                                    activePOI.name.toUpperCase(),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    textAlign: TextAlign.center,
-                                    style: GoogleFonts.plusJakartaSans(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w900,
-                                      color: Colors.white.withValues(
-                                        alpha: 0.95,
-                                      ),
-                                      letterSpacing: 0.5,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              '${activeSpatialMetrics?.euclidean3DDistanceMeters.toStringAsFixed(0) ?? activeDistM} M (3D)',
-                              style: GoogleFonts.plusJakartaSans(
-                                fontSize: 26,
-                                fontWeight: FontWeight.w900,
-                                color: Colors.white,
-                                letterSpacing: -0.5,
-                                height: 1.0,
+                            borderRadius: BorderRadius.circular(24),
+                            boxShadow: [
+                              BoxShadow(
+                                color:
+                                    (isParkedCar
+                                            ? const Color(0xFF10B981)
+                                            : const Color(0xFF00E5FF))
+                                        .withValues(alpha: 0.6),
+                                blurRadius: 20,
+                                spreadRadius: 2,
                               ),
-                            ),
-                            ValueListenableBuilder<bool>(
-                              valueListenable: DeveloperModeNotifier.instance,
-                              builder: (context, isDev, child) {
-                                if (!isDev) {
-                                  return Text(
-                                    activePOI.floorNumber < 0
-                                        ? "Basement B${activePOI.floorNumber.abs()}"
-                                        : "Floor ${activePOI.floorNumber}",
-                                    style: GoogleFonts.plusJakartaSans(
-                                      fontSize: 10.5,
-                                      fontWeight: FontWeight.w700,
-                                      color: Colors.white.withValues(
-                                        alpha: 0.95,
-                                      ),
-                                    ),
-                                  );
-                                }
-                                return Column(
-                                  children: [
-                                    const SizedBox(height: 3),
-                                    Text(
-                                      '2D: ${activeSpatialMetrics?.horizontalHaversineDistMeters.toStringAsFixed(0) ?? activeDistM}m • Δh: ${activeSpatialMetrics != null && activeSpatialMetrics.elevationDeltaMeters >= 0 ? "+" : ""}${activeSpatialMetrics?.elevationDeltaMeters.toStringAsFixed(1) ?? "0.0"}m',
+                            ],
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    isParkedCar
+                                        ? LucideIcons.car
+                                        : LucideIcons.target,
+                                    color: Colors.white,
+                                    size: 14,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Expanded(
+                                    child: Text(
+                                      activePOI.name.toUpperCase(),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.center,
                                       style: GoogleFonts.plusJakartaSans(
-                                        fontSize: 9,
-                                        fontWeight: FontWeight.w800,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w900,
                                         color: Colors.white.withValues(
                                           alpha: 0.95,
                                         ),
                                         letterSpacing: 0.5,
                                       ),
                                     ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      '${activePOI.floorNumber < 0 ? "B${activePOI.floorNumber.abs()}" : "FLOOR ${activePOI.floorNumber}"} (${widget.currentFloor.floorWidthMeters.toStringAsFixed(0)}×${widget.currentFloor.floorLengthMeters.toStringAsFixed(0)}m)',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                '${activeSpatialMetrics?.euclidean3DDistanceMeters.toStringAsFixed(0) ?? activeDistM} M (3D)',
+                                style: GoogleFonts.plusJakartaSans(
+                                  fontSize: 26,
+                                  fontWeight: FontWeight.w900,
+                                  color: Colors.white,
+                                  letterSpacing: -0.5,
+                                  height: 1.0,
+                                ),
+                              ),
+                              ValueListenableBuilder<bool>(
+                                valueListenable: DeveloperModeNotifier.instance,
+                                builder: (context, isDev, child) {
+                                  if (!isDev) {
+                                    return Text(
+                                      activePOI.floorNumber < 0
+                                          ? "Basement B${activePOI.floorNumber.abs()}"
+                                          : "Floor ${activePOI.floorNumber}",
                                       style: GoogleFonts.plusJakartaSans(
-                                        fontSize: 8.5,
-                                        fontWeight: FontWeight.w800,
+                                        fontSize: 10.5,
+                                        fontWeight: FontWeight.w700,
                                         color: Colors.white.withValues(
-                                          alpha: 0.9,
+                                          alpha: 0.95,
                                         ),
-                                        letterSpacing: 0.8,
                                       ),
-                                    ),
-                                  ],
-                                );
-                              },
-                            ),
-                          ],
+                                    );
+                                  }
+                                  return Column(
+                                    children: [
+                                      const SizedBox(height: 3),
+                                      Text(
+                                        '2D: ${activeSpatialMetrics?.horizontalHaversineDistMeters.toStringAsFixed(0) ?? activeDistM}m • Δh: ${activeSpatialMetrics != null && activeSpatialMetrics.elevationDeltaMeters >= 0 ? "+" : ""}${activeSpatialMetrics?.elevationDeltaMeters.toStringAsFixed(1) ?? "0.0"}m',
+                                        style: GoogleFonts.plusJakartaSans(
+                                          fontSize: 9,
+                                          fontWeight: FontWeight.w800,
+                                          color: Colors.white.withValues(
+                                            alpha: 0.95,
+                                          ),
+                                          letterSpacing: 0.5,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        '${activePOI.floorNumber < 0 ? "B${activePOI.floorNumber.abs()}" : "FLOOR ${activePOI.floorNumber}"} (${widget.currentFloor.floorWidthMeters.toStringAsFixed(0)}×${widget.currentFloor.floorLengthMeters.toStringAsFixed(0)}m)',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: GoogleFonts.plusJakartaSans(
+                                          fontSize: 8.5,
+                                          fontWeight: FontWeight.w800,
+                                          color: Colors.white.withValues(
+                                            alpha: 0.9,
+                                          ),
+                                          letterSpacing: 0.8,
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                },
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
 
-                      // Glowing Direction Chevrons (▲) rising to marker
-                      Column(
-                        children: List.generate(3, (idx) {
-                          return Padding(
-                            padding: const EdgeInsets.only(top: 2),
-                            child: Icon(
-                              LucideIcons.chevronUp,
-                              color:
-                                  (isParkedCar
-                                          ? const Color(0xFF10B981)
-                                          : const Color(0xFF00E5FF))
-                                      .withValues(alpha: 1.0 - (idx * 0.25)),
-                              size: 20 - (idx * 2),
-                            ),
-                          );
-                        }),
-                      ),
-                    ],
+                        // Glowing Direction Chevrons (▲) rising to marker
+                        Column(
+                          children: List.generate(3, (idx) {
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 2),
+                              child: Icon(
+                                LucideIcons.chevronUp,
+                                color:
+                                    (isParkedCar
+                                            ? const Color(0xFF10B981)
+                                            : const Color(0xFF00E5FF))
+                                        .withValues(alpha: 1.0 - (idx * 0.25)),
+                                size: 20 - (idx * 2),
+                              ),
+                            );
+                          }),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              );
-            },
-          ),
+                );
+              },
+            ),
           ],
 
-          // 4. Ambient Floating AR Place Cards (always rendered, with target POI highlighted)
-          Positioned.fill(
-            child: Stack(
-              children: () {
+          // 4. Ambient Floating AR Place Cards (rendered only when in browsing mode; hidden during active navigation)
+          if (!_isNavigatingActive)
+            Positioned.fill(
+              child: Stack(
+                children: () {
                 final seenCardKeyIds = <String>{};
                 final uniqueList = visibleCardsInFOV.where((data) {
                   final p = data['poi'] as DestinationPOI;
@@ -1475,47 +1560,49 @@ class _ARViewportScreenState extends State<ARViewportScreen>
 
                 return uniqueList.map((data) {
                   final poi = data['poi'] as DestinationPOI;
-                final distM = data['distM'] as int;
-                final directionStr = data['directionStr'] as String;
-                final posX = data['posX'] as double;
-                final posY = data['posY'] as double;
-                final cardOpacity = (data['cardOpacity'] as double? ?? 1.0);
-                final isPitchFocused =
-                    (data['isPitchFocused'] as bool? ?? true);
-                final cardScale = (data['distanceScale'] as double? ?? 1.0);
+                  final distM = data['distM'] as int;
+                  final directionStr = data['directionStr'] as String;
+                  final posX = data['posX'] as double;
+                  final posY = data['posY'] as double;
+                  final cardOpacity = (data['cardOpacity'] as double? ?? 1.0);
+                  final isPitchFocused =
+                      (data['isPitchFocused'] as bool? ?? true);
+                  final cardScale = (data['distanceScale'] as double? ?? 1.0);
 
-                final isSelected = activePOI?.id == poi.id;
-                final double effectiveOpacity = _isNavigatingActive
-                    ? (isSelected ? 1.0 : (cardOpacity * 0.85).clamp(0.0, 0.90))
-                    : cardOpacity.clamp(0.0, 1.0);
+                  final isSelected = activePOI?.id == poi.id;
+                  final double effectiveOpacity = _isNavigatingActive
+                      ? (isSelected
+                            ? 1.0
+                            : (cardOpacity * 0.85).clamp(0.0, 0.90))
+                      : cardOpacity.clamp(0.0, 1.0);
 
-                final cardMetrics =
-                    data['spatialMetrics'] as RealWorldSpatialMetrics?;
-                final int dist3D =
-                    cardMetrics?.euclidean3DDistanceMeters.round() ?? distM;
+                  final cardMetrics =
+                      data['spatialMetrics'] as RealWorldSpatialMetrics?;
+                  final int dist3D =
+                      cardMetrics?.euclidean3DDistanceMeters.round() ?? distM;
 
-                String floorRelationStr;
-                final String floorLabel = poi.floorNumber < 0
-                    ? 'B${poi.floorNumber.abs()}'
-                    : 'FLOOR ${poi.floorNumber}';
-                if (poi.floorNumber == widget.currentFloor.floorNumber) {
-                  floorRelationStr = '$floorLabel • SAME FLOOR';
-                } else if (poi.floorNumber >
-                    widget.currentFloor.floorNumber) {
-                  floorRelationStr = '$floorLabel • ▲ UP';
-                } else {
-                  floorRelationStr = '$floorLabel • ▼ DOWN';
-                }
+                  String floorRelationStr;
+                  final String floorLabel = poi.floorNumber < 0
+                      ? 'B${poi.floorNumber.abs()}'
+                      : 'FLOOR ${poi.floorNumber}';
+                  if (poi.floorNumber == widget.currentFloor.floorNumber) {
+                    floorRelationStr = floorLabel;
+                  } else if (poi.floorNumber >
+                      widget.currentFloor.floorNumber) {
+                    floorRelationStr = '$floorLabel • ▲ UP';
+                  } else {
+                    floorRelationStr = '$floorLabel • ▼ DOWN';
+                  }
 
-                return AnimatedPositioned(
-                  key: ValueKey('poi-card-${poi.id}'),
-                  duration: const Duration(milliseconds: 24),
-                  curve: Curves.linear,
-                  left: posX,
-                  top: posY,
-                  child: AnimatedOpacity(
-                    duration: const Duration(milliseconds: 80),
-                    opacity: effectiveOpacity,
+                  return AnimatedPositioned(
+                    key: ValueKey('poi-card-${poi.id}'),
+                    duration: const Duration(milliseconds: 24),
+                    curve: Curves.linear,
+                    left: posX,
+                    top: posY,
+                    child: AnimatedOpacity(
+                      duration: const Duration(milliseconds: 80),
+                      opacity: effectiveOpacity,
                       child: Transform.scale(
                         scale: cardScale,
                         alignment: Alignment.bottomCenter,
@@ -1697,7 +1784,6 @@ class _ARViewportScreenState extends State<ARViewportScreen>
             ),
           ),
 
-
           // 5. Top Controls & Navigation Guidance HUD Banner
           Positioned(
             top: 0,
@@ -1757,11 +1843,15 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                               color: const Color(0xDD0F172A),
                               borderRadius: BorderRadius.circular(16),
                               border: Border.all(
-                                color: const Color(0xFF00E5FF).withValues(alpha: 0.5),
+                                color: const Color(
+                                  0xFF00E5FF,
+                                ).withValues(alpha: 0.5),
                               ),
                               boxShadow: [
                                 BoxShadow(
-                                  color: const Color(0xFF00E5FF).withValues(alpha: 0.2),
+                                  color: const Color(
+                                    0xFF00E5FF,
+                                  ).withValues(alpha: 0.2),
                                   blurRadius: 8,
                                 ),
                               ],
@@ -1770,11 +1860,13 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Icon(
-                                  resolvedFloorIndex > widget.currentFloor.floorNumber
+                                  resolvedFloorIndex >
+                                          widget.currentFloor.floorNumber
                                       ? LucideIcons.chevronUp
-                                      : (resolvedFloorIndex < widget.currentFloor.floorNumber
-                                          ? LucideIcons.chevronDown
-                                          : LucideIcons.eye),
+                                      : (resolvedFloorIndex <
+                                                widget.currentFloor.floorNumber
+                                            ? LucideIcons.chevronDown
+                                            : LucideIcons.eye),
                                   color: const Color(0xFF00E5FF),
                                   size: 12,
                                 ),
@@ -2047,6 +2139,88 @@ class _ARViewportScreenState extends State<ARViewportScreen>
               ),
             ),
           ),
+
+          // Notice when outside 500m coverage and no mall is loaded
+          if (allDestinations.isEmpty)
+            Center(
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 24),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 18,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xDD0F172A),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: const Color(0xFF334155),
+                    width: 1.5,
+                  ),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Colors.black45,
+                      blurRadius: 16,
+                      offset: Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF59E0B).withValues(alpha: 0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        LucideIcons.radar,
+                        size: 32,
+                        color: Color(0xFFFBBF24),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'No Mall Within 500m',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'AR camera navigation activates when you are within 500m of a venue. Maps only auto-load within 500m.',
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 12,
+                        color: const Color(0xFF94A3B8),
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    if (widget.onOpenMapsClicked != null) ...[
+                      const SizedBox(height: 14),
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF2563EB),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 10,
+                          ),
+                        ),
+                        onPressed: widget.onOpenMapsClicked,
+                        icon: const Icon(LucideIcons.map, size: 14),
+                        label: const Text('View Map Status'),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
 
           // 6. Active Navigation Mode Drawer & Controls
           Positioned(

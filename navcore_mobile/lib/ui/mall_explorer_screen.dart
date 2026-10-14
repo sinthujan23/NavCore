@@ -31,8 +31,6 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
   List<MallMetadata> _malls = [];
   bool _isLoading = true;
   String _searchQuery = '';
-  String _selectedCityFilter = 'ALL';
-  bool _filterWithin500mOnly = true;
   final Map<String, double> _downloadProgress = {};
   final TextEditingController _searchController = TextEditingController();
 
@@ -181,29 +179,29 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
           }).length
         : 0;
 
+    // Only malls strictly within 500m of the user's location are auto-visible
     final filtered = _malls.where((m) {
-      final q = _searchQuery.toLowerCase();
-      final matchesQuery =
-          m.name.toLowerCase().contains(q) ||
-          m.city.toLowerCase().contains(q) ||
-          m.category.toLowerCase().contains(q);
-      final matchesCity =
-          _selectedCityFilter == 'ALL' ||
-          m.city.toUpperCase().contains(_selectedCityFilter);
+      if (!hasGps) return false;
+      final dist = haversineDistance(
+        widget.userCoords!,
+        GeodeticCoords(
+          latitude: m.latitude,
+          longitude: m.longitude,
+          height: widget.userCoords!.height,
+        ),
+      );
+      if (dist > 500.0) return false;
 
-      if (_filterWithin500mOnly && hasGps) {
-        final dist = haversineDistance(
-          widget.userCoords!,
-          GeodeticCoords(
-            latitude: m.latitude,
-            longitude: m.longitude,
-            height: widget.userCoords!.height,
-          ),
-        );
-        if (dist > 500.0) return false;
+      final q = _searchQuery.toLowerCase().trim();
+      if (q.isNotEmpty) {
+        final matchesQuery =
+            m.name.toLowerCase().contains(q) ||
+            m.city.toLowerCase().contains(q) ||
+            m.category.toLowerCase().contains(q);
+        if (!matchesQuery) return false;
       }
 
-      return matchesQuery && matchesCity;
+      return true;
     }).toList();
 
     if (widget.userCoords != null) {
@@ -227,14 +225,6 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
         return distA.compareTo(distB);
       });
     }
-
-    final dynamicCities = _malls
-        .map((m) => m.city.toUpperCase().trim())
-        .where((c) => c.isNotEmpty)
-        .toSet()
-        .toList()
-      ..sort();
-    final cities = ['ALL', ...dynamicCities];
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
@@ -286,7 +276,7 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                '${_malls.length} Shopping Malls',
+                                '${filtered.length} Nearby (${filtered.length == 1 ? "1 Mall" : "${filtered.length} Malls"})',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(
@@ -450,7 +440,7 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                       controller: _searchController,
                       onChanged: (val) => setState(() => _searchQuery = val),
                       decoration: InputDecoration(
-                        hintText: 'Search malls, cities, or categories...',
+                        hintText: 'Search nearby malls...',
                         hintStyle: const TextStyle(
                           color: Color(0xFF94A3B8),
                           fontSize: 13.5,
@@ -501,182 +491,44 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
 
                     const SizedBox(height: 12),
 
-                    // Proximity 500m Filter Mode Toggle
+                    // Active 500m Proximity Indicator & Refresh
                     Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        GestureDetector(
-                          onTap: () => setState(() => _filterWithin500mOnly = true),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 11,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: _filterWithin500mOnly
-                                  ? const Color(0xFF059669)
-                                  : Colors.white,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color: _filterWithin500mOnly
-                                    ? const Color(0xFF059669)
-                                    : const Color(0xFFE2E8F0),
-                              ),
-                              boxShadow: _filterWithin500mOnly
-                                  ? const [
-                                      BoxShadow(
-                                        color: Color(0x33059669),
-                                        blurRadius: 8,
-                                        offset: Offset(0, 2),
-                                      ),
-                                    ]
-                                  : null,
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  LucideIcons.radar,
-                                  size: 13,
-                                  color: _filterWithin500mOnly
-                                      ? Colors.white
-                                      : const Color(0xFF059669),
-                                ),
-                                const SizedBox(width: 5),
-                                Text(
-                                  'Within 500m ($mallsWithin500mCount)',
-                                  style: TextStyle(
-                                    fontSize: 11.5,
-                                    fontWeight: FontWeight.bold,
-                                    color: _filterWithin500mOnly
-                                        ? Colors.white
-                                        : const Color(0xFF0F172A),
-                                  ),
-                                ),
-                              ],
-                            ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 11,
+                            vertical: 6,
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        GestureDetector(
-                          onTap: () => setState(() => _filterWithin500mOnly = false),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 11,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: !_filterWithin500mOnly
-                                  ? const Color(0xFF2563EB)
-                                  : Colors.white,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color: !_filterWithin500mOnly
-                                    ? const Color(0xFF2563EB)
-                                    : const Color(0xFFE2E8F0),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF059669),
+                            borderRadius: BorderRadius.circular(12),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Color(0x33059669),
+                                blurRadius: 8,
+                                offset: Offset(0, 2),
                               ),
-                              boxShadow: !_filterWithin500mOnly
-                                  ? const [
-                                      BoxShadow(
-                                        color: Color(0x332563EB),
-                                        blurRadius: 8,
-                                        offset: Offset(0, 2),
-                                      ),
-                                    ]
-                                  : null,
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  LucideIcons.globe,
-                                  size: 13,
-                                  color: !_filterWithin500mOnly
-                                      ? Colors.white
-                                      : const Color(0xFF64748B),
-                                ),
-                                const SizedBox(width: 5),
-                                Text(
-                                  'All Malls (${_malls.length})',
-                                  style: TextStyle(
-                                    fontSize: 11.5,
-                                    fontWeight: FontWeight.bold,
-                                    color: !_filterWithin500mOnly
-                                        ? Colors.white
-                                        : const Color(0xFF0F172A),
-                                  ),
-                                ),
-                              ],
-                            ),
+                            ],
                           ),
-                        ),
-                      ],
-                    ),
-
-                    const SizedBox(height: 10),
-
-                    // City Filter Chips
-                    Row(
-                      children: [
-                        Expanded(
-                          child: SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            child: Row(
-                              children: cities.map((city) {
-                                final isSelected = _selectedCityFilter == city;
-                                final label = city == 'ALL'
-                                    ? 'All Cities'
-                                    : city;
-                                return Padding(
-                                  padding: const EdgeInsets.only(right: 8),
-                                  child: GestureDetector(
-                                    onTap: () {
-                                      setState(() {
-                                        _selectedCityFilter = city;
-                                      });
-                                    },
-                                    child: AnimatedContainer(
-                                      duration: const Duration(
-                                        milliseconds: 200,
-                                      ),
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 12,
-                                        vertical: 6,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: isSelected
-                                            ? const Color(0xFF2563EB)
-                                            : Colors.white,
-                                        borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(
-                                          color: isSelected
-                                              ? const Color(0xFF2563EB)
-                                              : const Color(0xFFE2E8F0),
-                                        ),
-                                        boxShadow: isSelected
-                                            ? const [
-                                                BoxShadow(
-                                                  color: Color(0x332563EB),
-                                                  blurRadius: 8,
-                                                  offset: Offset(0, 3),
-                                                ),
-                                              ]
-                                            : null,
-                                      ),
-                                      child: Text(
-                                        label,
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w600,
-                                          color: isSelected
-                                              ? Colors.white
-                                              : const Color(0xFF475569),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              }).toList(),
-                            ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                LucideIcons.radar,
+                                size: 13,
+                                color: Colors.white,
+                              ),
+                              const SizedBox(width: 5),
+                              Text(
+                                'Within 500m ($mallsWithin500mCount)',
+                                style: const TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                         IconButton(
@@ -686,7 +538,7 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                             size: 16,
                             color: Color(0xFF64748B),
                           ),
-                          tooltip: 'Refresh Mall List',
+                          tooltip: 'Refresh Nearby Malls',
                         ),
                       ],
                     ),
@@ -719,15 +571,17 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                     child: Column(
                       children: [
                         Icon(
-                          _filterWithin500mOnly ? LucideIcons.radar : LucideIcons.map,
+                          hasGps ? LucideIcons.radar : LucideIcons.mapPinOff,
                           size: 40,
                           color: const Color(0xFF2563EB),
                         ),
                         const SizedBox(height: 12),
                         Text(
-                          _filterWithin500mOnly
-                              ? 'No malls within 500m of your location'
-                              : 'No mall map found',
+                          !hasGps
+                              ? 'Acquiring GPS Location'
+                              : (_searchQuery.isNotEmpty
+                                  ? 'No Malls Found'
+                                  : 'No Malls Within 500m'),
                           style: GoogleFonts.plusJakartaSans(
                             fontSize: 15,
                             fontWeight: FontWeight.w700,
@@ -736,11 +590,11 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          _filterWithin500mOnly
-                              ? (hasGps
-                                  ? 'GPS: ${widget.userCoords!.latitude.toStringAsFixed(4)}, ${widget.userCoords!.longitude.toStringAsFixed(4)}. Tap below to explore all available venues.'
-                                  : 'Acquiring GPS location...')
-                              : 'Try searching another city or clearing your search query',
+                          !hasGps
+                              ? 'Please ensure GPS location is enabled so nearby shopping malls can be automatically detected.'
+                              : (_searchQuery.isNotEmpty
+                                  ? 'No malls within 500m match "$_searchQuery".'
+                                  : 'Maps only automatically load within 500m. Please move closer to a supported shopping mall.'),
                           textAlign: TextAlign.center,
                           style: const TextStyle(
                             fontSize: 12.5,
@@ -748,11 +602,28 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                           ),
                         ),
                         const SizedBox(height: 16),
-                        if (_filterWithin500mOnly)
+                        if (_searchQuery.isNotEmpty)
+                          OutlinedButton.icon(
+                            onPressed: () {
+                              setState(() {
+                                _searchQuery = '';
+                                _searchController.clear();
+                              });
+                            },
+                            icon: const Icon(LucideIcons.rotateCcw, size: 14),
+                            label: const Text('Clear Search'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: const Color(0xFF2563EB),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                          )
+                        else if (!hasGps)
                           ElevatedButton.icon(
-                            onPressed: () => setState(() => _filterWithin500mOnly = false),
-                            icon: const Icon(LucideIcons.globe, size: 14),
-                            label: const Text('Explore All Malls'),
+                            onPressed: _autoDetectAndDownloadNearestMall,
+                            icon: const Icon(LucideIcons.navigation, size: 14),
+                            label: const Text('Detect GPS Location'),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: const Color(0xFF2563EB),
                               foregroundColor: Colors.white,
@@ -762,16 +633,17 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                             ),
                           )
                         else
-                          OutlinedButton.icon(
-                            onPressed: () {
-                              setState(() {
-                                _searchQuery = '';
-                                _searchController.clear();
-                                _selectedCityFilter = 'ALL';
-                              });
-                            },
-                            icon: const Icon(LucideIcons.rotateCcw, size: 14),
-                            label: const Text('Reset Search'),
+                          ElevatedButton.icon(
+                            onPressed: _loadMalls,
+                            icon: const Icon(LucideIcons.refreshCw, size: 14),
+                            label: const Text('Refresh Nearby Malls'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF2563EB),
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
                           ),
                       ],
                     ),

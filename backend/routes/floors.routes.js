@@ -272,18 +272,18 @@ router.post('/:mallId/calculate', (req, res) => {
 
   const updated = floors.map((f, idx) => {
     // If admin added/locked this floor gap, strictly preserve it!
-    const isAdminLocked = f.isLocked === true || f.source === 'admin';
-    const gap = isAdminLocked ? (Number(f.heightToNextM) || dynamicGap) : dynamicGap;
-    const source = isAdminLocked ? 'admin' : (userLocationAltitude ? 'gps_baro_fusion' : 'barometer');
-    const confidence = isAdminLocked ? 1.0 : (barometerPressureHpa ? 0.95 : 0.85);
+    const isExplicitlyLocked = f.isLocked === true;
+    const gap = isExplicitlyLocked ? (Number(f.heightToNextM) || dynamicGap) : dynamicGap;
+    const source = isExplicitlyLocked ? 'admin' : (userLocationAltitude ? 'gps_baro_fusion' : 'barometer');
+    const confidence = isExplicitlyLocked ? 1.0 : (barometerPressureHpa ? 0.95 : 0.85);
 
     if (idx === 0) {
-      currentAlt = (isAdminLocked && f.baseAltitudeM !== undefined && f.baseAltitudeM > 0)
+      currentAlt = (isExplicitlyLocked && f.baseAltitudeM !== undefined && f.baseAltitudeM > 0)
         ? Number(f.baseAltitudeM)
         : Number(entranceAnchor);
     } else {
-      const prevIsAdmin = floors[idx - 1].isLocked === true || floors[idx - 1].source === 'admin';
-      const prevGap = prevIsAdmin ? (Number(floors[idx - 1].heightToNextM) || dynamicGap) : dynamicGap;
+      const prevLocked = floors[idx - 1].isLocked === true;
+      const prevGap = prevLocked ? (Number(floors[idx - 1].heightToNextM) || dynamicGap) : dynamicGap;
       currentAlt += prevGap;
     }
 

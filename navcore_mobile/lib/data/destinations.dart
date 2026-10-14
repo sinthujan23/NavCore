@@ -28,35 +28,46 @@ class DestinationPOI {
   });
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'category': category,
-        'floorNumber': floorNumber,
-        'rating': rating,
-        'latitude': location.latitude,
-        'longitude': location.longitude,
-        'height': location.height,
-        'description': description,
-        'openStatus': openStatus,
-        'openingHours': openingHours,
-        'imageUrl': imageUrl,
-        'mallId': mallId,
-      };
+    'id': id,
+    'name': name,
+    'category': category,
+    'floorNumber': floorNumber,
+    'rating': rating,
+    'latitude': location.latitude,
+    'longitude': location.longitude,
+    'height': location.height,
+    'description': description,
+    'openStatus': openStatus,
+    'openingHours': openingHours,
+    'imageUrl': imageUrl,
+    'mallId': mallId,
+  };
 
   factory DestinationPOI.fromJson(Map<String, dynamic> json) {
     return DestinationPOI(
       id: json['id'] as String? ?? '',
       name: json['name'] as String? ?? '',
       category: json['category'] as String? ?? 'SERVICES',
-      floorNumber: (json['floorNumber'] ?? json['floor_number'] as num?)?.toInt() ?? 1,
+      floorNumber:
+          (json['floorNumber'] ?? json['floor_number'] as num?)?.toInt() ?? 1,
       rating: (json['rating'] as num?)?.toDouble() ?? 4.8,
       location: GeodeticCoords(
-        latitude: (json['latitude'] ?? json['location']?['latitude'] as num?)?.toDouble() ?? 0.0,
-        longitude: (json['longitude'] ?? json['location']?['longitude'] as num?)?.toDouble() ?? 0.0,
-        height: (json['height'] ?? json['location']?['height'] as num?)?.toDouble() ?? 0.0,
+        latitude:
+            (json['latitude'] ?? json['location']?['latitude'] as num?)
+                ?.toDouble() ??
+            0.0,
+        longitude:
+            (json['longitude'] ?? json['location']?['longitude'] as num?)
+                ?.toDouble() ??
+            0.0,
+        height:
+            (json['height'] ?? json['location']?['height'] as num?)
+                ?.toDouble() ??
+            0.0,
       ),
       description: json['description'] as String? ?? '',
-      openStatus: json['openStatus'] ?? json['open_status'] as String? ?? 'Open Now',
+      openStatus:
+          json['openStatus'] ?? json['open_status'] as String? ?? 'Open Now',
       openingHours: json['openingHours'] ?? json['opening_hours'] as String?,
       imageUrl: json['imageUrl'] ?? json['image_url'] as String?,
       mallId: json['mallId'] as String?,
@@ -89,5 +100,3 @@ const entranceAnchor = GeodeticCoords(
   longitude: 0.0,
   height: 0.0,
 );
-
-
