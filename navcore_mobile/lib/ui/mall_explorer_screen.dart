@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../data/mall_database_service.dart';
+import '../data/destinations.dart';
 import '../engine/ecef_engine.dart';
 import '../engine/bearing_engine.dart';
+import 'admin/admin_osm_map_screen.dart';
 
 class MallExplorerScreen extends StatefulWidget {
   final MallDatabaseService mallService;
@@ -12,6 +14,8 @@ class MallExplorerScreen extends StatefulWidget {
   final VoidCallback? onBackClicked;
   final String userEmail;
   final VoidCallback? onLogout;
+  final List<DestinationPOI>? destinations;
+  final ValueChanged<DestinationPOI>? onSelectDestination;
 
   const MallExplorerScreen({
     super.key,
@@ -21,6 +25,8 @@ class MallExplorerScreen extends StatefulWidget {
     this.onBackClicked,
     this.userEmail = '',
     this.onLogout,
+    this.destinations,
+    this.onSelectDestination,
   });
 
   @override
@@ -56,6 +62,28 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
         _isLoading = false;
       });
     }
+  }
+
+  void _openOsmMap() {
+    final effectiveCoords = widget.userCoords ??
+        const GeodeticCoords(latitude: 0.0, longitude: 0.0, height: 0.0);
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AdminOSMMapScreen(
+          userCoords: effectiveCoords,
+          destinations: widget.destinations ?? [],
+          mallService: widget.mallService,
+          malls: _malls,
+          isUserMode: true,
+          title: 'Live OSM Map (500m)',
+          onSelectActiveMall: (mallId) {
+            widget.onSelectActiveMall(mallId);
+          },
+          onSelectDestination: widget.onSelectDestination,
+        ),
+      ),
+    );
   }
 
   Future<void> _autoDetectAndDownloadNearestMall() async {
@@ -496,9 +524,8 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
 
                     const SizedBox(height: 12),
 
-                    // Active 500m Proximity Indicator & Refresh
+                    // Active 500m Proximity Indicator & OSM Map Button
                     Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Container(
                           padding: const EdgeInsets.symmetric(
@@ -536,6 +563,59 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                             ],
                           ),
                         ),
+                        const SizedBox(width: 8),
+
+                        // OSM Map Live Button in indicated place
+                        Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: _openOsmMap,
+                            borderRadius: BorderRadius.circular(12),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                gradient: const LinearGradient(
+                                  colors: [
+                                    Color(0xFF0284C7),
+                                    Color(0xFF0369A1),
+                                  ],
+                                ),
+                                borderRadius: BorderRadius.circular(12),
+                                boxShadow: const [
+                                  BoxShadow(
+                                    color: Color(0x280284C7),
+                                    blurRadius: 8,
+                                    offset: Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(
+                                    LucideIcons.map,
+                                    size: 13,
+                                    color: Colors.white,
+                                  ),
+                                  const SizedBox(width: 5),
+                                  Text(
+                                    'OSM Map',
+                                    style: GoogleFonts.plusJakartaSans(
+                                      fontSize: 11.5,
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+
+                        const Spacer(),
                         IconButton(
                           onPressed: _loadMalls,
                           icon: const Icon(

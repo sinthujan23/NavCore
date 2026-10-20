@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:http/http.dart' as http;
 import 'package:geolocator/geolocator.dart';
 
 import '../../data/api_service.dart';
@@ -399,7 +398,19 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
       'venue_parking_floors_${active.id}',
     );
     if (savedParkingFloors != null && savedParkingFloors.isNotEmpty) {
-      active = active.copyWith(parkingFloors: savedParkingFloors);
+      final cleanSaved = savedParkingFloors
+          .where(
+            (f) =>
+                !RegExp(r'^F\d+$', caseSensitive: false).hasMatch(f.trim()),
+          )
+          .toList();
+      if (cleanSaved.isNotEmpty) {
+        active = active.copyWith(parkingFloors: cleanSaved);
+        await prefs.setStringList(
+          'venue_parking_floors_${active.id}',
+          cleanSaved,
+        );
+      }
     }
 
     // Prune legacy dummy slots from cache/memory that do not belong to this mall
@@ -441,7 +452,7 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
             _selectedFloorId = bestFloor;
           }
         } else {
-          _selectedFloorId = 'B1';
+          _selectedFloorId = 'P';
         }
         _isLoading = false;
       });
@@ -458,55 +469,70 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
   ) {
     if (mall == null) return [];
 
-    // 1. If designated parking floors are configured in venue package, return formatted floors
-    if (mall.parkingFloors.isNotEmpty) {
-      final configured = mall.parkingFloors.map((f) {
-        final norm = ParkingService.normalizeFloorId(f);
-        if (norm == 'P') return 'P';
-        if (norm.startsWith('B')) return norm;
-        if (norm == 'GF') return 'GF';
-        return norm;
-      }).toList();
-      if (!configured.contains('P')) {
-        configured.insert(0, 'P');
-      }
-      return configured;
-    }
-
     final List<String> floors = [];
 
+    bool isRetailFloor(String floorLabel) {
+      final clean = floorLabel.trim();
+      return RegExp(r'^F\d+$', caseSensitive: false).hasMatch(clean) ||
+          RegExp(r'^Floor\s*\d+$', caseSensitive: false).hasMatch(clean);
+    }
+
+    // 1. Designated parking floors configured specifically in the venue package / mall creation
+    if (mall.parkingFloors.isNotEmpty) {
+      for (final f in mall.parkingFloors) {
+        final norm = ParkingService.normalizeFloorId(f);
+        if (norm.isEmpty || isRetailFloor(norm)) continue;
+        if (!floors.contains(norm)) floors.add(norm);
+      }
+    }
+
+    // 2. Also check any basement levels (h.floorNo < 0) from floor heights as valid parking floors
     final targetId = mall.id.trim().toLowerCase();
     final matchingHeights = heights.where((h) {
       final hMall = h.mallId.trim().toLowerCase();
-      return hMall.isEmpty ||
-          hMall == targetId ||
-          hMall.replaceAll(RegExp(r'^0+'), '') ==
-              targetId.replaceAll(RegExp(r'^0+'), '');
+      return (hMall.isEmpty ||
+              hMall == targetId ||
+              hMall.replaceAll(RegExp(r'^0+'), '') ==
+                  targetId.replaceAll(RegExp(r'^0+'), '')) &&
+          h.floorNo < 0;
     }).toList();
 
     if (matchingHeights.isNotEmpty) {
       matchingHeights.sort((a, b) => a.floorNo.compareTo(b.floorNo));
       for (final h in matchingHeights) {
-        final label = h.floorNo < 0
-            ? 'B${h.floorNo.abs()}'
-            : (h.floorNo == 0 ? 'GF' : 'F${h.floorNo}');
+        final label = 'B${h.floorNo.abs()}';
         if (!floors.contains(label)) {
           floors.add(label);
         }
       }
-    } else {
-      final count = mall.floorCount > 0 ? mall.floorCount : 1;
-      for (int i = 1; i <= count; i++) {
-        floors.add('F$i');
+    }
+
+    // 3. Include any floor that currently has parking stalls placed in ParkingService (excluding upper retail floors F1, F2...)
+    final slotsMap = _parkingService.getFloorSlotsForMall(mall.id);
+    for (final f in slotsMap.keys) {
+      if (slotsMap[f] != null && slotsMap[f]!.isNotEmpty) {
+        final norm = ParkingService.normalizeFloorId(f);
+        if (isRetailFloor(norm)) continue;
+        if (!floors.contains(norm)) floors.add(norm);
       }
     }
 
-    if (!floors.contains('P')) {
-      floors.insert(0, 'P');
+    // 4. Always ensure the primary parking floor 'P' is present if list is empty
+    if (floors.isEmpty) {
+      floors.add('P');
     }
-    if (!floors.contains('B1')) {
-      floors.insert(1, 'B1');
-    }
+
+    // Sort: 'P' first, then basements B1, B2... in numerical order
+    floors.sort((a, b) {
+      if (a == 'P') return -1;
+      if (b == 'P') return 1;
+      if (a.startsWith('B') && b.startsWith('B')) {
+        final aNum = int.tryParse(a.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+        final bNum = int.tryParse(b.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+        return aNum.compareTo(bNum);
+      }
+      return a.compareTo(b);
+    });
 
     return floors;
   }
@@ -2036,9 +2062,34 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                     ),
                   );
                 }
-                unawaited(
-                  _parkingService.addParkingSlot(_activeMall!.id, newSlot),
-                );
+                final prefs = await SharedPreferences.getInstance();
+                final rawFloors = prefs.getStringList(
+                      'venue_parking_floors_${_activeMall!.id}',
+                    ) ??
+                    List<String>.from(_activeMall!.parkingFloors);
+                final curFloors = rawFloors
+                    .where(
+                      (f) => !RegExp(
+                        r'^F\d+$',
+                        caseSensitive: false,
+                      ).hasMatch(f.trim()),
+                    )
+                    .toList();
+                if (!curFloors.contains(chosenFloor)) {
+                  curFloors.add(chosenFloor);
+                  await prefs.setStringList(
+                    'venue_parking_floors_${_activeMall!.id}',
+                    curFloors,
+                  );
+                  if (mounted) {
+                    setState(() {
+                      _activeMall = _activeMall!.copyWith(
+                        parkingFloors: curFloors,
+                      );
+                    });
+                  }
+                }
+                await _parkingService.addParkingSlot(_activeMall!.id, newSlot);
               },
               child: const Text('Add Stall'),
             ),
@@ -2638,31 +2689,6 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
     });
   }
 
-  Widget _buildCoordNudgeBtn({
-    required String label,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(6),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
-        decoration: BoxDecoration(
-          color: const Color(0xFFF8FAFC),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: const Color(0xFFCBD5E1)),
-        ),
-        child: Text(
-          label,
-          style: GoogleFonts.jetBrainsMono(
-            fontSize: 10,
-            fontWeight: FontWeight.w700,
-            color: const Color(0xFF334155),
-          ),
-        ),
-      ),
-    );
-  }
 
   void _showEditSlotCoordsDialog(ParkingSlot slot) {
     if (_activeMall == null) return;
@@ -2813,76 +2839,6 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 10),
-                Text(
-                  'Quick Nudge & Separate:',
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w700,
-                    color: const Color(0xFF64748B),
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    _buildCoordNudgeBtn(
-                      label: '◀ West -2.5m',
-                      onTap: () {
-                        final cur = double.tryParse(lonCtrl.text.trim()) ?? slot.location.longitude;
-                        setDlgState(() {
-                          lonCtrl.text = (cur - 0.000025).toStringAsFixed(6);
-                        });
-                      },
-                    ),
-                    _buildCoordNudgeBtn(
-                      label: 'East +2.5m ▶',
-                      onTap: () {
-                        final cur = double.tryParse(lonCtrl.text.trim()) ?? slot.location.longitude;
-                        setDlgState(() {
-                          lonCtrl.text = (cur + 0.000025).toStringAsFixed(6);
-                        });
-                      },
-                    ),
-                    _buildCoordNudgeBtn(
-                      label: '▲ North +5m',
-                      onTap: () {
-                        final cur = double.tryParse(latCtrl.text.trim()) ?? slot.location.latitude;
-                        setDlgState(() {
-                          latCtrl.text = (cur + 0.000045).toStringAsFixed(6);
-                        });
-                      },
-                    ),
-                    _buildCoordNudgeBtn(
-                      label: 'South -5m ▼',
-                      onTap: () {
-                        final cur = double.tryParse(latCtrl.text.trim()) ?? slot.location.latitude;
-                        setDlgState(() {
-                          latCtrl.text = (cur - 0.000045).toStringAsFixed(6);
-                        });
-                      },
-                    ),
-                    _buildCoordNudgeBtn(
-                      label: '⚡ Auto-Space Bay',
-                      onTap: () {
-                        final baseLat = _liveSurveyorCoords?.latitude ?? _activeMall!.latitude;
-                        final baseLon = _liveSurveyorCoords?.longitude ?? _activeMall!.longitude;
-                        final cleanSec = slot.section.trim().toUpperCase();
-                        final int secIdx = (cleanSec.isNotEmpty && cleanSec.codeUnitAt(0) >= 65 && cleanSec.codeUnitAt(0) <= 90)
-                            ? (cleanSec.codeUnitAt(0) - 65)
-                            : 0;
-                        final int offsetIndex = (slot.slotNumber - 1).clamp(0, 9999);
-                        final int r = offsetIndex ~/ 4;
-                        final int c = offsetIndex % 4;
-                        setDlgState(() {
-                          latCtrl.text = (baseLat + (r * 0.000045)).toStringAsFixed(6);
-                          lonCtrl.text = (baseLon + (secIdx * 0.000150) + (c * 0.000025)).toStringAsFixed(6);
-                        });
-                      },
-                    ),
-                  ],
-                ),
               ],
             ),
           ),
@@ -3020,325 +2976,6 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
     }
   }
 
-  void _showServerConfigDialog() async {
-    final currentUrl = await ApiService.instance.getBaseUrl();
-    final controller = TextEditingController(text: currentUrl);
-    bool testing = false;
-    String? testResult;
-    Color testResultColor = const Color(0xFF10B981);
-
-    if (!mounted) return;
-    showDialog(
-      context: context,
-      builder: (dialogCtx) => StatefulBuilder(
-        builder: (dialogCtx, setDialogState) => AlertDialog(
-          backgroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(22),
-          ),
-          title: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEFF6FF),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(
-                  LucideIcons.server,
-                  color: Color(0xFF2563EB),
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Backend Server API',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: const Color(0xFF0F172A),
-                      ),
-                    ),
-                    Text(
-                      'Live Cloud & Local Database Sync',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 11.5,
-                        color: const Color(0xFF64748B),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'API Endpoint URL',
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: const Color(0xFF334155),
-                  ),
-                ),
-                const SizedBox(height: 6),
-                TextField(
-                  controller: controller,
-                  style: GoogleFonts.jetBrainsMono(
-                    fontSize: 12.5,
-                    color: const Color(0xFF0F172A),
-                  ),
-                  decoration: InputDecoration(
-                    hintText: 'https://nexnav.hashnate.com/api',
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
-                    filled: true,
-                    fillColor: const Color(0xFFF8FAFC),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    ActionChip(
-                      avatar: const Icon(
-                        LucideIcons.cloud,
-                        size: 12,
-                        color: Color(0xFF2563EB),
-                      ),
-                      label: const Text('Live Cloud (nexnav.hashnate.com)'),
-                      labelStyle: GoogleFonts.plusJakartaSans(
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.bold,
-                        color: const Color(0xFF2563EB),
-                      ),
-                      backgroundColor: const Color(0xFFEFF6FF),
-                      side: const BorderSide(color: Color(0xFFBFDBFE)),
-                      onPressed: () {
-                        controller.text = ApiService.productionServerUrl;
-                        setDialogState(() => testResult = null);
-                      },
-                    ),
-                    ActionChip(
-                      avatar: const Icon(
-                        LucideIcons.search,
-                        size: 12,
-                        color: Color(0xFF16A34A),
-                      ),
-                      label: const Text('Auto-Detect Server'),
-                      labelStyle: GoogleFonts.plusJakartaSans(
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.bold,
-                        color: const Color(0xFF16A34A),
-                      ),
-                      backgroundColor: const Color(0xFFF0FDF4),
-                      side: const BorderSide(color: Color(0xFFBBF7D0)),
-                      onPressed: () async {
-                        setDialogState(() {
-                          testing = true;
-                          testResult = 'Detecting best server...';
-                          testResultColor = const Color(0xFF2563EB);
-                        });
-                        final detected = await ApiService.instance
-                            .autoDetectWorkingServerUrl();
-                        setDialogState(() {
-                          testing = false;
-                          if (detected != null) {
-                            controller.text = detected;
-                            testResult = 'Connected: $detected (200 OK)';
-                            testResultColor = const Color(0xFF10B981);
-                          } else {
-                            testResult = 'No online servers detected';
-                            testResultColor = const Color(0xFFEF4444);
-                          }
-                        });
-                      },
-                    ),
-                    ActionChip(
-                      avatar: const Icon(
-                        LucideIcons.wifi,
-                        size: 12,
-                        color: Color(0xFF475569),
-                      ),
-                      label: const Text('Local LAN (192.168.1.14:5000)'),
-                      labelStyle: GoogleFonts.plusJakartaSans(
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w600,
-                        color: const Color(0xFF334155),
-                      ),
-                      backgroundColor: const Color(0xFFF8FAFC),
-                      side: const BorderSide(color: Color(0xFFCBD5E1)),
-                      onPressed: () {
-                        controller.text = 'http://192.168.1.14:5000/api';
-                        setDialogState(() => testResult = null);
-                      },
-                    ),
-                    ActionChip(
-                      avatar: const Icon(
-                        LucideIcons.smartphone,
-                        size: 12,
-                        color: Color(0xFF475569),
-                      ),
-                      label: const Text('Emulator (10.0.2.2)'),
-                      labelStyle: GoogleFonts.plusJakartaSans(
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w600,
-                        color: const Color(0xFF334155),
-                      ),
-                      backgroundColor: const Color(0xFFF8FAFC),
-                      side: const BorderSide(color: Color(0xFFCBD5E1)),
-                      onPressed: () {
-                        controller.text = 'http://10.0.2.2:5000/api';
-                        setDialogState(() => testResult = null);
-                      },
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                if (testResult != null)
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: testResultColor.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: testResultColor.withValues(alpha: 0.3),
-                      ),
-                    ),
-                    child: Text(
-                      testResult!,
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w600,
-                        color: testResultColor,
-                      ),
-                    ),
-                  ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                        ),
-                        onPressed: testing
-                            ? null
-                            : () async {
-                                setDialogState(() {
-                                  testing = true;
-                                  testResult = 'Testing connection...';
-                                  testResultColor = const Color(0xFF3B82F6);
-                                });
-                                final input = controller.text.trim();
-                                final norm = ApiService.normalizeUrl(
-                                  input.isNotEmpty
-                                      ? input
-                                      : ApiService.defaultBaseUrl,
-                                );
-                                try {
-                                  final res = await http
-                                      .get(Uri.parse('$norm/health'))
-                                      .timeout(const Duration(seconds: 4));
-                                  setDialogState(() {
-                                    testing = false;
-                                    if (res.statusCode == 200) {
-                                      testResult = 'Connected (200 OK)';
-                                      testResultColor = const Color(0xFF10B981);
-                                    } else {
-                                      testResult = 'HTTP ${res.statusCode}';
-                                      testResultColor = const Color(0xFFEF4444);
-                                    }
-                                  });
-                                } catch (e) {
-                                  setDialogState(() {
-                                    testing = false;
-                                    testResult = 'Connection failed';
-                                    testResultColor = const Color(0xFFEF4444);
-                                  });
-                                }
-                              },
-                        icon: const Icon(LucideIcons.activity, size: 14),
-                        label: Text(
-                          testing ? 'Pinging...' : 'Test Ping',
-                          style: GoogleFonts.plusJakartaSans(
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    TextButton(
-                      onPressed: () {
-                        controller.text = ApiService.defaultBaseUrl;
-                        setDialogState(() => testResult = null);
-                      },
-                      child: Text(
-                        'Reset Default',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.bold,
-                          color: const Color(0xFF2563EB),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogCtx),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF0F172A),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-              onPressed: () async {
-                final newUrl = controller.text.trim();
-                if (newUrl.isNotEmpty) {
-                  await ApiService.instance.setCustomBaseUrl(newUrl);
-                }
-                if (dialogCtx.mounted) Navigator.pop(dialogCtx);
-                _checkServerHealth();
-                if (mounted && _activeMall != null) {
-                  _parkingService.loadSlotsForMall(_activeMall!.id);
-                }
-              },
-              child: const Text('Save & Apply'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final allFloorSlots = _parkingService.getFloorSlotsForMall(_activeMall?.id);
@@ -3372,6 +3009,10 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
 
     final occupancyRate = totalBays > 0 ? (occupiedBays / totalBays) : 0.0;
     final indicatedFloors = _getFloorOptions();
+    if (indicatedFloors.isNotEmpty &&
+        !indicatedFloors.contains(_selectedFloorId)) {
+      _selectedFloorId = indicatedFloors.first;
+    }
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
@@ -3379,16 +3020,12 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
         backgroundColor: Colors.white,
         elevation: 0.5,
         surfaceTintColor: Colors.transparent,
-        title: GestureDetector(
-          onTap: _showServerConfigDialog,
-          behavior: HitTestBehavior.opaque,
-          child: Text(
-            'Parking Lot & Bay Manager',
-            style: GoogleFonts.plusJakartaSans(
-              fontSize: 16,
-              fontWeight: FontWeight.w800,
-              color: const Color(0xFF0F172A),
-            ),
+        title: Text(
+          'Parking Lot & Bay Manager',
+          style: GoogleFonts.plusJakartaSans(
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+            color: const Color(0xFF0F172A),
           ),
         ),
         actions: [

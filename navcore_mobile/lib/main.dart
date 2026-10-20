@@ -1425,10 +1425,17 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
       MallExplorerScreen(
         mallService: _mallDatabaseService,
         userCoords: _userCoords,
+        destinations: _destinations,
         onSelectActiveMall: (mallId) async {
           await _loadActiveMallPackage(mallId, isAdmin: false);
           _floorPlanKey.currentState?.clearSelection();
           setState(() => _currentIndex = 2);
+        },
+        onSelectDestination: (poi) {
+          setState(() {
+            _arTargetDestination = poi;
+            _currentIndex = 1;
+          });
         },
         onBackClicked: () {
           _floorPlanKey.currentState?.clearSelection();

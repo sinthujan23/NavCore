@@ -419,28 +419,11 @@ class ParkingService extends ChangeNotifier {
     }
   }
 
-  /// Authoritative filter to purge any legacy mock stalls from memory and cache
+  /// Authoritative filter to purge any legacy mock stalls from memory and cache.
+  /// Never filters out legitimate user-created stalls like '1-P-A-01' or '1-P-A01'.
   static bool isLegacyMockSlot(String id) {
     final lower = id.trim().toLowerCase();
-    return lower == '1-p-a01' ||
-        lower == '1-p-a02' ||
-        lower == '1-p-a03' ||
-        lower == '1-p-b01' ||
-        lower == '1-b1-a01' ||
-        lower == '1-b1-a02' ||
-        lower == '1-floor 1-a01' ||
-        lower == '1-floor 1-a02' ||
-        lower.startsWith('p-a0') ||
-        lower.startsWith('p-b0') ||
-        lower.startsWith('1-p-') ||
-        lower == 'p-a01' ||
-        lower == 'p-a02' ||
-        lower == 'p-a03' ||
-        lower == 'p-a04' ||
-        lower == 'p-b01' ||
-        lower == 'p-b02' ||
-        lower == 'p-b03' ||
-        lower == 'p-b04';
+    return lower.startsWith('mock-') || lower.startsWith('dummy-');
   }
 
   /// Applies authoritative server slots to in-memory state and local cache
@@ -517,23 +500,13 @@ class ParkingService extends ChangeNotifier {
       newMap[slot.floorId]!.add(slot);
     }
 
-    // 2. Preserve stalls pending creation, or stalls with an active parked vehicle
+    // 2. Preserve all locally existing/added stalls that were not deleted
     final localMap = _mallFloorSlots[normId] ?? _mallFloorSlots[cleanId] ?? {};
     for (final entry in localMap.entries) {
       for (final localSlot in entry.value) {
         if (isLegacyMockSlot(localSlot.id)) continue;
         final idLower = localSlot.id.trim().toLowerCase();
         if (_deletedSlotIds.contains(idLower)) continue;
-
-        // OCCUPIED VEHICLE PROTECTION: keep stall if a vehicle is parked here
-        final isParkedHere =
-            getParkedVehicleForSlot(localSlot.id) != null ||
-            localSlot.status == ParkingSlotStatus.occupied;
-
-        // Only retain if pending creation OR occupied by a parked vehicle
-        if (!_pendingCreationSlotIds.contains(idLower) && !isParkedHere) {
-          continue;
-        }
 
         final posKey =
             '${normalizeFloorId(localSlot.floorId)}#${localSlot.section.trim().toUpperCase()}#${localSlot.slotNumber}';
@@ -894,29 +867,40 @@ class ParkingService extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
 
-      // First, restore from local cache only if memory is empty
-      if (!_mallFloorSlots.containsKey(normId) ||
-          _mallFloorSlots[normId]!.isEmpty) {
-        _mallFloorSlots[normId] = {};
-        final cached =
-            prefs.getString('cache_parking_slots_$cleanId') ??
-            prefs.getString('cache_parking_slots_$normId');
-        if (cached != null) {
-          try {
-            final List list = jsonDecode(cached);
-            final seenKeys = <String>{};
-            for (final item in list) {
-              final slot = ParkingSlot.fromJson(item);
-              if (isLegacyMockSlot(slot.id)) continue;
-              final key =
-                  '${slot.id.trim().toLowerCase()}#${normalizeFloorId(slot.floorId)}#${slot.section.trim().toUpperCase()}#${slot.slotNumber}';
-              if (seenKeys.contains(key)) continue;
-              seenKeys.add(key);
-              _mallFloorSlots[normId]!.putIfAbsent(slot.floorId, () => []);
-              _mallFloorSlots[normId]![slot.floorId]!.add(slot);
+      // First, restore all valid non-deleted slots from local cache
+      _mallFloorSlots.putIfAbsent(normId, () => {});
+      final cached =
+          prefs.getString('cache_parking_slots_$cleanId') ??
+          prefs.getString('cache_parking_slots_$normId');
+      if (cached != null) {
+        try {
+          final List list = jsonDecode(cached);
+          final seenKeys = <String>{};
+          for (final item in list) {
+            final slot = ParkingSlot.fromJson(item);
+            if (isLegacyMockSlot(slot.id)) continue;
+            final idLower = slot.id.trim().toLowerCase();
+            if (_deletedSlotIds.contains(idLower)) continue;
+            final key =
+                '$idLower#${normalizeFloorId(slot.floorId)}#${slot.section.trim().toUpperCase()}#${slot.slotNumber}';
+            if (seenKeys.contains(key)) continue;
+            seenKeys.add(key);
+            _mallFloorSlots[normId]!.putIfAbsent(slot.floorId, () => []);
+            final existingList = _mallFloorSlots[normId]![slot.floorId]!;
+            final alreadyPresent = existingList.any(
+              (s) =>
+                  s.id.trim().toLowerCase() == idLower ||
+                  (normalizeFloorId(s.floorId) ==
+                          normalizeFloorId(slot.floorId) &&
+                      s.section.trim().toUpperCase() ==
+                          slot.section.trim().toUpperCase() &&
+                      s.slotNumber == slot.slotNumber),
+            );
+            if (!alreadyPresent) {
+              existingList.add(slot);
             }
-          } catch (_) {}
-        }
+          }
+        } catch (_) {}
       }
       _mallFloorSlots[cleanId] = _mallFloorSlots[normId]!;
 
@@ -1013,6 +997,10 @@ class ParkingService extends ChangeNotifier {
     notifyListeners();
 
     final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      'NexNav_deleted_slot_ids',
+      _deletedSlotIds.toList(),
+    );
     final all = _mallFloorSlots[normId]!.values.expand((s) => s).toList();
     final encoded = jsonEncode(all.map((s) => s.toJson()).toList());
     await prefs.setString('cache_parking_slots_$cleanId', encoded);

@@ -179,27 +179,9 @@ class ApiService {
     return const {};
   }
 
-  /// Purges only obsolete hardcoded mock slots without wiping legitimate mall bays
+  /// Ensures legitimate user-created parking slots are never wiped out
   Future<void> clearLegacyMockData() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-
-      final keys = prefs
-          .getKeys()
-          .where((k) => k.startsWith('cache_parking_slots_'))
-          .toList();
-      for (final k in keys) {
-        final cached = prefs.getString(k);
-        if (cached != null &&
-            (cached.contains('"id":"1-P-A01"') ||
-                cached.contains('"id":"1-p-a01"') ||
-                cached.contains('"id":"1-P-B01"') ||
-                cached.contains('"id":"P-A01"') ||
-                cached.contains('"id":"p-a01"'))) {
-          await prefs.remove(k);
-        }
-      }
-    } catch (_) {}
+    return;
   }
 
   String? _cachedToken;

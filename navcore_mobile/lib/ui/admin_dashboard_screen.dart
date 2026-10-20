@@ -25,7 +25,6 @@ import 'admin/admin_osm_map_screen.dart';
 import 'admin/admin_floor_heights_screen.dart';
 import '../data/mall_api_service.dart';
 import '../data/floor_height_model.dart';
-import 'package:http/http.dart' as http;
 import '../data/api_service.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
@@ -530,299 +529,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     return null;
   }
 
-  void _openServerConfigDialog() async {
-    final currentUrl = await ApiService.instance.getBaseUrl();
-    final urlController = TextEditingController(text: currentUrl);
-    bool testing = false;
-    String? testResult;
-    Color testResultColor = const Color(0xFF10B981);
-
-    if (!mounted) return;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          backgroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
-          title: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEEF2FF),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(
-                  LucideIcons.server,
-                  color: Color(0xFF4F46E5),
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Database Backend',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: const Color(0xFF0F172A),
-                      ),
-                    ),
-                    Text(
-                      'Live Cloud & Local Sync',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 11.5,
-                        color: const Color(0xFF64748B),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'API Endpoint URL',
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: const Color(0xFF334155),
-                  ),
-                ),
-                const SizedBox(height: 6),
-                TextField(
-                  controller: urlController,
-                  style: GoogleFonts.jetBrainsMono(
-                    fontSize: 12,
-                    color: const Color(0xFF0F172A),
-                  ),
-                  decoration: InputDecoration(
-                    hintText: 'https://nexnav.hashnate.com/api',
-                    hintStyle: GoogleFonts.jetBrainsMono(
-                      fontSize: 12,
-                      color: const Color(0xFF94A3B8),
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
-                    filled: true,
-                    fillColor: const Color(0xFFF8FAFC),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                if (testResult != null)
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: testResultColor.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: testResultColor.withValues(alpha: 0.3),
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          LucideIcons.checkCircle2,
-                          size: 14,
-                          color: testResultColor,
-                        ),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            testResult!,
-                            style: GoogleFonts.plusJakartaSans(
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w600,
-                              color: testResultColor,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                        ),
-                        onPressed: testing
-                            ? null
-                            : () async {
-                                setDialogState(() {
-                                  testing = true;
-                                  testResult = 'Testing connection...';
-                                  testResultColor = const Color(0xFF3B82F6);
-                                });
-                                final input = urlController.text.trim();
-                                final norm = ApiService.normalizeUrl(
-                                  input.isNotEmpty
-                                      ? input
-                                      : ApiService.defaultBaseUrl,
-                                );
-                                try {
-                                  final res = await http
-                                      .get(Uri.parse('$norm/health'))
-                                      .timeout(const Duration(seconds: 5));
-                                  if (res.statusCode == 200) {
-                                    setDialogState(() {
-                                      testing = false;
-                                      testResult = 'Connected (200 OK)';
-                                      testResultColor = const Color(0xFF10B981);
-                                    });
-                                  } else {
-                                    setDialogState(() {
-                                      testing = false;
-                                      testResult =
-                                          'Server returned HTTP ${res.statusCode}';
-                                      testResultColor = const Color(0xFFEF4444);
-                                    });
-                                  }
-                                } catch (e) {
-                                  setDialogState(() {
-                                    testing = false;
-                                    testResult = 'Connection failed: $e';
-                                    testResultColor = const Color(0xFFEF4444);
-                                  });
-                                }
-                              },
-                        icon: const Icon(LucideIcons.activity, size: 14),
-                        label: Text(
-                          testing ? 'Pinging...' : 'Test Ping',
-                          style: GoogleFonts.plusJakartaSans(
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    TextButton(
-                      onPressed: () {
-                        urlController.text = ApiService.defaultBaseUrl;
-                        setDialogState(() {
-                          testResult = null;
-                        });
-                      },
-                      child: Text(
-                        'Reset Cloud (nexnav.hashnate.com)',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.bold,
-                          color: const Color(0xFF2563EB),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const Divider(height: 24),
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF1F5F9),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        LucideIcons.database,
-                        size: 16,
-                        color: Color(0xFF0F172A),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'All additions, edits, and deletions persist directly into the backend database (db.json and dump.json).',
-                          style: GoogleFonts.plusJakartaSans(
-                            fontSize: 11,
-                            color: const Color(0xFF475569),
-                            height: 1.3,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: Text(
-                'Cancel',
-                style: GoogleFonts.plusJakartaSans(
-                  fontWeight: FontWeight.w600,
-                  color: const Color(0xFF64748B),
-                ),
-              ),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF0F172A),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-              onPressed: () async {
-                final input = urlController.text.trim();
-                if (input.isEmpty || input == ApiService.defaultBaseUrl) {
-                  await ApiService.instance.resetToDefaultBaseUrl();
-                } else {
-                  await ApiService.instance.setCustomBaseUrl(input);
-                }
-                // ignore: use_build_context_synchronously
-                Navigator.pop(ctx);
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Connected to ${urlController.text}'),
-                      backgroundColor: const Color(0xFF10B981),
-                      behavior: SnackBarBehavior.floating,
-                    ),
-                  );
-                }
-              },
-              child: Text(
-                'Save & Connect',
-                style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final activeMall = _resolveActiveMall();
@@ -920,34 +626,30 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              GestureDetector(
-                onTap: _openServerConfigDialog,
-                behavior: HitTestBehavior.opaque,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'NexNav Admin Panel',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: const Color(0xFF94A3B8),
-                        letterSpacing: 0.3,
-                      ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'NexNav Admin Panel',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: const Color(0xFF94A3B8),
+                      letterSpacing: 0.3,
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      widget.adminEmail,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w800,
-                        color: Colors.white,
-                      ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    widget.adminEmail,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
               // Logout Button
               Tooltip(

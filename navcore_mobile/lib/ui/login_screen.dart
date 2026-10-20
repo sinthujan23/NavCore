@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
@@ -110,7 +112,11 @@ class _LoginScreenState extends State<LoginScreen> {
   static const String _prefSavedEmail = 'NexNav_remembered_email';
   static const String _prefSavedRole = 'NexNav_remembered_role';
   static const String _prefAutoLogin = 'NexNav_auto_login_enabled';
+  // Server Client ID (Web Application OAuth Client ID from Google Cloud Console)
   static const String _googleServerClientId =
+      '120287082166-5io846ej4iho3aho5o2pe25fnjtphrod.apps.googleusercontent.com';
+  // iOS Client ID (used by GIDSignIn on iOS)
+  static const String _googleIosClientId =
       '120287082166-5io846ej4iho3aho5o2pe25fnjtphrod.apps.googleusercontent.com';
 
   @override
@@ -692,13 +698,19 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _isGoogleLoading = true);
 
     try {
+      final bool isIOS = !kIsWeb && Platform.isIOS;
       GoogleSignInAccount? googleUser;
+
+      // On iOS, clientId is passed to GIDSignIn; on Android, serverClientId is passed
+      // so Google Play Services can perform secure backend token exchange.
       try {
         final googleSignIn = GoogleSignIn(
-          scopes: ['email', 'profile'],
+          scopes: const ['email', 'profile'],
+          clientId: isIOS ? _googleIosClientId : null,
           serverClientId: _googleServerClientId,
         );
-        // Disconnect/sign out any cached account so the native "Choose an account" sheet always pops up
+
+        // Safely sign out any previous cached session so the account chooser is presented
         try {
           await googleSignIn.signOut();
         } catch (_) {}
@@ -706,10 +718,12 @@ class _LoginScreenState extends State<LoginScreen> {
         googleUser = await googleSignIn.signIn();
       } catch (clientErr) {
         debugPrint(
-          '[GoogleSignIn] Server client error: $clientErr, falling back to direct sign-in...',
+          '[GoogleSignIn] Primary sign-in error: $clientErr, attempting fallback...',
         );
         final fallbackSignIn = GoogleSignIn(
-          scopes: ['email', 'profile'],
+          scopes: const ['email', 'profile'],
+          clientId: isIOS ? _googleIosClientId : null,
+          serverClientId: isIOS ? null : _googleServerClientId,
         );
         try {
           await fallbackSignIn.signOut();
@@ -820,10 +834,24 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
       setState(() => _isGoogleLoading = false);
       final errStr = e.toString().toLowerCase();
-      if (errStr.contains('cancel') || errStr.contains('abort')) {
+      if (errStr.contains('cancel') ||
+          errStr.contains('abort') ||
+          errStr.contains('-4') ||
+          errStr.contains('12501')) {
         // User voluntarily dismissed or canceled the native Google account picker
         return;
       }
+
+      final bool isIOS = !kIsWeb && Platform.isIOS;
+      if (isIOS &&
+          (errStr.contains('-5') ||
+              errStr.contains('url scheme') ||
+              errStr.contains('client') ||
+              errStr.contains('sign_in_failed'))) {
+        _showGoogleSignInErrorDialog(context, e);
+        return;
+      }
+
       String userMessage = 'Google Sign-In: $e';
       if (errStr.contains('10') || errStr.contains('developer_error')) {
         userMessage =
@@ -846,6 +874,98 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
       );
     }
+  }
+
+  void _showGoogleSignInErrorDialog(BuildContext context, dynamic error) {
+    final bool isIOS = !kIsWeb && Platform.isIOS;
+    final errStr = error.toString().toLowerCase();
+
+    String title = 'Google Sign-In';
+    String description =
+        'An error occurred during Google Sign-In. You can sign in using your email and password, or try again.';
+
+    if (errStr.contains('network') || errStr.contains('7')) {
+      title = 'Network Problem';
+      description =
+          'Could not reach Google authentication servers. Please verify your internet connection.';
+    } else if (isIOS) {
+      title = 'iPhone Google Sign-In Setup';
+      description =
+          'Google Sign-In on iOS requires an iOS OAuth Client ID registered in Google Cloud Console matching your Bundle Identifier:\n\n'
+          'com.navcore.app.navcoreMobile\n\n'
+          'You can also sign in or create an account instantly using email and password below.';
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEF2F2),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(
+                LucideIcons.alertCircle,
+                color: Color(0xFFEF4444),
+                size: 22,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                title,
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: const Color(0xFF0F172A),
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          description,
+          style: GoogleFonts.plusJakartaSans(
+            fontSize: 13,
+            height: 1.5,
+            color: const Color(0xFF475569),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text(
+              'Dismiss',
+              style: GoogleFonts.plusJakartaSans(
+                fontWeight: FontWeight.w600,
+                color: const Color(0xFF64748B),
+              ),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF0F172A),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            child: Text(
+              'OK',
+              style: GoogleFonts.plusJakartaSans(
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override

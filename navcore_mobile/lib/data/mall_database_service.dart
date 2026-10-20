@@ -126,6 +126,12 @@ class MallDatabaseService {
 
   List<MallMetadata> get catalog => _catalog;
 
+  String? get activeMallId {
+    final active =
+        _catalog.where((m) => m.isActive || m.isSelected).firstOrNull;
+    return active?.id;
+  }
+
   Future<List<MallMetadata>> getMallsList({
     bool activeOnly = false,
     bool isAdmin = false,
