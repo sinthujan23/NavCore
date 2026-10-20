@@ -9,8 +9,11 @@ import '../data/mall_database_service.dart';
 class LocationLockScreen extends StatefulWidget {
   final RealSensorService sensorService;
   final MallDatabaseService mallService;
-  final Function(GeodeticCoords coords, MallMetadata? detectedMall)
-  onSetupCompleted;
+  final Function(
+    GeodeticCoords coords,
+    MallMetadata? detectedMall, [
+    FullMallPackage? package,
+  ]) onSetupCompleted;
 
   const LocationLockScreen({
     super.key,
@@ -28,6 +31,7 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
       1; // 1: Location, 2: Mall Detection, 3: Downloading, 4: Ready
   GeodeticCoords? _acquiredCoords;
   MallMetadata? _detectedMall;
+  FullMallPackage? _loadedPackage;
   MallMetadata? _nearestMallOutside500m;
   double? _nearestDistanceMeters;
   double _downloadProgress = 0.0;
@@ -46,6 +50,7 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
       _currentStep = 1;
       _statusText = 'Finding your location...';
       _detectedMall = null;
+      _loadedPackage = null;
       _nearestMallOutside500m = null;
       _nearestDistanceMeters = null;
       _downloadProgress = 0.0;
@@ -92,7 +97,7 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
         _statusText = 'Loading map for ${_detectedMall!.name}...';
       });
 
-      await widget.mallService.autoDownloadAndActivateNearestMall(
+      _loadedPackage = await widget.mallService.autoDownloadAndActivateNearestMall(
         _acquiredCoords!,
         maxRadiusMeters: 500.0,
         isAdmin: false,
@@ -338,6 +343,7 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
                       ? () => widget.onSetupCompleted(
                           _acquiredCoords!,
                           _detectedMall,
+                          _loadedPackage,
                         )
                       : _startStartupFlow,
                   icon: Icon(

@@ -1285,21 +1285,54 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
       return LocationLockScreen(
         sensorService: _sensorService,
         mallService: _mallDatabaseService,
-        onSetupCompleted: (coords, mall) async {
-          if (mall != null) {
-            await _loadActiveMallPackage(mall.id, isAdmin: false);
-          } else {
-            final prefs = await SharedPreferences.getInstance();
-            await prefs.remove('NexNav_user_active_mall_id');
-            await prefs.remove('NexNav_active_mall_id');
-            await _loadActiveMallPackage('', isAdmin: false);
+        onSetupCompleted: (coords, mall, [package]) {
+          // Immediately populate building profile, floors, and POIs if package was loaded
+          if (package != null && package.profile.buildingId.isNotEmpty) {
+            double resolvedUserH = coords.height;
+            if (resolvedUserH <= 0.0 || resolvedUserH > 4000.0) {
+              resolvedUserH = package.profile.entranceBaseAnchorHeight > 0
+                  ? package.profile.entranceBaseAnchorHeight
+                  : GeocodingService.resolveTerrainAltitudeFromCoords(
+                      coords.latitude,
+                      coords.longitude,
+                    );
+            }
+            final resolvedFloor = resolveFloorByHeight(
+              resolvedUserH,
+              package.profile,
+            );
+            _buildingProfile = package.profile;
+            _destinations = _deduplicateDestinations(package.destinations);
+            _entranceMarkers = package.entranceMarkers;
+            _activeFloorNumber = resolvedFloor.floorNumber;
           }
+
+          // Transition to Main Navigation page IMMEDIATELY (0 delay!)
           setState(() {
             _userCoords = coords;
             _kalmanFilter.setPosition(coords);
             _isSetupComplete = true;
             _authScreenState = AuthScreenState.mainNav;
           });
+
+          // Run background persistence and slot syncing asynchronously
+          unawaited(() async {
+            try {
+              final prefs = await SharedPreferences.getInstance();
+              if (mall != null) {
+                await prefs.setString('NexNav_user_active_mall_id', mall.id);
+                await prefs.setString('NexNav_active_mall_id', mall.id);
+                await _mallDatabaseService.setActiveMall(mall.id, isAdmin: false);
+                await ParkingService.instance.loadSlotsForMall(mall.id);
+              } else {
+                await prefs.remove('NexNav_user_active_mall_id');
+                await prefs.remove('NexNav_active_mall_id');
+                await _loadActiveMallPackage('', isAdmin: false);
+              }
+            } catch (e) {
+              debugPrint('[Main] Background setup persistence error: $e');
+            }
+          }());
         },
       );
     }
