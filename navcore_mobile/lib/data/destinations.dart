@@ -27,6 +27,37 @@ class DestinationPOI {
     this.mallId,
   });
 
+  DestinationPOI copyWith({
+    String? id,
+    String? name,
+    String? category,
+    int? floorNumber,
+    double? rating,
+    GeodeticCoords? location,
+    String? description,
+    String? openStatus,
+    String? openingHours,
+    String? imageUrl,
+    String? mallId,
+  }) {
+    return DestinationPOI(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      category: category ?? this.category,
+      floorNumber: floorNumber ?? this.floorNumber,
+      rating: rating ?? this.rating,
+      location: location ?? this.location,
+      description: description ?? this.description,
+      openStatus: openStatus ?? this.openStatus,
+      openingHours: openingHours ?? this.openingHours,
+      imageUrl: imageUrl ?? this.imageUrl,
+      mallId: mallId ?? this.mallId,
+    );
+  }
+
+  double get latitude => location.latitude;
+  double get longitude => location.longitude;
+
   Map<String, dynamic> toJson() => {
     'id': id,
     'name': name,
@@ -74,12 +105,94 @@ class DestinationPOI {
     );
   }
 
-  /// Image URL from database. Returns empty string if not provided in database.
+  /// Image URL from database. Returns intelligent category/name match if not specified.
   String get effectiveImageUrl {
-    if (imageUrl != null && imageUrl!.trim().isNotEmpty) {
-      return imageUrl!;
+    if (imageUrl != null) {
+      final clean = imageUrl!.trim();
+      if (clean.isNotEmpty &&
+          clean != 'null' &&
+          clean != 'undefined' &&
+          clean != 'none') {
+        return clean;
+      }
     }
-    return '';
+    return _resolveFallbackImage();
+  }
+
+  String _resolveFallbackImage() {
+    final n = name.toLowerCase();
+    final c = category.toUpperCase();
+
+    if (n.contains('dress') ||
+        n.contains('cloth') ||
+        n.contains('fashion') ||
+        n.contains('zara') ||
+        n.contains('shopy') ||
+        n.contains('zeero') ||
+        c.contains('FASHION') ||
+        c.contains('RETAIL')) {
+      if (n.contains('dress')) {
+        return 'assets/images/shops/kelly_felder_designer_lounge.jpg';
+      }
+      if (n.contains('cotton')) {
+        return 'assets/images/shops/cotton_collection.jpg';
+      }
+      return 'assets/images/shops/odel_flagship_store.jpg';
+    }
+    if (n.contains('com') ||
+        n.contains('hard') ||
+        n.contains('tech') ||
+        n.contains('apple') ||
+        n.contains('phone') ||
+        n.contains('mobile') ||
+        c.contains('TECH') ||
+        c.contains('ELECTRONICS')) {
+      if (n.contains('apple') || n.contains('abans')) {
+        return 'assets/images/shops/abans_elite_apple_lg_store.jpg';
+      }
+      return 'assets/images/shops/samsung_smart_experience_zone.jpg';
+    }
+    if (n.contains('coffee') ||
+        n.contains('cafe') ||
+        n.contains('tea') ||
+        n.contains('pizza') ||
+        n.contains('food') ||
+        n.contains('burger') ||
+        n.contains('bar') ||
+        n.contains('pub') ||
+        n.contains('lounge') ||
+        c.contains('FOOD') ||
+        c.contains('DRINK')) {
+      if (n.contains('tea') || n.contains('dilmah') || n.contains('bar') || n.contains('lounge')) {
+        return 'assets/images/shops/dilmah_tea_lounge.jpg';
+      }
+      if (n.contains('coffee') || n.contains('barista') || n.contains('coffe')) {
+        return 'assets/images/shops/barista_ceylon_espresso_bar.jpg';
+      }
+      if (n.contains('taco') || n.contains('bell')) {
+        return 'assets/images/shops/taco_bell_sri_lanka.jpg';
+      }
+      return 'assets/images/shops/food_studio_ceylon_court.jpg';
+    }
+    if (n.contains('cinema') ||
+        n.contains('movie') ||
+        n.contains('game') ||
+        c.contains('ENTERTAINMENT')) {
+      return 'assets/images/shops/pvr_scope_cinemas_imax.jpg';
+    }
+    if (n.contains('car') ||
+        n.contains('wash') ||
+        n.contains('park') ||
+        n.contains('valet')) {
+      return 'assets/images/shops/b1_auto_car_wash.jpg';
+    }
+    if (n.contains('super') || n.contains('keells') || n.contains('mart')) {
+      return 'assets/images/shops/keells_super_hypermarket.jpg';
+    }
+    if (n.contains('spa') || n.contains('ayurveda')) {
+      return 'assets/images/shops/spa_ceylon_luxury_ayurveda.jpg';
+    }
+    return 'assets/images/shops/odel_flagship_store.jpg';
   }
 
   /// Opening hours from database. Returns openStatus or default if not specified.

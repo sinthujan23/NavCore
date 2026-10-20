@@ -8,7 +8,8 @@ import 'floor_tracker.dart';
 /// Real-World OpenStreetMap (OSM) Live Overpass API Place Discovery Engine
 /// Fetches real building levels, shops, and amenities around user location
 class OSMPlaceDiscoveryService {
-  static final OSMPlaceDiscoveryService instance = OSMPlaceDiscoveryService._internal();
+  static final OSMPlaceDiscoveryService instance =
+      OSMPlaceDiscoveryService._internal();
 
   OSMPlaceDiscoveryService._internal();
 
@@ -29,7 +30,8 @@ class OSMPlaceDiscoveryService {
         _cachedRealPOIs!.isNotEmpty &&
         _lastFetchCoords != null) {
       final latDiff = (userCoords.latitude - _lastFetchCoords!.latitude).abs();
-      final lonDiff = (userCoords.longitude - _lastFetchCoords!.longitude).abs();
+      final lonDiff = (userCoords.longitude - _lastFetchCoords!.longitude)
+          .abs();
       if (latDiff < 0.0005 && lonDiff < 0.0005) {
         return _cachedRealPOIs!;
       }
@@ -43,7 +45,8 @@ class OSMPlaceDiscoveryService {
     }
 
     // Overpass QL Query for real shops, amenities, and building levels
-    final String overpassQuery = '''
+    final String overpassQuery =
+        '''
 [out:json][timeout:15];
 (
   node["shop"](around:${radiusMeters.toInt()},$lat,$lon);
@@ -58,10 +61,9 @@ out center 40;
     final Uri url = Uri.parse('https://overpass-api.de/api/interpreter');
 
     try {
-      final response = await http.post(
-        url,
-        body: {'data': overpassQuery},
-      ).timeout(const Duration(seconds: 8));
+      final response = await http
+          .post(url, body: {'data': overpassQuery})
+          .timeout(const Duration(seconds: 8));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -74,7 +76,11 @@ out center 40;
           final tags = elem['tags'] as Map<String, dynamic>? ?? {};
 
           String name = tags['name'] as String? ?? '';
-          final shopType = tags['shop'] as String? ?? tags['amenity'] as String? ?? tags['building'] as String? ?? '';
+          final shopType =
+              tags['shop'] as String? ??
+              tags['amenity'] as String? ??
+              tags['building'] as String? ??
+              '';
 
           if (name.isEmpty && shopType.isNotEmpty) {
             name = '${_capitalize(shopType)} Store';
@@ -94,7 +100,8 @@ out center 40;
 
           // Resolve OSM level tag to integer floor level
           int floorNum = 1;
-          final String? levelTag = tags['level'] as String? ?? tags['layer'] as String?;
+          final String? levelTag =
+              tags['level'] as String? ?? tags['layer'] as String?;
           if (levelTag != null) {
             final parsedLevel = int.tryParse(levelTag.split(';').first.trim());
             if (parsedLevel != null) {
@@ -103,11 +110,17 @@ out center 40;
           } else {
             // Assign realistic floor levels based on shop type if unlabelled in OSM
             final upperStr = shopType.toLowerCase();
-            if (upperStr.contains('food') || upperStr.contains('restaurant') || upperStr.contains('cafe')) {
+            if (upperStr.contains('food') ||
+                upperStr.contains('restaurant') ||
+                upperStr.contains('cafe')) {
               floorNum = (idCounter % 2 == 0) ? 4 : 1;
-            } else if (upperStr.contains('clothes') || upperStr.contains('fashion') || upperStr.contains('shoes')) {
+            } else if (upperStr.contains('clothes') ||
+                upperStr.contains('fashion') ||
+                upperStr.contains('shoes')) {
               floorNum = 2;
-            } else if (upperStr.contains('electronics') || upperStr.contains('mobile') || upperStr.contains('computer')) {
+            } else if (upperStr.contains('electronics') ||
+                upperStr.contains('mobile') ||
+                upperStr.contains('computer')) {
               floorNum = 3;
             } else if (upperStr.contains('parking')) {
               floorNum = -1;
@@ -119,13 +132,20 @@ out center 40;
           // Category mapping
           String category = 'RETAIL & FASHION';
           final typeLower = shopType.toLowerCase();
-          if (typeLower.contains('food') || typeLower.contains('restaurant') || typeLower.contains('cafe') || typeLower.contains('fast_food')) {
+          if (typeLower.contains('food') ||
+              typeLower.contains('restaurant') ||
+              typeLower.contains('cafe') ||
+              typeLower.contains('fast_food')) {
             category = 'FOOD & DRINK';
-          } else if (typeLower.contains('mobile') || typeLower.contains('electronics') || typeLower.contains('computer')) {
+          } else if (typeLower.contains('mobile') ||
+              typeLower.contains('electronics') ||
+              typeLower.contains('computer')) {
             category = 'TECH & ELECTRONICS';
           } else if (typeLower.contains('parking')) {
             category = 'PARKING';
-          } else if (typeLower.contains('bank') || typeLower.contains('pharmacy') || typeLower.contains('atm')) {
+          } else if (typeLower.contains('bank') ||
+              typeLower.contains('pharmacy') ||
+              typeLower.contains('atm')) {
             category = 'SERVICES';
           }
 
@@ -145,7 +165,8 @@ out center 40;
                 height: floorConfig.absoluteHeightMeters,
               ),
               floorNumber: floorNum,
-              description: 'Real OpenStreetMap venue located at level $floorNum',
+              description:
+                  'Real OpenStreetMap venue located at level $floorNum',
               openStatus: tags['opening_hours'] as String? ?? 'Open Now',
               rating: (4.0 + (idCounter % 10) * 0.1).clamp(4.0, 5.0),
               imageUrl: null,

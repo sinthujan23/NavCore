@@ -45,7 +45,7 @@ class RoutePath {
   final DestinationPOI destinationPOI;
   final List<WaypointNode> waypoints;
   final double totalDistanceMeters;
-  final int estimatedTimeSeconds;
+  final int estimatedTimemilliseconds;
   final bool requiresFloorChange;
 
   const RoutePath({
@@ -55,7 +55,7 @@ class RoutePath {
     required this.destinationPOI,
     required this.waypoints,
     required this.totalDistanceMeters,
-    required this.estimatedTimeSeconds,
+    required this.estimatedTimemilliseconds,
     required this.requiresFloorChange,
   });
 }
@@ -73,18 +73,20 @@ class RouteService {
     double accumulatedDistance = 0.0;
 
     // Node 1: Start Location
-    nodes.add(WaypointNode(
-      id: 'wp-0',
-      buildingId: buildingId,
-      floorNumber: currentFloor,
-      coords: userCoords,
-      localX: 0.0,
-      localY: 0.0,
-      localZ: (currentFloor - 1) * 4.5,
-      type: WaypointType.corridor,
-      instruction: 'Start walking down main corridor',
-      nextWaypointId: floorChange ? 'wp-transition' : 'wp-dest',
-    ));
+    nodes.add(
+      WaypointNode(
+        id: 'wp-0',
+        buildingId: buildingId,
+        floorNumber: currentFloor,
+        coords: userCoords,
+        localX: 0.0,
+        localY: 0.0,
+        localZ: (currentFloor - 1) * 4.5,
+        type: WaypointType.corridor,
+        instruction: 'Start walking down main corridor',
+        nextWaypointId: floorChange ? 'wp-transition' : 'wp-dest',
+      ),
+    );
 
     // Node 2: Vertical Transition (if multi-floor navigation required)
     if (floorChange) {
@@ -100,53 +102,59 @@ class RouteService {
       final latDelta = destination.location.latitude - userCoords.latitude;
       final lonDelta = destination.location.longitude - userCoords.longitude;
 
-      nodes.add(WaypointNode(
-        id: 'wp-1',
-        buildingId: buildingId,
-        floorNumber: currentFloor,
-        coords: GeodeticCoords(
-          latitude: userCoords.latitude + latDelta * 0.35,
-          longitude: userCoords.longitude + lonDelta * 0.35,
-          height: userCoords.height,
+      nodes.add(
+        WaypointNode(
+          id: 'wp-1',
+          buildingId: buildingId,
+          floorNumber: currentFloor,
+          coords: GeodeticCoords(
+            latitude: userCoords.latitude + latDelta * 0.35,
+            longitude: userCoords.longitude + lonDelta * 0.35,
+            height: userCoords.height,
+          ),
+          localX: 15.0,
+          localY: 10.0,
+          localZ: (currentFloor - 1) * 4.5,
+          type: WaypointType.corridor,
+          instruction: 'Approach floor transition zone',
+          nextWaypointId: 'wp-transition',
         ),
-        localX: 15.0,
-        localY: 10.0,
-        localZ: (currentFloor - 1) * 4.5,
-        type: WaypointType.corridor,
-        instruction: 'Approach floor transition zone',
-        nextWaypointId: 'wp-transition',
-      ));
+      );
 
-      nodes.add(WaypointNode(
-        id: 'wp-transition',
-        buildingId: buildingId,
-        floorNumber: currentFloor,
-        coords: GeodeticCoords(
-          latitude: userCoords.latitude + latDelta * 0.50,
-          longitude: userCoords.longitude + lonDelta * 0.50,
-          height: userCoords.height,
+      nodes.add(
+        WaypointNode(
+          id: 'wp-transition',
+          buildingId: buildingId,
+          floorNumber: currentFloor,
+          coords: GeodeticCoords(
+            latitude: userCoords.latitude + latDelta * 0.50,
+            longitude: userCoords.longitude + lonDelta * 0.50,
+            height: userCoords.height,
+          ),
+          localX: 20.0,
+          localY: 15.0,
+          localZ: (currentFloor - 1) * 4.5,
+          type: transitionType,
+          instruction: transitionText,
+          nextWaypointId: 'wp-dest',
         ),
-        localX: 20.0,
-        localY: 15.0,
-        localZ: (currentFloor - 1) * 4.5,
-        type: transitionType,
-        instruction: transitionText,
-        nextWaypointId: 'wp-dest',
-      ));
+      );
     }
 
     // Final Node: Destination POI
-    nodes.add(WaypointNode(
-      id: 'wp-dest',
-      buildingId: buildingId,
-      floorNumber: destination.floorNumber,
-      coords: destination.location,
-      localX: 35.0,
-      localY: 25.0,
-      localZ: (destination.floorNumber - 1) * 4.5,
-      type: WaypointType.destination,
-      instruction: 'Arrive at ${destination.name}',
-    ));
+    nodes.add(
+      WaypointNode(
+        id: 'wp-dest',
+        buildingId: buildingId,
+        floorNumber: destination.floorNumber,
+        coords: destination.location,
+        localX: 35.0,
+        localY: 25.0,
+        localZ: (destination.floorNumber - 1) * 4.5,
+        type: WaypointType.destination,
+        instruction: 'Arrive at ${destination.name}',
+      ),
+    );
 
     // Calculate total route distance incorporating 3D floor height differences
     for (int i = 0; i < nodes.length - 1; i++) {
@@ -167,7 +175,7 @@ class RouteService {
     }
 
     // Estimate walking speed at 1.2 m/s
-    final estSeconds = math.max(10, (accumulatedDistance / 1.2).round());
+    final estmilliseconds = math.max(10, (accumulatedDistance / 1.2).round());
 
     return RoutePath(
       routeId: 'route-${DateTime.now().millisecondsSinceEpoch}',
@@ -185,7 +193,7 @@ class RouteService {
       destinationPOI: destination,
       waypoints: nodes,
       totalDistanceMeters: accumulatedDistance,
-      estimatedTimeSeconds: estSeconds,
+      estimatedTimemilliseconds: estmilliseconds,
       requiresFloorChange: floorChange,
     );
   }

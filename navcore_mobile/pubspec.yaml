@@ -23,6 +23,8 @@ dependencies:
   vector_math: ^2.1.4
   flutter_map: ^7.0.2
   latlong2: ^0.9.1
+  google_sign_in: ^6.2.2
+  image_picker: ^1.1.2
 
 dev_dependencies:
   flutter_test:

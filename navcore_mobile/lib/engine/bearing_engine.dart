@@ -173,7 +173,7 @@ class RealWorldSpatialMetrics {
   final double euclidean3DDistanceMeters; // d_3D = sqrt(d_2D² + Δh²)
   final double
   distanceFromGroundMeters; // Elevation difference from Earth Ground (Floor 1 Entrance)
-  final double estimatedWalkTimeSeconds; // d_3D / 1.4 m/s walking speed
+  final double estimatedWalkTimemilliseconds; // d_3D / 1.4 m/s walking speed
   final double floorWidthMeters; // Floor width dimension in meters
   final double floorLengthMeters; // Floor length dimension in meters
   final double floorAreaSqMeters; // Floor real-world surface area in m²
@@ -184,7 +184,7 @@ class RealWorldSpatialMetrics {
     required this.elevationDeltaMeters,
     required this.euclidean3DDistanceMeters,
     required this.distanceFromGroundMeters,
-    required this.estimatedWalkTimeSeconds,
+    required this.estimatedWalkTimemilliseconds,
     required this.floorWidthMeters,
     required this.floorLengthMeters,
     required this.floorAreaSqMeters,
@@ -221,7 +221,7 @@ RealWorldSpatialMetrics calculateRealWorldSpatialMetrics({
     elevationDeltaMeters: deltaH,
     euclidean3DDistanceMeters: d3D,
     distanceFromGroundMeters: groundDist,
-    estimatedWalkTimeSeconds: walkTime,
+    estimatedWalkTimemilliseconds: walkTime,
     floorWidthMeters: floorWidthMeters,
     floorLengthMeters: floorLengthMeters,
     floorAreaSqMeters: floorWidthMeters * floorLengthMeters,
@@ -254,7 +254,7 @@ RealWorldSpatialMetrics calculateSameCoordinateSpatialMetrics({
     elevationDeltaMeters: deltaH,
     euclidean3DDistanceMeters: d3D,
     distanceFromGroundMeters: distanceFromGround,
-    estimatedWalkTimeSeconds: d3D / 1.4,
+    estimatedWalkTimemilliseconds: d3D / 1.4,
     floorWidthMeters: poiFloorConfig.floorWidthMeters,
     floorLengthMeters: poiFloorConfig.floorLengthMeters,
     floorAreaSqMeters: poiFloorConfig.floorAreaSqMeters,

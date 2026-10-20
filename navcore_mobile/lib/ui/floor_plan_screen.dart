@@ -4,12 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http;
 
 import '../engine/floor_tracker.dart';
 import '../engine/ecef_engine.dart';
 import '../engine/bearing_engine.dart';
 import '../data/destinations.dart';
 import '../data/parking_service.dart';
+import '../data/api_service.dart';
 import '../data/mall_database_service.dart';
 import 'shop_details_screen.dart';
 import 'dpad_control_widget.dart';
@@ -50,7 +52,12 @@ class FloorPlanScreen extends StatefulWidget {
     this.mallService,
     this.onOpenMallExplorer,
     this.onRefreshLocation,
+    this.isAdmin = false,
+    this.onOpenAdminDashboard,
   });
+
+  final bool isAdmin;
+  final VoidCallback? onOpenAdminDashboard;
 
   @override
   State<FloorPlanScreen> createState() => FloorPlanScreenState();
@@ -59,22 +66,39 @@ class FloorPlanScreen extends StatefulWidget {
 class FloorPlanScreenState extends State<FloorPlanScreen>
     with SingleTickerProviderStateMixin {
   DestinationPOI? _selectedPOI;
+  ParkingSlot? _selectedParkingSlot;
   FloorLevelConfig? _overrideFloor;
   String _selectedCategoryFilter = 'ALL';
   bool _showFilterChips = false;
   final double _zoomScale = 1.0;
   final bool _showDpad = false;
   final ParkingService _parkingService = ParkingService();
+  bool _isServerOnline = false;
   Timer? _parkingAutoRefreshTimer;
+  StreamSubscription<String>? _parkingSyncSubscription;
 
   late AnimationController _pulseController;
 
   FloorLevelConfig get displayFloor => _overrideFloor ?? widget.currentFloor;
 
+  Future<void> _checkServerHealth() async {
+    try {
+      final isUp = await ApiService.instance.testConnection();
+      if (mounted && isUp != _isServerOnline) {
+        setState(() => _isServerOnline = isUp);
+      }
+    } catch (_) {
+      if (mounted && _isServerOnline) {
+        setState(() => _isServerOnline = false);
+      }
+    }
+  }
+
   void clearSelection() {
     if (mounted) {
       setState(() {
         _selectedPOI = null;
+        _selectedParkingSlot = null;
       });
     }
   }
@@ -86,9 +110,6 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
     if (widget.mallService != null) {
       final active = widget.mallService!.catalog.where((m) => m.isActive);
       if (active.isNotEmpty) return active.first.id;
-      if (widget.mallService!.catalog.isNotEmpty) {
-        return widget.mallService!.catalog.first.id;
-      }
     }
     return null;
   }
@@ -97,156 +118,185 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
     String? mallId = _resolveActiveMallId();
     if (mallId == null || mallId.isEmpty) {
       final prefs = await SharedPreferences.getInstance();
-      mallId = prefs.getString('NexNav_active_mall_id');
+      mallId =
+          prefs.getString('NexNav_active_mall_id') ??
+          prefs.getString('active_mall_id');
     }
-    if (mallId == null || mallId.isEmpty) {
-      if (widget.destinations.isNotEmpty) {
-        mallId = '1';
-      }
+    if (mallId == null || mallId.trim().isEmpty) {
+      return;
     }
-    if (mallId != null && mallId.isNotEmpty) {
-      await _parkingService.loadSlotsForMall(mallId);
+    await _parkingService.loadSlotsForMall(mallId.trim());
+    if (mounted) {
+      setState(() {});
     }
   }
 
   String _getFloorIdString(FloorLevelConfig floor) {
-    final cleanFloorId = floor.floorId.trim().toUpperCase();
-    if (cleanFloorId == 'P' ||
-        cleanFloorId.startsWith('P') ||
-        cleanFloorId.contains('PARK')) {
-      return cleanFloorId;
-    }
-    final nameUpper = floor.name.trim().toUpperCase();
-    if (nameUpper == 'P' ||
-        nameUpper.startsWith('P') ||
-        nameUpper.contains('PARK')) {
-      return cleanFloorId.isNotEmpty ? cleanFloorId : 'P';
-    }
-    if (nameUpper.contains('BASEMENT 1') || nameUpper == 'B1') return 'B1';
-    if (nameUpper.contains('BASEMENT 2') || nameUpper == 'B2') return 'B2';
-    if (nameUpper.contains('BASEMENT 3') || nameUpper == 'B3') return 'B3';
-    if (nameUpper.contains('GROUND') || nameUpper == 'GF' || nameUpper == 'G') {
-      return 'GF';
-    }
-    if (floor.floorNumber == -1) {
-      return cleanFloorId.isNotEmpty ? cleanFloorId : 'B1';
-    }
-    if (floor.floorNumber == -2) {
-      return cleanFloorId.isNotEmpty ? cleanFloorId : 'B2';
-    }
-    if (floor.floorNumber == -3) {
-      return cleanFloorId.isNotEmpty ? cleanFloorId : 'B3';
-    }
-    if (floor.floorNumber < 0) return 'B${floor.floorNumber.abs()}';
-    if (floor.floorNumber == 0) return 'GF';
-    if (nameUpper.startsWith('FLOOR ')) return 'F${floor.floorNumber}';
-    if (nameUpper.startsWith('LEVEL ')) return 'L${floor.floorNumber}';
-    return floor.floorId.isNotEmpty ? floor.floorId : 'F${floor.floorNumber}';
-  }
-
-  String _getFloorPillLabel(FloorLevelConfig floor) {
-    final fIdUpper = floor.floorId.trim().toUpperCase();
-    final fNameUpper = floor.name.trim().toUpperCase();
-    if (fIdUpper == 'P' ||
-        fNameUpper == 'P' ||
-        fNameUpper == 'PARKING P' ||
-        fNameUpper == 'PARKING') {
-      return 'P';
-    }
-    if (fIdUpper.startsWith('P') && fIdUpper.length <= 4) {
-      return fIdUpper;
-    }
-    if (fNameUpper.startsWith('PARKING ')) {
-      final suffix = fNameUpper.replaceFirst('PARKING ', '').trim();
-      if (suffix.isNotEmpty && suffix.length <= 3) return suffix;
-      return 'P';
-    }
-    if (fNameUpper.contains('PARK')) {
+    final norm = ParkingService.normalizeFloorId(floor.floorId);
+    if (norm == 'P' || floor.floorId.toUpperCase() == 'P') {
       return 'P';
     }
     if (floor.floorNumber < 0) {
       return 'B${floor.floorNumber.abs()}';
     }
-    if (floor.floorNumber == 0) {
+    if (norm == 'B1' || norm == 'B2' || norm == 'B3') {
+      return norm;
+    }
+    final nameNorm = ParkingService.normalizeFloorId(floor.name);
+    if (nameNorm == 'P' || floor.name.toUpperCase().contains('PARK')) {
+      return 'P';
+    }
+    if (nameNorm == 'B1' || nameNorm == 'B2' || nameNorm == 'B3') {
+      return nameNorm;
+    }
+    if (floor.floorNumber == 0 || norm == 'GF') {
+      return 'GF';
+    }
+    return floor.floorId.isNotEmpty && floor.floorId.startsWith('F')
+        ? floor.floorId
+        : 'F${floor.floorNumber}';
+  }
+
+  String _getFloorPillLabel(FloorLevelConfig floor) {
+    final norm = ParkingService.normalizeFloorId(floor.floorId);
+    if (norm == 'P' || floor.floorId.toUpperCase() == 'P') {
+      return 'P';
+    }
+    if (floor.floorNumber < 0) {
+      return 'B${floor.floorNumber.abs()}';
+    }
+    if (norm == 'B1' || norm == 'B2' || norm == 'B3') {
+      return norm;
+    }
+    final nameNorm = ParkingService.normalizeFloorId(floor.name);
+    if (nameNorm == 'P' || floor.name.toUpperCase().contains('PARK')) {
+      return 'P';
+    }
+    if (nameNorm == 'B1' || nameNorm == 'B2' || nameNorm == 'B3') {
+      return nameNorm;
+    }
+    if (floor.floorNumber == 0 || norm == 'GF') {
       return 'GF';
     }
     return 'F${floor.floorNumber}';
   }
 
   List<FloorLevelConfig> get _effectiveFloorLevels {
+    if (widget.buildingProfile.buildingId.isEmpty ||
+        widget.buildingProfile.floors.isEmpty) {
+      return const [];
+    }
     final List<FloorLevelConfig> floors = [];
 
-    // Find any parking floors present in buildingProfile
-    final profileParkingFloors = widget.buildingProfile.floors.where((f) {
-      final fId = f.floorId.trim().toUpperCase();
-      final fName = f.name.trim().toUpperCase();
-      return fId.startsWith('P') ||
-          fName.startsWith('P') ||
-          fName.contains('PARK');
-    }).toList();
+    // Add profile floors first
+    for (final f in widget.buildingProfile.floors) {
+      floors.add(f);
+    }
 
-    // Collect all parking floor keys from parkingService
-    final Set<String> detectedParkingFloorIds = <String>{};
-    for (final key in _parkingService.allFloorSlots.keys) {
-      final k = key.trim().toUpperCase();
-      if (k.startsWith('P') || k.contains('PARK') || k.startsWith('B')) {
-        detectedParkingFloorIds.add(key.trim());
+    final bId = widget.buildingProfile.buildingId.isNotEmpty
+        ? widget.buildingProfile.buildingId
+        : (_resolveActiveMallId() ?? '');
+    final double groundAlt = widget.buildingProfile.entranceBaseAnchorHeight > 0
+        ? widget.buildingProfile.entranceBaseAnchorHeight
+        : 8.5;
+    final double gap = widget.buildingProfile.floorGapMeters > 0
+        ? widget.buildingProfile.floorGapMeters
+        : 3.8;
+
+    // Collect all candidate parking floors: ALWAYS include 'P' by default so parking is never missing!
+    final candidateParkingFloors = <String>{'P'};
+
+    // Check if mall metadata has configured parking floors
+    if (widget.mallService != null && bId.isNotEmpty) {
+      final matches = widget.mallService!.catalog.where(
+        (m) =>
+            ParkingService.normalizeMallId(m.id) ==
+            ParkingService.normalizeMallId(bId),
+      );
+      if (matches.isNotEmpty) {
+        for (final pf in matches.first.parkingFloors) {
+          if (pf.trim().isNotEmpty) candidateParkingFloors.add(pf.trim());
+        }
       }
     }
 
-    final double groundAlt = widget.buildingProfile.entranceBaseAnchorHeight;
+    // Also include any floors detected in ParkingService
+    final mallSlots = _parkingService.getFloorSlotsForMall(bId);
+    candidateParkingFloors.addAll(mallSlots.keys);
 
-    // Add Parking floor 'P' (and any other detected parking floors like P1, B1)
-    if (profileParkingFloors.isNotEmpty) {
-      floors.addAll(profileParkingFloors);
-    } else {
-      for (final pId in detectedParkingFloorIds) {
-        final upper = pId.toUpperCase();
-        final int fNum = upper == 'P'
-            ? -1
-            : (int.tryParse(upper.replaceAll(RegExp(r'[^0-9]'), '')) != null
-                  ? -(int.parse(upper.replaceAll(RegExp(r'[^0-9]'), '')))
-                  : -1);
+    for (final pId in candidateParkingFloors) {
+      final normKey = ParkingService.normalizeFloorId(pId);
+      int fNum = -1;
+      if (normKey == 'P') {
+        fNum = -1;
+      } else if (normKey.startsWith('B')) {
+        final digits =
+            int.tryParse(normKey.replaceAll(RegExp(r'[^0-9]'), '')) ?? 1;
+        fNum = -digits;
+      } else if (normKey == 'GF' || normKey == 'G' || normKey == '0') {
+        fNum = 0;
+      } else {
+        final digits = int.tryParse(normKey.replaceAll(RegExp(r'[^0-9]'), ''));
+        if (digits != null) fNum = digits;
+      }
+
+      final alreadyPresent = floors.any((f) {
+        final fNorm = ParkingService.normalizeFloorId(f.floorId);
+        final nameNorm = ParkingService.normalizeFloorId(f.name);
+        return fNorm == normKey ||
+            nameNorm == normKey ||
+            (normKey == 'P' &&
+                (fNorm == 'P' || f.floorNumber < 0 || fNorm == 'B1'));
+      });
+
+      if (!alreadyPresent) {
+        final double alt = fNum <= 0
+            ? (groundAlt + (fNum * gap))
+            : (groundAlt + ((fNum - 1) * gap));
+
         floors.add(
           FloorLevelConfig(
-            floorId: pId,
+            floorId: normKey == 'P' ? 'P' : pId,
             floorNumber: fNum,
-            name: upper == 'P' ? 'Parking Floor P' : 'Parking $pId',
-            relativeVectorMeters: -3.8,
-            absoluteHeightMeters: groundAlt - 3.8,
-            bandMinMeters: groundAlt - 6.0,
-            bandMaxMeters: groundAlt - 1.0,
+            name: normKey == 'P'
+                ? 'Parking (P)'
+                : (normKey.startsWith('B')
+                      ? 'Basement $normKey'
+                      : (normKey == 'GF' ? 'Ground Floor' : 'Floor F$pId')),
+            relativeVectorMeters: (fNum - 1) * gap,
+            absoluteHeightMeters: alt,
+            bandMinMeters: alt - 2.0,
+            bandMaxMeters: alt + 2.0,
             storesCount: 0,
           ),
         );
       }
     }
 
-    // Add retail building floors from building profile (F1, F2, ...)
-    for (final f in widget.buildingProfile.floors) {
-      final isAlreadyAdded = floors.any(
-        (existing) =>
-            existing.floorId.trim().toUpperCase() ==
-                f.floorId.trim().toUpperCase() ||
-            (existing.floorNumber == f.floorNumber && existing.floorNumber > 0),
-      );
-      if (!isAlreadyAdded) {
-        floors.add(f);
-      }
-    }
-
+    // Sort floors by floorNumber ascending (-2, -1, 0, 1, 2...) so P (-1) is first
+    floors.sort((a, b) => a.floorNumber.compareTo(b.floorNumber));
     return floors;
   }
 
   List<ParkingSlot> _getSlotsForDisplayFloor(FloorLevelConfig floor) {
+    final bId = widget.buildingProfile.buildingId.isNotEmpty
+        ? widget.buildingProfile.buildingId
+        : (_resolveActiveMallId() ?? '');
+    if (bId.isEmpty) {
+      return const [];
+    }
     final primaryId = _getFloorIdString(floor);
-    final primarySlots = _parkingService.fetchFloorMap(primaryId);
+    final primarySlots = _parkingService.fetchFloorMap(primaryId, bId);
     if (primarySlots.isNotEmpty) return primarySlots;
 
     final isParkFloor =
+        primaryId == 'P' ||
+        primaryId == 'B1' ||
+        primaryId.startsWith('B') ||
         primaryId.startsWith('P') ||
         floor.floorId.toUpperCase().startsWith('P') ||
         floor.name.toUpperCase().contains('PARK') ||
+        floor.name.toUpperCase().contains('BASEMENT') ||
         floor.floorNumber < 0;
 
     final candidateKeys = <String>{
@@ -254,7 +304,7 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
       floor.floorId,
       floor.name,
       '${floor.floorNumber}',
-      if (isParkFloor) ...['P', 'P1', 'P2', 'Parking', 'B1', 'B2', 'GF'],
+      if (isParkFloor) ...['P', 'B1', 'B2', 'B3', 'P1', 'P2', 'Parking', 'GF'],
       if (floor.floorNumber < 0) 'B${floor.floorNumber.abs()}',
       if (floor.floorNumber < 0) 'Basement ${floor.floorNumber.abs()}',
       if (floor.floorNumber == 0) ...['GF', 'G', 'Ground', 'Ground Floor'],
@@ -268,17 +318,19 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
 
     for (final candidate in candidateKeys) {
       if (candidate.trim().isEmpty) continue;
-      final s = _parkingService.fetchFloorMap(candidate);
+      final s = _parkingService.fetchFloorMap(candidate, bId);
       if (s.isNotEmpty) return s;
     }
 
-    final allSlots = _parkingService.allFloorSlots.values
+    final allSlots = _parkingService
+        .getFloorSlotsForMall(bId)
+        .values
         .expand((l) => l)
         .toList();
+
     final matched = allSlots.where((s) {
-      final sFloor = s.floorId.trim().toUpperCase();
       for (final c in candidateKeys) {
-        if (sFloor == c.trim().toUpperCase()) return true;
+        if (ParkingService.isMatchingFloor(s.floorId, c)) return true;
       }
       return false;
     }).toList();
@@ -290,20 +342,34 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
       return allSlots;
     }
 
-    return [];
+    // Zero mock data: return empty if no real slots are generated or loaded
+    return const [];
   }
 
   @override
   void initState() {
     super.initState();
-    final effectiveUser =
-        widget.userEmail.isNotEmpty ? widget.userEmail : 'user-default';
+    final effectiveUser = widget.userEmail.isNotEmpty
+        ? widget.userEmail
+        : 'user-default';
     _parkingService.authenticateUser(userId: effectiveUser, token: 'session');
     _parkingService.addListener(_onParkingStateChanged);
     _loadParkingSlots();
-    _parkingAutoRefreshTimer = Timer.periodic(const Duration(seconds: 6), (_) {
+    _checkServerHealth();
+    _parkingService.startLiveSync(intervalSeconds: 1);
+
+    _parkingSyncSubscription = ApiService.instance.syncStream.listen((event) {
+      if (mounted && (event == 'parking' || event == 'destinations')) {
+        _loadParkingSlots();
+      }
+    });
+
+    _parkingAutoRefreshTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) {
         _loadParkingSlots();
+        if ((_parkingAutoRefreshTimer?.tick ?? 0) % 3 == 0) {
+          _checkServerHealth();
+        }
       }
     });
 
@@ -350,7 +416,9 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
 
   @override
   void dispose() {
+    _parkingSyncSubscription?.cancel();
     _parkingAutoRefreshTimer?.cancel();
+    _parkingService.stopLiveSync();
     _parkingService.removeListener(_onParkingStateChanged);
     _pulseController.dispose();
     super.dispose();
@@ -362,7 +430,326 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
     }
   }
 
-  Widget _buildOutOfRangeView() {
+  void _showServerConfigDialog() async {
+    final currentUrl = await ApiService.instance.getBaseUrl();
+    final controller = TextEditingController(text: currentUrl);
+    bool testing = false;
+    String? testResult;
+    Color testResultColor = const Color(0xFF10B981);
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (dialogCtx, setDialogState) => AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22),
+          ),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEFF6FF),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  LucideIcons.server,
+                  color: Color(0xFF2563EB),
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Backend Server API',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: const Color(0xFF0F172A),
+                      ),
+                    ),
+                    Text(
+                      'Live Cloud & Local Database Sync',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 11.5,
+                        color: const Color(0xFF64748B),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'API Endpoint URL',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: const Color(0xFF334155),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                TextField(
+                  controller: controller,
+                  style: GoogleFonts.jetBrainsMono(
+                    fontSize: 12.5,
+                    color: const Color(0xFF0F172A),
+                  ),
+                  decoration: InputDecoration(
+                    hintText: 'https://nexnav.hashnate.com/api',
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    filled: true,
+                    fillColor: const Color(0xFFF8FAFC),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    ActionChip(
+                      avatar: const Icon(
+                        LucideIcons.cloud,
+                        size: 12,
+                        color: Color(0xFF2563EB),
+                      ),
+                      label: const Text('Live Cloud (nexnav.hashnate.com)'),
+                      labelStyle: GoogleFonts.plusJakartaSans(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.bold,
+                        color: const Color(0xFF2563EB),
+                      ),
+                      backgroundColor: const Color(0xFFEFF6FF),
+                      side: const BorderSide(color: Color(0xFFBFDBFE)),
+                      onPressed: () {
+                        controller.text = ApiService.productionServerUrl;
+                        setDialogState(() => testResult = null);
+                      },
+                    ),
+                    ActionChip(
+                      avatar: const Icon(
+                        LucideIcons.search,
+                        size: 12,
+                        color: Color(0xFF16A34A),
+                      ),
+                      label: const Text('Auto-Detect Server'),
+                      labelStyle: GoogleFonts.plusJakartaSans(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.bold,
+                        color: const Color(0xFF16A34A),
+                      ),
+                      backgroundColor: const Color(0xFFF0FDF4),
+                      side: const BorderSide(color: Color(0xFFBBF7D0)),
+                      onPressed: () async {
+                        setDialogState(() {
+                          testing = true;
+                          testResult = 'Detecting best server...';
+                          testResultColor = const Color(0xFF2563EB);
+                        });
+                        final detected = await ApiService.instance
+                            .autoDetectWorkingServerUrl();
+                        setDialogState(() {
+                          testing = false;
+                          if (detected != null) {
+                            controller.text = detected;
+                            testResult = 'Connected: $detected (200 OK)';
+                            testResultColor = const Color(0xFF10B981);
+                          } else {
+                            testResult = 'No online servers detected';
+                            testResultColor = const Color(0xFFEF4444);
+                          }
+                        });
+                      },
+                    ),
+                    ActionChip(
+                      avatar: const Icon(
+                        LucideIcons.wifi,
+                        size: 12,
+                        color: Color(0xFF475569),
+                      ),
+                      label: const Text('Local LAN (192.168.1.14:5000)'),
+                      labelStyle: GoogleFonts.plusJakartaSans(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFF334155),
+                      ),
+                      backgroundColor: const Color(0xFFF8FAFC),
+                      side: const BorderSide(color: Color(0xFFCBD5E1)),
+                      onPressed: () {
+                        controller.text = 'http://192.168.1.14:5000/api';
+                        setDialogState(() => testResult = null);
+                      },
+                    ),
+                    ActionChip(
+                      avatar: const Icon(
+                        LucideIcons.smartphone,
+                        size: 12,
+                        color: Color(0xFF475569),
+                      ),
+                      label: const Text('Emulator (10.0.2.2)'),
+                      labelStyle: GoogleFonts.plusJakartaSans(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFF334155),
+                      ),
+                      backgroundColor: const Color(0xFFF8FAFC),
+                      side: const BorderSide(color: Color(0xFFCBD5E1)),
+                      onPressed: () {
+                        controller.text = 'http://10.0.2.2:5000/api';
+                        setDialogState(() => testResult = null);
+                      },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                if (testResult != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: testResultColor.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: testResultColor.withValues(alpha: 0.3),
+                      ),
+                    ),
+                    child: Text(
+                      testResult!,
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                        color: testResultColor,
+                      ),
+                    ),
+                  ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                        onPressed: testing
+                            ? null
+                            : () async {
+                                setDialogState(() {
+                                  testing = true;
+                                  testResult = 'Testing connection...';
+                                  testResultColor = const Color(0xFF3B82F6);
+                                });
+                                final input = controller.text.trim();
+                                final norm = ApiService.normalizeUrl(
+                                  input.isNotEmpty
+                                      ? input
+                                      : ApiService.defaultBaseUrl,
+                                );
+                                try {
+                                  final res = await http
+                                      .get(Uri.parse('$norm/health'))
+                                      .timeout(const Duration(seconds: 4));
+                                  setDialogState(() {
+                                    testing = false;
+                                    if (res.statusCode == 200) {
+                                      testResult = 'Connected (200 OK)';
+                                      testResultColor = const Color(0xFF10B981);
+                                    } else {
+                                      testResult = 'HTTP ${res.statusCode}';
+                                      testResultColor = const Color(0xFFEF4444);
+                                    }
+                                  });
+                                } catch (e) {
+                                  setDialogState(() {
+                                    testing = false;
+                                    testResult = 'Connection failed';
+                                    testResultColor = const Color(0xFFEF4444);
+                                  });
+                                }
+                              },
+                        icon: const Icon(LucideIcons.activity, size: 14),
+                        label: Text(
+                          testing ? 'Pinging...' : 'Test Ping',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    TextButton(
+                      onPressed: () {
+                        controller.text = ApiService.defaultBaseUrl;
+                        setDialogState(() => testResult = null);
+                      },
+                      child: Text(
+                        'Reset Default',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.bold,
+                          color: const Color(0xFF2563EB),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogCtx),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF0F172A),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              onPressed: () async {
+                final newUrl = controller.text.trim();
+                if (newUrl.isNotEmpty) {
+                  await ApiService.instance.setCustomBaseUrl(newUrl);
+                }
+                if (dialogCtx.mounted) Navigator.pop(dialogCtx);
+                _checkServerHealth();
+                if (mounted) {
+                  _loadParkingSlots();
+                }
+              },
+              child: const Text('Save & Apply'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOutOfRangeView({bool isNoVenue = false}) {
     final hasGps =
         widget.userCoords.latitude != 0.0 && widget.userCoords.longitude != 0.0;
     MallMetadata? nearestMall;
@@ -409,7 +796,7 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
               ),
             ),
             Text(
-              'Proximity: 500m Limit',
+              isNoVenue ? 'No Active Venue' : 'Proximity: 500m Limit',
               overflow: TextOverflow.ellipsis,
               style: GoogleFonts.plusJakartaSans(
                 fontSize: 11,
@@ -442,30 +829,38 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              // Radar Pulse Icon
+              // Icon
               Container(
                 width: 96,
                 height: 96,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: const Color(0xFFEFF6FF),
+                  color: isNoVenue
+                      ? const Color(0xFFF1F5F9)
+                      : const Color(0xFFEFF6FF),
                   border: Border.all(
-                    color: const Color(0xFFBFDBFE),
+                    color: isNoVenue
+                        ? const Color(0xFFCBD5E1)
+                        : const Color(0xFFBFDBFE),
                     width: 2.5,
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: const Color(0xFF2563EB).withValues(alpha: 0.15),
+                      color: isNoVenue
+                          ? const Color(0x1A0F172A)
+                          : const Color(0xFF2563EB).withValues(alpha: 0.15),
                       blurRadius: 24,
                       spreadRadius: 4,
                     ),
                   ],
                 ),
-                child: const Center(
+                child: Center(
                   child: Icon(
-                    LucideIcons.radar,
+                    isNoVenue ? LucideIcons.building2 : LucideIcons.radar,
                     size: 44,
-                    color: Color(0xFF2563EB),
+                    color: isNoVenue
+                        ? const Color(0xFF475569)
+                        : const Color(0xFF2563EB),
                   ),
                 ),
               ),
@@ -473,7 +868,7 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
 
               // Title
               Text(
-                'No Mall Within 500m',
+                isNoVenue ? 'No Active Venue Detected' : 'No Mall Within 500m',
                 textAlign: TextAlign.center,
                 style: GoogleFonts.plusJakartaSans(
                   fontSize: 22,
@@ -488,7 +883,9 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
               ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 340),
                 child: Text(
-                  'Indoor maps only auto-load when you are within 500m of a supported shopping mall. Malls above 500m are not loaded in maps.',
+                  isNoVenue
+                      ? 'Select an active mall from the Mall Explorer or move within 500m of a supported venue to load floor plans, stores, and parking.'
+                      : 'Indoor maps only auto-load when you are within 500m of a supported shopping mall. Malls above 500m are not loaded in maps.',
                   textAlign: TextAlign.center,
                   style: GoogleFonts.plusJakartaSans(
                     fontSize: 13,
@@ -677,17 +1074,23 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
     }
 
     final bool isOutside500m = distM != null && distM > 500.0;
-    if (isNoMallLoaded || isOutside500m) {
-      return _buildOutOfRangeView();
+    if (isNoMallLoaded) {
+      return _buildOutOfRangeView(isNoVenue: true);
+    }
+    if (isOutside500m) {
+      return _buildOutOfRangeView(isNoVenue: false);
     }
     final List<ParkingSlot> floorSlots = _getSlotsForDisplayFloor(displayFloor);
     final bool isParkingFloor =
         displayFloor.floorNumber < 0 ||
         displayFloor.floorId.trim().toUpperCase().startsWith('P') ||
+        displayFloor.floorId.trim().toUpperCase().startsWith('B') ||
         displayFloor.name.trim().toUpperCase().contains('PARK') ||
+        displayFloor.name.trim().toUpperCase().contains('BASEMENT') ||
         floorSlots.isNotEmpty;
     final currentFloorPOIs = widget.destinations
         .where((poi) => poi.floorNumber == displayFloor.floorNumber)
+        .where((poi) => !ParkingService.isParkingDestination(poi))
         .toList();
 
     final String floorId = _getFloorIdString(displayFloor);
@@ -754,15 +1157,18 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                         widget.buildingProfile.name != 'Venue'
                     ? widget.buildingProfile.name
                     : 'Indoor Navigation Floor Plan';
-                return Text(
-                  '$venueName$distStr',
-                  overflow: TextOverflow.ellipsis,
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: isRemote
-                        ? const Color(0xFF2563EB)
-                        : const Color(0xFF64748B),
+                return GestureDetector(
+                  onLongPress: _showServerConfigDialog,
+                  child: Text(
+                    '$venueName$distStr',
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: isRemote
+                          ? const Color(0xFF2563EB)
+                          : const Color(0xFF64748B),
+                    ),
                   ),
                 );
               },
@@ -770,6 +1176,51 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
           ],
         ),
         actions: [
+          if (widget.isAdmin && widget.onOpenAdminDashboard != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: GestureDetector(
+                onTap: widget.onOpenAdminDashboard,
+                child: Container(
+                  height: 36,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF059669),
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x33059669),
+                        blurRadius: 6,
+                        offset: Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        LucideIcons.shieldCheck,
+                        size: 13,
+                        color: Colors.white,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        'ADMIN PORTAL',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           if (widget.onLogout != null)
             Padding(
               padding: const EdgeInsets.only(right: 12),
@@ -894,7 +1345,10 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                               ));
                       final String pillText = _getFloorPillLabel(floor);
                       final bool isParkingPill =
-                          pillText == 'P' || pillText.startsWith('P');
+                          pillText == 'P' ||
+                          pillText.startsWith('P') ||
+                          pillText.startsWith('B') ||
+                          floor.floorNumber < 0;
 
                       return GestureDetector(
                         onTap: () {
@@ -910,14 +1364,23 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                           padding: const EdgeInsets.symmetric(horizontal: 12),
                           decoration: BoxDecoration(
                             gradient: isSelected
-                                ? const LinearGradient(
-                                    colors: [
-                                      Color(0xFF2563EB),
-                                      Color(0xFF1D4ED8),
-                                    ],
-                                    begin: Alignment.topLeft,
-                                    end: Alignment.bottomRight,
-                                  )
+                                ? (isParkingPill
+                                      ? const LinearGradient(
+                                          colors: [
+                                            Color(0xFF16A34A),
+                                            Color(0xFF15803D),
+                                          ],
+                                          begin: Alignment.topLeft,
+                                          end: Alignment.bottomRight,
+                                        )
+                                      : const LinearGradient(
+                                          colors: [
+                                            Color(0xFF2563EB),
+                                            Color(0xFF1D4ED8),
+                                          ],
+                                          begin: Alignment.topLeft,
+                                          end: Alignment.bottomRight,
+                                        ))
                                 : null,
                             color: isSelected
                                 ? null
@@ -935,15 +1398,17 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                                 : (isParkingPill && !isSelected
                                       ? Border.all(
                                           color: const Color(0xFF86EFAC),
-                                          width: 1.0,
+                                          width: 1.2,
                                         )
                                       : null),
                             boxShadow: isSelected
                                 ? [
                                     BoxShadow(
-                                      color: const Color(
-                                        0xFF2563EB,
-                                      ).withValues(alpha: 0.3),
+                                      color:
+                                          (isParkingPill
+                                                  ? const Color(0xFF16A34A)
+                                                  : const Color(0xFF2563EB))
+                                              .withValues(alpha: 0.35),
                                       blurRadius: 6,
                                       offset: const Offset(0, 2),
                                     ),
@@ -954,18 +1419,22 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              if (isParkedFloor && !isSelected) ...[
-                                const Icon(
+                              if (isParkedFloor) ...[
+                                Icon(
                                   LucideIcons.car,
-                                  size: 12,
-                                  color: Color(0xFF16A34A),
+                                  size: 13,
+                                  color: isSelected
+                                      ? Colors.white
+                                      : const Color(0xFF16A34A),
                                 ),
                                 const SizedBox(width: 4),
-                              ] else if (isParkingPill && !isSelected) ...[
-                                const Icon(
+                              ] else if (isParkingPill) ...[
+                                Icon(
                                   LucideIcons.parkingCircle,
-                                  size: 12,
-                                  color: Color(0xFF16A34A),
+                                  size: 13,
+                                  color: isSelected
+                                      ? Colors.white
+                                      : const Color(0xFF16A34A),
                                 ),
                                 const SizedBox(width: 4),
                               ],
@@ -1287,6 +1756,7 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                                   floorNumber: displayFloor.floorNumber,
                                   floorName: displayFloor.name,
                                   selectedPOI: _selectedPOI,
+                                  selectedParkingSlot: _selectedParkingSlot,
                                   selectedCategoryFilter:
                                       _selectedCategoryFilter,
                                   currentFloorPOIs: currentFloorPOIs,
@@ -1758,6 +2228,329 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                               ),
                             ),
                           ),
+
+                        // Interactive Touch Target over '▼ Parking Entrance' on Retail Floor
+                        if (!isParkingFloor)
+                          Positioned(
+                            left: width * 0.35,
+                            top: height - 42,
+                            width: width * 0.30,
+                            height: 24,
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(7),
+                                onTap: () {
+                                  final parkingFloor = _effectiveFloorLevels
+                                      .firstWhere(
+                                        (f) =>
+                                            ParkingService.normalizeFloorId(
+                                                  f.floorId,
+                                                ) ==
+                                                'P' ||
+                                            f.floorNumber < 0,
+                                        orElse: () =>
+                                            _effectiveFloorLevels.first,
+                                      );
+                                  setState(() {
+                                    _selectedPOI = null;
+                                    _overrideFloor = parkingFloor;
+                                  });
+                                  widget.onSelectFloor(parkingFloor);
+                                },
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(7),
+                                    border: Border.all(
+                                      color: const Color(
+                                        0xFF2563EB,
+                                      ).withValues(alpha: 0.5),
+                                      width: 1.5,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+
+                        // Interactive Shortcuts on Parking Deck
+                        if (isParkingFloor) ...[
+                          // Top hub: Elevators & Stairs -> Jump back to Ground Floor (F1)
+                          Positioned(
+                            left: width * 0.35,
+                            top: 16,
+                            width: width * 0.30,
+                            height: 24,
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(8),
+                                onTap: () {
+                                  final groundFloor = _effectiveFloorLevels
+                                      .firstWhere(
+                                        (f) =>
+                                            f.floorNumber == 1 ||
+                                            f.floorNumber == 0,
+                                        orElse: () =>
+                                            _effectiveFloorLevels.first,
+                                      );
+                                  setState(() {
+                                    _selectedPOI = null;
+                                    _overrideFloor = groundFloor;
+                                  });
+                                  widget.onSelectFloor(groundFloor);
+                                },
+                              ),
+                            ),
+                          ),
+                          // Bottom ramp: Entrance & Exit -> Jump back to Ground Floor (F1)
+                          Positioned(
+                            left: width * 0.35,
+                            top: height - 40,
+                            width: width * 0.30,
+                            height: 22,
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(7),
+                                onTap: () {
+                                  final groundFloor = _effectiveFloorLevels
+                                      .firstWhere(
+                                        (f) =>
+                                            f.floorNumber == 1 ||
+                                            f.floorNumber == 0,
+                                        orElse: () =>
+                                            _effectiveFloorLevels.first,
+                                      );
+                                  setState(() {
+                                    _selectedPOI = null;
+                                    _overrideFloor = groundFloor;
+                                  });
+                                  widget.onSelectFloor(groundFloor);
+                                },
+                              ),
+                            ),
+                          ),
+                        ],
+
+                        // Floating Quick Jump Badges
+                        if (!isParkingFloor && _selectedPOI == null)
+                          Positioned(
+                            right: 12,
+                            bottom: 12,
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(20),
+                                onTap: () {
+                                  final parkingFloor = _effectiveFloorLevels
+                                      .firstWhere(
+                                        (f) =>
+                                            ParkingService.normalizeFloorId(
+                                                  f.floorId,
+                                                ) ==
+                                                'P' ||
+                                            f.floorNumber < 0,
+                                        orElse: () =>
+                                            _effectiveFloorLevels.first,
+                                      );
+                                  setState(() {
+                                    _selectedPOI = null;
+                                    _overrideFloor = parkingFloor;
+                                  });
+                                  widget.onSelectFloor(parkingFloor);
+                                },
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 6,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    gradient: const LinearGradient(
+                                      colors: [
+                                        Color(0xFF16A34A),
+                                        Color(0xFF15803D),
+                                      ],
+                                    ),
+                                    borderRadius: BorderRadius.circular(20),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: const Color(
+                                          0xFF16A34A,
+                                        ).withValues(alpha: 0.35),
+                                        blurRadius: 8,
+                                        offset: const Offset(0, 3),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(
+                                        LucideIcons.parkingCircle,
+                                        size: 14,
+                                        color: Colors.white,
+                                      ),
+                                      const SizedBox(width: 5),
+                                      Text(
+                                        'View Parking (P)',
+                                        style: GoogleFonts.plusJakartaSans(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w800,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 4),
+                                      const Icon(
+                                        LucideIcons.arrowRight,
+                                        size: 12,
+                                        color: Colors.white,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+
+                        if (isParkingFloor && _selectedParkingSlot != null)
+                          Positioned(
+                            left: 14,
+                            bottom: 12,
+                            child: Material(
+                              color: Colors.transparent,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 8,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF0F172A).withValues(alpha: 0.92),
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: const Color(0xFF38BDF8),
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(alpha: 0.25),
+                                      blurRadius: 8,
+                                    ),
+                                  ],
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Container(
+                                      width: 8,
+                                      height: 8,
+                                      decoration: const BoxDecoration(
+                                        color: Color(0xFF38BDF8),
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      'Place: Spot ${_selectedParkingSlot!.id}',
+                                      style: GoogleFonts.plusJakartaSans(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    GestureDetector(
+                                      onTap: () {
+                                        setState(() {
+                                          _selectedParkingSlot = null;
+                                        });
+                                      },
+                                      child: const Icon(
+                                        LucideIcons.x,
+                                        size: 14,
+                                        color: Color(0xFF94A3B8),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+
+                        if (isParkingFloor)
+                          Positioned(
+                            right: 12,
+                            bottom: 12,
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(20),
+                                onTap: () {
+                                  final groundFloor = _effectiveFloorLevels
+                                      .firstWhere(
+                                        (f) =>
+                                            f.floorNumber == 1 ||
+                                            f.floorNumber == 0,
+                                        orElse: () =>
+                                            _effectiveFloorLevels.first,
+                                      );
+                                  setState(() {
+                                    _selectedPOI = null;
+                                    _overrideFloor = groundFloor;
+                                  });
+                                  widget.onSelectFloor(groundFloor);
+                                },
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 6,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    gradient: const LinearGradient(
+                                      colors: [
+                                        Color(0xFF2563EB),
+                                        Color(0xFF1D4ED8),
+                                      ],
+                                    ),
+                                    borderRadius: BorderRadius.circular(20),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: const Color(
+                                          0xFF2563EB,
+                                        ).withValues(alpha: 0.35),
+                                        blurRadius: 8,
+                                        offset: const Offset(0, 3),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(
+                                        LucideIcons.store,
+                                        size: 14,
+                                        color: Colors.white,
+                                      ),
+                                      const SizedBox(width: 5),
+                                      Text(
+                                        'Back to Shops (F1)',
+                                        style: GoogleFonts.plusJakartaSans(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w800,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 4),
+                                      const Icon(
+                                        LucideIcons.arrowUp,
+                                        size: 12,
+                                        color: Colors.white,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
                       ],
                     );
                   },
@@ -2028,22 +2821,32 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
     for (final stall in stalls) {
       final bool isMyCar =
           myVehicle != null &&
-          myVehicle.slotId == stall.slot.id &&
-          myVehicle.status == 'parked';
+          myVehicle.status == 'parked' &&
+          (myVehicle.slotId.trim().toLowerCase() ==
+                  stall.slot.id.trim().toLowerCase() ||
+              myVehicle.slotId
+                      .replaceAll(RegExp(r'[^a-zA-Z0-9]'), '')
+                      .toLowerCase() ==
+                  stall.slot.id
+                      .replaceAll(RegExp(r'[^a-zA-Z0-9]'), '')
+                      .toLowerCase());
 
+      final hitRect = stall.rect.inflate(4.0);
       widgets.add(
         Positioned(
-          left: stall.rect.left,
-          top: stall.rect.top,
-          width: stall.rect.width,
-          height: stall.rect.height,
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              borderRadius: BorderRadius.circular(6),
-              onTap: () => _showParkingSlotModal(context, stall.slot, isMyCar),
-              child: Container(),
-            ),
+          left: hitRect.left,
+          top: hitRect.top,
+          width: hitRect.width,
+          height: hitRect.height,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              setState(() {
+                _selectedParkingSlot = stall.slot;
+              });
+              _showParkingSlotModal(context, stall.slot, isMyCar);
+            },
+            child: Container(color: Colors.transparent),
           ),
         ),
       );
@@ -2177,17 +2980,75 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                 ),
               ],
             ),
-            const SizedBox(height: 18),
+            () {
+              final double distM = haversineDistance(
+                widget.userCoords,
+                slot.location,
+              );
+              final String compass = classifyCompassBadge(
+                calculateBearingAngle(widget.userCoords, slot.location),
+              ).name;
+              final String distText = distM > 1.0
+                  ? '${distM.toStringAsFixed(1)}m away ($compass)'
+                  : 'At your current spot';
+              return Container(
+                margin: const EdgeInsets.only(top: 14, bottom: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFFE2E8F0)),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEFF6FF),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(
+                        LucideIcons.mapPin,
+                        size: 16,
+                        color: Color(0xFF2563EB),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Particular Spot: Zone ${slot.section} • Bay ${slot.slotNumber}',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: const Color(0xFF0F172A),
+                            ),
+                          ),
+                          Text(
+                            distText,
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: const Color(0xFF2563EB),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }(),
+            const SizedBox(height: 14),
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
-                if (slot.isEVCharging)
-                  _buildFeatureChip(
-                    LucideIcons.zap,
-                    '120kW EV Charger',
-                    const Color(0xFF16A34A),
-                  ),
                 if (slot.isHandicapAccessible)
                   _buildFeatureChip(
                     LucideIcons.accessibility,
@@ -2458,49 +3319,79 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                           return;
                         }
                         final activeMallId = _resolveActiveMallId();
+                        final slotMall = slot.mallId.isNotEmpty
+                            ? slot.mallId
+                            : (activeMallId ??
+                                  (slot.id.contains('-')
+                                      ? slot.id.split('-').first
+                                      : '1'));
                         final currentUserId = widget.userEmail.isNotEmpty
                             ? widget.userEmail
                             : (_parkingService.currentUserId.isNotEmpty
-                                ? _parkingService.currentUserId
-                                : 'user-default');
+                                  ? _parkingService.currentUserId
+                                  : 'user-default');
 
-                        await _parkingService.clearVehicleLocation(
-                          userId: currentUserId,
-                          mallId: activeMallId,
+                        unawaited(
+                          _parkingService.clearVehicleLocation(
+                            userId: currentUserId,
+                            mallId: slotMall,
+                            slotId:
+                                _parkingService.currentVehicleLocation?.slotId,
+                          ),
                         );
                       }
 
                       final activeMallId = _resolveActiveMallId();
+                      final slotMall = slot.mallId.isNotEmpty
+                          ? slot.mallId
+                          : (activeMallId ??
+                                (slot.id.contains('-')
+                                    ? slot.id.split('-').first
+                                    : '1'));
                       final currentUserId = widget.userEmail.isNotEmpty
                           ? widget.userEmail
                           : (_parkingService.currentUserId.isNotEmpty
-                              ? _parkingService.currentUserId
-                              : 'user-default');
+                                ? _parkingService.currentUserId
+                                : 'user-default');
 
-                      await _parkingService.saveVehicleLocation(
-                        MyVehicleLocation(
-                          userId: currentUserId,
-                          slotId: slot.id,
-                          floorId: slot.floorId,
-                          floorName: displayFloor.name,
-                          location: slot.location,
-                          timestamp: DateTime.now(),
-                        ),
-                        mallId: activeMallId,
+                      final vehicleRecord = MyVehicleLocation(
+                        userId: currentUserId,
+                        slotId: slot.id,
+                        mallId: slotMall,
+                        floorId: slot.floorId,
+                        floorName: displayFloor.name,
+                        location: slot.location,
+                        timestamp: DateTime.now(),
                       );
-                      if (context.mounted) {
-                        Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              'Vehicle parked at Stall ${slot.id}!',
-                            ),
-                            backgroundColor: const Color(0xFF16A34A),
-                            behavior: SnackBarBehavior.floating,
+
+                      // 1. Immediately dismiss modal sheet with zero delay (0ms)
+                      // ignore: use_build_context_synchronously
+                      Navigator.pop(context);
+
+                      // 2. Optimistically update local bay state
+                      slot.status = ParkingSlotStatus.occupied;
+
+                      // 3. Immediately show feedback & trigger screen refresh
+                      // ignore: use_build_context_synchronously
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Vehicle parked at Stall ${slot.id} & synced with parking manager!',
                           ),
-                        );
-                        setState(() {});
-                      }
+                          backgroundColor: const Color(0xFF16A34A),
+                          behavior: SnackBarBehavior.floating,
+                          duration: const Duration(milliseconds: 1500),
+                        ),
+                      );
+                      setState(() {});
+
+                      // 4. Background network sync
+                      unawaited(
+                        _parkingService.saveVehicleLocation(
+                          vehicleRecord,
+                          mallId: slotMall,
+                        ),
+                      );
                     } catch (e) {
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
@@ -2610,31 +3501,47 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                       borderRadius: BorderRadius.circular(14),
                     ),
                   ),
-                  onPressed: () async {
+                  onPressed: () {
                     final activeMallId = _resolveActiveMallId();
+                    final slotMall = slot.mallId.isNotEmpty
+                        ? slot.mallId
+                        : (activeMallId ??
+                              (slot.id.contains('-')
+                                  ? slot.id.split('-').first
+                                  : '1'));
                     final currentUserId = widget.userEmail.isNotEmpty
                         ? widget.userEmail
                         : (_parkingService.currentUserId.isNotEmpty
-                            ? _parkingService.currentUserId
-                            : 'user-default');
+                              ? _parkingService.currentUserId
+                              : 'user-default');
 
-                    await _parkingService.clearVehicleLocation(
-                      userId: currentUserId,
-                      mallId: activeMallId,
-                    );
-                    if (context.mounted) {
-                      Navigator.pop(context);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            'Vehicle unparked from Stall ${slot.id}.',
-                          ),
-                          backgroundColor: const Color(0xFFDC2626),
-                          behavior: SnackBarBehavior.floating,
+                    // 1. Immediately dismiss modal sheet with zero delay (0ms)
+                    Navigator.pop(context);
+
+                    // 2. Optimistically update local bay state
+                    slot.status = ParkingSlotStatus.free;
+
+                    // 3. Immediately show feedback & trigger screen refresh
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'Vehicle unparked from Stall ${slot.id} & synced with parking manager.',
                         ),
-                      );
-                      setState(() {});
-                    }
+                        backgroundColor: const Color(0xFFDC2626),
+                        behavior: SnackBarBehavior.floating,
+                        duration: const Duration(milliseconds: 1500),
+                      ),
+                    );
+                    setState(() {});
+
+                    // 4. Background network sync
+                    unawaited(
+                      _parkingService.clearVehicleLocation(
+                        userId: currentUserId,
+                        mallId: slotMall,
+                        slotId: slot.id,
+                      ),
+                    );
                   },
                 ),
               ),
@@ -2907,13 +3814,11 @@ class RoomCategoryProfile {
 class ComputedParkingStall {
   final ParkingSlot slot;
   final Rect rect;
-  final bool isEV;
   final bool isHandicap;
 
   const ComputedParkingStall({
     required this.slot,
     required this.rect,
-    required this.isEV,
     required this.isHandicap,
   });
 }
@@ -2928,54 +3833,10 @@ class ParkingLayoutCalculator {
     required GeodeticCoords fallbackCoords,
   }) {
     final stalls = <ComputedParkingStall>[];
-    final String prefix = _resolveFloorPrefix(floorNumber, floorName);
-
-    final List<ParkingSlot> effectiveSlots;
-    if (slots.isNotEmpty) {
-      effectiveSlots = List<ParkingSlot>.from(slots);
-    } else if (floorNumber < 0 ||
-        prefix.startsWith('P') ||
-        floorName.toUpperCase().contains('PARK')) {
-      effectiveSlots = [];
-      for (int i = 1; i <= 12; i++) {
-        final numStr = i < 10 ? '0$i' : '$i';
-        effectiveSlots.add(
-          ParkingSlot(
-            id: '$prefix-A-$numStr',
-            floorId: prefix,
-            section: 'A',
-            slotNumber: i,
-            status: ParkingSlotStatus.free,
-            location: fallbackCoords,
-            gridRow: (i - 1) ~/ 2,
-            gridCol: (i - 1) % 2,
-            isEVCharging: i == 1 || i == 2,
-            isHandicapAccessible: i == 3 || i == 4,
-            sensorId: 'IOT-$prefix-A-$numStr',
-          ),
-        );
-      }
-      for (int i = 1; i <= 12; i++) {
-        final numStr = i < 10 ? '0$i' : '$i';
-        effectiveSlots.add(
-          ParkingSlot(
-            id: '$prefix-B-$numStr',
-            floorId: prefix,
-            section: 'B',
-            slotNumber: i,
-            status: ParkingSlotStatus.free,
-            location: fallbackCoords,
-            gridRow: (i - 1) ~/ 2,
-            gridCol: (i - 1) % 2,
-            isEVCharging: false,
-            isHandicapAccessible: false,
-            sensorId: 'IOT-$prefix-B-$numStr',
-          ),
-        );
-      }
-    } else {
+    if (slots.isEmpty) {
       return stalls;
     }
+    final List<ParkingSlot> effectiveSlots = List<ParkingSlot>.from(slots);
 
     final leftSlots = <ParkingSlot>[];
     final rightSlots = <ParkingSlot>[];
@@ -3003,13 +3864,9 @@ class ParkingLayoutCalculator {
           if (secComp != 0) return secComp;
           return a.slotNumber.compareTo(b.slotNumber);
         });
-      if (sorted.length <= 12 && !hasSectionB) {
-        leftSlots.addAll(sorted);
-      } else {
-        final half = (sorted.length + 1) ~/ 2;
-        leftSlots.addAll(sorted.take(half));
-        rightSlots.addAll(sorted.skip(half));
-      }
+      final half = (sorted.length + 1) ~/ 2;
+      leftSlots.addAll(sorted.take(half));
+      rightSlots.addAll(sorted.skip(half));
     }
 
     leftSlots.sort(
@@ -3036,19 +3893,21 @@ class ParkingLayoutCalculator {
     final double gapY = maxRows <= 6
         ? (availableHeight - (slotH * 6)) / 5
         : (availableHeight - (slotH * maxRows)) / (maxRows - 1);
-    final double slotW = (width * 0.34 - 18) / 2;
+
+    // Symmetric left and right wings around central car lane (corridor is 0.36 to 0.64)
+    final double wingWidth = width * 0.35 - 16.0;
+    final double slotW = (wingWidth - 4.0) / 2;
 
     for (int i = 0; i < leftSlots.length; i++) {
       final s = leftSlots[i];
       final int row = i ~/ 2;
       final int col = i % 2;
-      final double x = 20.0 + col * (slotW + 3);
+      final double x = 16.0 + col * (slotW + 4.0);
       final double y = roomTopPadding + row * (slotH + gapY);
       stalls.add(
         ComputedParkingStall(
           slot: s,
           rect: Rect.fromLTWH(x, y, slotW, slotH),
-          isEV: s.isEVCharging,
           isHandicap: s.isHandicapAccessible,
         ),
       );
@@ -3058,13 +3917,12 @@ class ParkingLayoutCalculator {
       final s = rightSlots[i];
       final int row = i ~/ 2;
       final int col = i % 2;
-      final double x = width * 0.65 + col * (slotW + 3);
+      final double x = (width * 0.65) + col * (slotW + 4.0);
       final double y = roomTopPadding + row * (slotH + gapY);
       stalls.add(
         ComputedParkingStall(
           slot: s,
           rect: Rect.fromLTWH(x, y, slotW, slotH),
-          isEV: s.isEVCharging,
           isHandicap: s.isHandicapAccessible,
         ),
       );
@@ -3072,33 +3930,13 @@ class ParkingLayoutCalculator {
 
     return stalls;
   }
-
-  static String _resolveFloorPrefix(int floorNumber, String floorName) {
-    final nameUpper = floorName.trim().toUpperCase();
-    if (nameUpper == 'P' ||
-        nameUpper.startsWith('P') ||
-        nameUpper.contains('PARK')) {
-      return 'P';
-    }
-    if (nameUpper.contains('BASEMENT 1') || nameUpper == 'B1') return 'B1';
-    if (nameUpper.contains('BASEMENT 2') || nameUpper == 'B2') return 'B2';
-    if (nameUpper.contains('BASEMENT 3') || nameUpper == 'B3') return 'B3';
-    if (nameUpper.contains('GROUND') || nameUpper == 'GF' || nameUpper == 'G') {
-      return 'GF';
-    }
-    if (floorNumber == -1) return 'P';
-    if (floorNumber == -2) return 'B2';
-    if (floorNumber == -3) return 'B3';
-    if (floorNumber < 0) return 'B${floorNumber.abs()}';
-    if (floorNumber == 0) return 'GF';
-    return 'F$floorNumber';
-  }
 }
 
 class ArchitecturalFloorPainter extends CustomPainter {
   final int floorNumber;
   final String floorName;
   final DestinationPOI? selectedPOI;
+  final ParkingSlot? selectedParkingSlot;
   final String selectedCategoryFilter;
   final List<DestinationPOI> currentFloorPOIs;
   final List<ParkingSlot> parkingSlots;
@@ -3110,6 +3948,7 @@ class ArchitecturalFloorPainter extends CustomPainter {
     required this.floorNumber,
     required this.floorName,
     this.selectedPOI,
+    this.selectedParkingSlot,
     this.selectedCategoryFilter = 'ALL',
     this.currentFloorPOIs = const [],
     this.parkingSlots = const [],
@@ -3399,20 +4238,47 @@ class ArchitecturalFloorPainter extends CustomPainter {
       fallbackCoords: userCoords,
     );
 
+    if (stalls.isEmpty) {
+      _drawText(
+        canvas,
+        'No Parking Stalls on $floorName',
+        Offset(midX - 70, size.height * 0.40),
+        const Color(0xFF64748B),
+        fontSize: 10.0,
+        fontWeight: FontWeight.bold,
+        maxWidth: 140,
+        textAlign: TextAlign.center,
+      );
+      _drawText(
+        canvas,
+        'Generate bays in Parking Lot & Bay Manager',
+        Offset(midX - 85, size.height * 0.40 + 16),
+        const Color(0xFF475569),
+        fontSize: 7.5,
+        fontWeight: FontWeight.w600,
+        maxWidth: 170,
+        textAlign: TextAlign.center,
+      );
+    }
+
     for (final stall in stalls) {
       final bool isMyCar =
           myVehicle != null &&
           myVehicle!.slotId == stall.slot.id &&
           myVehicle!.status == 'parked';
 
+      final bool isSelected = selectedParkingSlot != null &&
+          ParkingService.isMatchingSlotId(stall.slot.id, selectedParkingSlot!.id);
+
       _drawSingleParkingStall(
         canvas,
         stall.rect,
         stall.slot.id,
-        isEV: stall.isEV,
         isHandicap: stall.isHandicap,
         status: stall.slot.status,
         isMyCar: isMyCar,
+        isSelected: isSelected,
+        pulseAnimationValue: pulseAnimationValue,
       );
     }
   }
@@ -3421,15 +4287,16 @@ class ArchitecturalFloorPainter extends CustomPainter {
     Canvas canvas,
     Rect slotRect,
     String slotCode, {
-    bool isEV = false,
     bool isHandicap = false,
     ParkingSlotStatus status = ParkingSlotStatus.free,
     bool isMyCar = false,
+    bool isSelected = false,
+    double pulseAnimationValue = 0.0,
   }) {
     Color fillPaintColor = const Color(0xFF1E293B);
-    Color borderPaintColor = isEV
-        ? const Color(0xFF22C55E)
-        : (isHandicap ? const Color(0xFF3B82F6) : const Color(0xFF475569));
+    Color borderPaintColor = isHandicap
+        ? const Color(0xFF3B82F6)
+        : const Color(0xFF475569);
 
     if (isMyCar) {
       fillPaintColor = const Color(0xFF047857);
@@ -3444,23 +4311,67 @@ class ArchitecturalFloorPainter extends CustomPainter {
         RRect.fromRectAndRadius(glowRect, const Radius.circular(7)),
         glowPaint,
       );
+    } else if (isSelected) {
+      fillPaintColor = const Color(0xFF0C4A6E);
+      borderPaintColor = const Color(0xFF38BDF8);
+
+      final glowHaloRadius = 3.0 + (pulseAnimationValue * 4.0);
+      final glowPaint = Paint()
+        ..color = const Color(0xFF38BDF8)
+            .withValues(alpha: 0.85 * (1.0 - pulseAnimationValue * 0.4))
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5;
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          slotRect.inflate(glowHaloRadius),
+          const Radius.circular(8),
+        ),
+        glowPaint,
+      );
     } else if (status == ParkingSlotStatus.occupied) {
-      fillPaintColor = const Color(0xFF334155);
-      borderPaintColor = const Color(0xFF64748B);
+      fillPaintColor = const Color(0xFF291518);
+      borderPaintColor = const Color(0xFFEF4444);
     } else if (status == ParkingSlotStatus.reserved) {
-      fillPaintColor = const Color(0xFF292524);
+      fillPaintColor = const Color(0xFF292014);
       borderPaintColor = const Color(0xFFF59E0B);
     }
 
     final fillPaint = Paint()..color = fillPaintColor;
     final borderPaint = Paint()
       ..color = borderPaintColor
-      ..strokeWidth = isMyCar ? 2.0 : 1.0
+      ..strokeWidth = (isMyCar || isSelected) ? 2.0 : 1.0
       ..style = PaintingStyle.stroke;
 
     final rrect = RRect.fromRectAndRadius(slotRect, const Radius.circular(5));
     canvas.drawRRect(rrect, fillPaint);
     canvas.drawRRect(rrect, borderPaint);
+
+    if (isSelected && !isMyCar) {
+      final double indicatorY = slotRect.top - 12.0;
+      if (indicatorY > 10) {
+        final badgeRect = Rect.fromLTWH(
+          slotRect.left - 2,
+          indicatorY,
+          slotRect.width + 4,
+          10,
+        );
+        final badgePaint = Paint()..color = const Color(0xFF0284C7);
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(badgeRect, const Radius.circular(4)),
+          badgePaint,
+        );
+        _drawText(
+          canvas,
+          'HERE',
+          Offset(badgeRect.left + 2, badgeRect.top + 1),
+          Colors.white,
+          fontSize: 6.0,
+          fontWeight: FontWeight.w900,
+          maxWidth: badgeRect.width - 4,
+          textAlign: TextAlign.center,
+        );
+      }
+    }
 
     if (isMyCar) {
       _drawText(
@@ -3468,8 +4379,9 @@ class ArchitecturalFloorPainter extends CustomPainter {
         slotCode,
         Offset(slotRect.left + 2, slotRect.top + 3),
         Colors.white,
-        fontSize: 6.5,
+        fontSize: slotCode.length > 8 ? 5.5 : 6.5,
         fontWeight: FontWeight.bold,
+        maxWidth: slotRect.width - 4,
       );
       _drawText(
         canvas,
@@ -3484,21 +4396,20 @@ class ArchitecturalFloorPainter extends CustomPainter {
 
     String tag = '';
     Color tagColor = const Color(0xFF38BDF8);
-    if (isEV) {
-      tag = 'EV';
-      tagColor = const Color(0xFF4ADE80);
-    } else if (isHandicap) {
+    if (isHandicap) {
       tag = 'HC';
       tagColor = const Color(0xFF60A5FA);
     }
 
+    final double titleFontSize = slotCode.length > 8 ? 5.5 : 6.5;
     _drawText(
       canvas,
-      '$slotCode $tag',
-      Offset(slotRect.left + 2, slotRect.top + 3),
+      tag.isNotEmpty ? '$slotCode $tag' : slotCode,
+      Offset(slotRect.left + 3, slotRect.top + 3),
       tagColor,
-      fontSize: 6.5,
+      fontSize: titleFontSize,
       fontWeight: FontWeight.bold,
+      maxWidth: slotRect.width - 6,
     );
 
     final String statusLabel = status == ParkingSlotStatus.free
@@ -3512,7 +4423,10 @@ class ArchitecturalFloorPainter extends CustomPainter {
     _drawText(
       canvas,
       statusLabel,
-      Offset(slotRect.left + 2, slotRect.top + 14),
+      Offset(
+        slotRect.left + 3,
+        slotRect.top + (slotCode.length > 8 ? 16.0 : 14.0),
+      ),
       statusColor,
       fontSize: 6.0,
       fontWeight: FontWeight.bold,

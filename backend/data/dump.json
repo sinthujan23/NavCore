@@ -3,7 +3,7 @@
     {
       "id": "usr-admin-01",
       "email": "admin@nexnav.com",
-      "password": "admin123",
+      "password": "Admin@1234",
       "name": "System Administrator",
       "role": "admin",
       "createdAt": "2026-10-01T00:00:00.000Z"
@@ -11,7 +11,7 @@
     {
       "id": "usr-regular-01",
       "email": "user@nexnav.com",
-      "password": "user123",
+      "password": "User@1234",
       "name": "NexNav Shopper",
       "role": "user",
       "createdAt": "2026-10-01T00:00:00.000Z"
@@ -76,6 +76,16 @@
     }
   ],
   "floorHeights": [
+    {
+      "mallId": "1",
+      "floorNo": -1,
+      "heightToNextM": 3.8,
+      "baseAltitudeM": 4.7,
+      "source": "admin",
+      "confidence": 1.0,
+      "isLocked": false,
+      "updatedAt": "2026-10-13T16:00:00.000Z"
+    },
     {
       "mallId": "1",
       "floorNo": 1,
@@ -207,7 +217,7 @@
       "rating": 4.8,
       "latitude": 8.502422,
       "longitude": 81.181258,
-      "height": -84.6,
+      "height": 8.5,
       "description": "Retail fashion & clothing in Minimall.",
       "openStatus": "Open Today: 10 AM - 10 PM",
       "openingHours": "10:00 AM - 10:00 PM",
@@ -222,7 +232,7 @@
       "rating": 4.8,
       "latitude": 8.502437,
       "longitude": 81.181246,
-      "height": -84.6,
+      "height": 8.5,
       "description": "Coffee, fresh tea & snack bar on Floor 1.",
       "openStatus": "Open Today: 10 AM - 10 PM",
       "openingHours": "10:00 AM - 10:00 PM",
@@ -237,7 +247,7 @@
       "rating": 4.8,
       "latitude": 8.502419,
       "longitude": 81.181251,
-      "height": -71.1,
+      "height": 19.9,
       "description": "Fashion & apparel boutique on Floor 4.",
       "openStatus": "Open Today: 10 AM - 10 PM",
       "openingHours": "10:00 AM - 10:00 PM",
@@ -252,11 +262,13 @@
       "rating": 4.8,
       "latitude": 8.502412,
       "longitude": 81.181245,
-      "height": -75.6,
+      "height": 16.1,
       "description": "Oven fresh pizza, pasta and drinks on Floor 3.",
       "openStatus": "Open Today: 10 AM - 10 PM",
       "openingHours": "10:00 AM - 10:00 PM",
       "imageUrl": ""
     }
-  ]
+  ],
+  "parkingSlots": [],
+  "vehicleLocations": {}
 }

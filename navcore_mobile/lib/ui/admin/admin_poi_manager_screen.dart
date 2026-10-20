@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:sensors_plus/sensors_plus.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../data/destinations.dart';
 import '../../data/mall_database_service.dart';
@@ -13,6 +15,7 @@ import '../../engine/ecef_engine.dart';
 import '../../engine/floor_tracker.dart';
 import '../../engine/bearing_engine.dart';
 import 'admin_osm_map_screen.dart';
+import '../widgets/shop_image_widget.dart';
 
 class AdminPOIManagerScreen extends StatefulWidget {
   final List<DestinationPOI> destinations;
@@ -21,6 +24,7 @@ class AdminPOIManagerScreen extends StatefulWidget {
   final Function(String poiId) onDeletePoi;
   final GeodeticCoords? userCoords;
   final MallDatabaseService? mallService;
+  final String? initialMallId;
 
   const AdminPOIManagerScreen({
     super.key,
@@ -30,6 +34,7 @@ class AdminPOIManagerScreen extends StatefulWidget {
     required this.onDeletePoi,
     this.userCoords,
     this.mallService,
+    this.initialMallId,
   });
 
   @override
@@ -40,8 +45,10 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
   late List<DestinationPOI> _poiList;
   bool _isLoadingPois = false;
   String _selectedCategory = 'ALL';
+  String _selectedMallFilter = '1';
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
+  final Set<String> _locallyDeletedPoiIds = {};
 
   final List<Map<String, dynamic>> _categoryTabs = [
     {'name': 'ALL', 'icon': LucideIcons.layoutGrid},
@@ -52,11 +59,47 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
     {'name': 'SERVICES', 'icon': LucideIcons.shieldCheck},
   ];
 
+  String get _currentMallName {
+    final m = (widget.mallService?.catalog ?? [])
+        .where((m) => _isMatchingMall(m.id, _selectedMallFilter))
+        .firstOrNull;
+    if (m != null && m.name.isNotEmpty) return m.name;
+    if (_selectedMallFilter == '1') return 'Minimall';
+    if (_selectedMallFilter == '2') return 'mall bazar';
+    return 'Venue $_selectedMallFilter';
+  }
+
   @override
   void initState() {
     super.initState();
     _poiList = _deduplicatePois(widget.destinations);
+    final initialId = widget.initialMallId;
+    if (initialId != null && initialId.isNotEmpty && initialId != 'ALL') {
+      _selectedMallFilter = initialId;
+    } else {
+      final selectedMall =
+          widget.mallService?.catalog.where((m) => m.isSelected).firstOrNull ??
+          widget.mallService?.catalog.where((m) => m.isActive).firstOrNull ??
+          widget.mallService?.catalog.firstOrNull;
+      if (selectedMall != null) {
+        _selectedMallFilter = selectedMall.id;
+      } else {
+        _selectedMallFilter = '1';
+      }
+    }
     _loadDestinationsFromDatabase();
+  }
+
+  bool _isMatchingMall(String? poiMallId, String filterMallId) {
+    if (filterMallId == 'ALL') return true;
+    if (poiMallId == null || poiMallId.isEmpty) return false;
+    final pClean = poiMallId.trim().toLowerCase();
+    final fClean = filterMallId.trim().toLowerCase();
+    if (pClean == fClean) return true;
+    // Strip leading zeros for numeric comparisons (e.g. "01" vs "1")
+    final pStripped = pClean.replaceAll(RegExp(r'^0+'), '');
+    final fStripped = fClean.replaceAll(RegExp(r'^0+'), '');
+    return pStripped.isNotEmpty && pStripped == fStripped;
   }
 
   List<DestinationPOI> _deduplicatePois(List<DestinationPOI> list) {
@@ -64,6 +107,7 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
     final seenIds = <String>{};
     final result = <DestinationPOI>[];
     for (final p in list) {
+      if (_locallyDeletedPoiIds.contains(p.id)) continue;
       final key =
           '${p.name.trim().toLowerCase()}#${p.floorNumber}#${p.mallId ?? ''}';
       if (!seen.contains(key) && !seenIds.contains(p.id)) {
@@ -75,17 +119,34 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
     return result;
   }
 
+  List<DestinationPOI> _mergePois(
+    List<DestinationPOI> current,
+    List<DestinationPOI> incoming,
+  ) {
+    final map = <String, DestinationPOI>{};
+    for (final p in incoming) {
+      if (!_locallyDeletedPoiIds.contains(p.id)) {
+        map[p.id] = p;
+      }
+    }
+    // In-memory list takes precedence so recent additions / edits are preserved
+    for (final p in current) {
+      if (!_locallyDeletedPoiIds.contains(p.id)) {
+        map[p.id] = p;
+      }
+    }
+    return _deduplicatePois(map.values.toList());
+  }
+
   Future<void> _loadDestinationsFromDatabase() async {
-    setState(() => _isLoadingPois = true);
+    if (_poiList.isEmpty) {
+      setState(() => _isLoadingPois = true);
+    }
     try {
       final list = await ApiService.instance.fetchDestinations();
       if (mounted) {
         setState(() {
-          if (list.isNotEmpty) {
-            _poiList = _deduplicatePois(list);
-          } else {
-            _poiList = _deduplicatePois(_poiList);
-          }
+          _poiList = _mergePois(_poiList, list);
           _isLoadingPois = false;
         });
       }
@@ -102,6 +163,11 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
 
   List<DestinationPOI> get _filteredPois {
     return _poiList.where((poi) {
+      // Strictly categorize by the selected mall - another mall's shops NEVER show on this screen!
+      if (!_isMatchingMall(poi.mallId, _selectedMallFilter)) {
+        return false;
+      }
+
       final matchesCat =
           _selectedCategory == 'ALL' ||
           poi.category.toUpperCase().contains(_selectedCategory);
@@ -126,47 +192,68 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
   }
 
   void _openAddEditPoiScreen([DestinationPOI? existingPoi]) {
+    final targetMall =
+        existingPoi?.mallId ??
+        (_selectedMallFilter.isNotEmpty ? _selectedMallFilter : '1');
+
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => AddEditPoiScreen(
           existingPoi: existingPoi,
+          initialMallId: targetMall,
           userCoords: widget.userCoords,
           destinations: _poiList,
           mallService: widget.mallService,
           onSavePoi: (savedPoi, isEditing) async {
+            final effectiveMallId =
+                (savedPoi.mallId != null && savedPoi.mallId!.isNotEmpty)
+                ? savedPoi.mallId!
+                : (targetMall != 'ALL' && targetMall.isNotEmpty)
+                ? targetMall
+                : (_selectedMallFilter != 'ALL' ? _selectedMallFilter : '1');
+            final poiToSave =
+                (savedPoi.mallId == null || savedPoi.mallId!.isEmpty)
+                ? savedPoi.copyWith(mallId: effectiveMallId)
+                : savedPoi;
+
             if (isEditing) {
-              final idx = _poiList.indexWhere((p) => p.id == savedPoi.id);
+              final idx = _poiList.indexWhere((p) => p.id == poiToSave.id);
               if (idx != -1) {
                 setState(() {
-                  _poiList[idx] = savedPoi;
+                  _poiList[idx] = poiToSave;
+                });
+              } else {
+                setState(() {
+                  _poiList.insert(0, poiToSave);
                 });
               }
-              await ApiService.instance.updateDestination(savedPoi);
-              widget.onUpdatePoi(savedPoi);
+              await ApiService.instance.updateDestination(poiToSave);
+              widget.onUpdatePoi(poiToSave);
             } else {
               final key =
-                  '${savedPoi.name.trim().toLowerCase()}#${savedPoi.floorNumber}#${savedPoi.mallId ?? ''}';
+                  '${poiToSave.name.trim().toLowerCase()}#${poiToSave.floorNumber}#${poiToSave.mallId ?? ''}';
               setState(() {
                 _poiList.removeWhere(
                   (p) =>
-                      p.id == savedPoi.id ||
+                      p.id == poiToSave.id ||
                       '${p.name.trim().toLowerCase()}#${p.floorNumber}#${p.mallId ?? ''}' ==
                           key,
                 );
-                _poiList.insert(0, savedPoi);
+                _poiList.insert(0, poiToSave);
                 _poiList = _deduplicatePois(_poiList);
+
+                // Ensure the mall filter displays the newly created store
+                if (_selectedMallFilter != 'ALL' &&
+                    !_isMatchingMall(poiToSave.mallId, _selectedMallFilter)) {
+                  _selectedMallFilter = poiToSave.mallId ?? 'ALL';
+                }
               });
-              final targetMallId =
-                  savedPoi.mallId ??
-                  (_poiList.isNotEmpty && _poiList.first.mallId != null
-                      ? _poiList.first.mallId!
-                      : 'mall-default');
               await ApiService.instance.createDestination(
-                savedPoi,
-                mallId: targetMallId,
+                poiToSave,
+                mallId: poiToSave.mallId,
               );
-              widget.onAddPoi(savedPoi);
+              widget.onAddPoi(poiToSave);
             }
             await _loadDestinationsFromDatabase();
           },
@@ -235,6 +322,7 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
             ),
             onPressed: () async {
               Navigator.pop(ctx);
+              _locallyDeletedPoiIds.add(poi.id);
               final key =
                   '${poi.name.trim().toLowerCase()}#${poi.floorNumber}#${poi.mallId ?? ''}';
               setState(() {
@@ -304,7 +392,7 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'POI Store Directory',
+              '$_currentMallName Stores',
               overflow: TextOverflow.ellipsis,
               style: GoogleFonts.plusJakartaSans(
                 fontSize: 16,
@@ -313,7 +401,7 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
               ),
             ),
             Text(
-              '${_filteredPois.length} locations configured',
+              '${_filteredPois.length} shops in $_currentMallName',
               style: GoogleFonts.plusJakartaSans(
                 fontSize: 11,
                 fontWeight: FontWeight.w600,
@@ -432,7 +520,86 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
+
+                // Venue Scope Tabs: Strictly categorized by particular mall
+                if (widget.mallService != null &&
+                    widget.mallService!.catalog.isNotEmpty) ...[
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        ...widget.mallService!.catalog.map((mall) {
+                          final isSelected =
+                              _selectedMallFilter == mall.id ||
+                              _isMatchingMall(_selectedMallFilter, mall.id);
+                          final mallPoiCount = _poiList
+                              .where((p) => _isMatchingMall(p.mallId, mall.id))
+                              .length;
+                          return GestureDetector(
+                            onTap: () =>
+                                setState(() => _selectedMallFilter = mall.id),
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 180),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 6,
+                              ),
+                              margin: const EdgeInsets.only(right: 8),
+                              decoration: BoxDecoration(
+                                color: isSelected
+                                    ? const Color(0xFF2563EB)
+                                    : const Color(0xFFF1F5F9),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: isSelected
+                                      ? const Color(0xFF1D4ED8)
+                                      : const Color(0xFFCBD5E1),
+                                  width: 1.2,
+                                ),
+                                boxShadow: isSelected
+                                    ? [
+                                        BoxShadow(
+                                          color: const Color(
+                                            0xFF2563EB,
+                                          ).withValues(alpha: 0.22),
+                                          blurRadius: 6,
+                                          offset: const Offset(0, 2),
+                                        ),
+                                      ]
+                                    : null,
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    LucideIcons.building2,
+                                    size: 13,
+                                    color: isSelected
+                                        ? Colors.white
+                                        : const Color(0xFF64748B),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    '${mall.name} ($mallPoiCount)',
+                                    style: GoogleFonts.plusJakartaSans(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                      color: isSelected
+                                          ? Colors.white
+                                          : const Color(0xFF334155),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        }),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                ],
 
                 // Category Tabs Carousel
                 SingleChildScrollView(
@@ -636,300 +803,352 @@ class _AdminPOIManagerScreenState extends State<AdminPOIManagerScreen> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Row(
-                                      crossAxisAlignment: CrossAxisAlignment.center,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.center,
                                       children: [
-                                    // Floor Indicator Badge
-                                    Container(
-                                      width: 48,
-                                      height: 48,
-                                      decoration: BoxDecoration(
-                                        color: isBasement
-                                            ? const Color(0xFFF3E8FF)
-                                            : const Color(0xFFEFF6FF),
-                                        borderRadius: BorderRadius.circular(14),
-                                        border: Border.all(
-                                          color: isBasement
-                                              ? const Color(0xFFE9D5FF)
-                                              : const Color(0xFFDBEAFE),
-                                        ),
-                                      ),
-                                      child: Center(
-                                        child: Text(
-                                          isBasement
-                                              ? 'B${poi.floorNumber.abs()}'
-                                              : 'F${poi.floorNumber}',
-                                          style: GoogleFonts.plusJakartaSans(
-                                            fontWeight: FontWeight.w900,
-                                            color: isBasement
-                                                ? const Color(0xFF7E22CE)
-                                                : const Color(0xFF1D4ED8),
-                                            fontSize: 14,
+                                        // Shop Image Thumbnail with Floor Badge Overlay
+                                        ClipRRect(
+                                          borderRadius: BorderRadius.circular(
+                                            14,
+                                          ),
+                                          child: SizedBox(
+                                            width: 52,
+                                            height: 52,
+                                            child: Stack(
+                                              children: [
+                                                Positioned.fill(
+                                                  child: ShopImage(
+                                                    imagePathOrUrl:
+                                                        poi.effectiveImageUrl,
+                                                    width: 52,
+                                                    height: 52,
+                                                    fit: BoxFit.cover,
+                                                  ),
+                                                ),
+                                                Positioned(
+                                                  bottom: 0,
+                                                  left: 0,
+                                                  right: 0,
+                                                  child: Container(
+                                                    color: Colors.black
+                                                        .withValues(
+                                                          alpha: 0.65,
+                                                        ),
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                          vertical: 1.5,
+                                                        ),
+                                                    child: Text(
+                                                      isBasement
+                                                          ? 'B${poi.floorNumber.abs()}'
+                                                          : 'F${poi.floorNumber}',
+                                                      textAlign:
+                                                          TextAlign.center,
+                                                      style:
+                                                          GoogleFonts.plusJakartaSans(
+                                                            fontSize: 9,
+                                                            fontWeight:
+                                                                FontWeight.w800,
+                                                            color: Colors.white,
+                                                            letterSpacing: 0.3,
+                                                          ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 14),
+                                        const SizedBox(width: 14),
 
-                                    // Store Details
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Row(
-                                            children: [
-                                              Flexible(
-                                                child: Text(
-                                                  poi.name,
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  style:
-                                                      GoogleFonts.plusJakartaSans(
-                                                        fontSize: 14,
-                                                        fontWeight:
-                                                            FontWeight.w800,
-                                                        color: const Color(
-                                                          0xFF0F172A,
-                                                        ),
-                                                      ),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                          const SizedBox(height: 3),
-                                          Wrap(
-                                            spacing: 5,
-                                            runSpacing: 3,
+                                        // Store Details
+                                        Expanded(
+                                          child: Column(
                                             crossAxisAlignment:
-                                                WrapCrossAlignment.center,
+                                                CrossAxisAlignment.start,
                                             children: [
-                                              Container(
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                      horizontal: 5,
-                                                      vertical: 2,
-                                                    ),
-                                                decoration: BoxDecoration(
-                                                  color: const Color(
-                                                    0xFFF1F5F9,
-                                                  ),
-                                                  borderRadius:
-                                                      BorderRadius.circular(6),
-                                                ),
-                                                child: Text(
-                                                  poi.category,
-                                                  style:
-                                                      GoogleFonts.plusJakartaSans(
-                                                        fontSize: 9.0,
-                                                        fontWeight:
-                                                            FontWeight.w700,
-                                                        color: const Color(
-                                                          0xFF475569,
-                                                        ),
-                                                      ),
-                                                ),
-                                              ),
-                                              if (poi.mallId != null &&
-                                                  poi.mallId!.isNotEmpty)
-                                                Container(
-                                                  padding:
-                                                      const EdgeInsets.symmetric(
-                                                        horizontal: 5,
-                                                        vertical: 2,
-                                                      ),
-                                                  decoration: BoxDecoration(
-                                                    color: const Color(
-                                                      0xFFEFF6FF,
-                                                    ),
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                          6,
-                                                        ),
-                                                    border: Border.all(
-                                                      color: const Color(
-                                                        0xFFDBEAFE,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                  child: Text(
-                                                    (widget
-                                                                    .mallService
-                                                                    ?.catalog ??
-                                                                [])
-                                                            .where(
-                                                              (m) =>
-                                                                  m.id ==
-                                                                  poi.mallId,
-                                                            )
-                                                            .firstOrNull
-                                                            ?.name ??
-                                                        poi.mallId!
-                                                            .replaceFirst(
-                                                              'mall-',
-                                                              '',
-                                                            )
-                                                            .toUpperCase(),
-                                                    style:
-                                                        GoogleFonts.plusJakartaSans(
-                                                          fontSize: 9.0,
-                                                          fontWeight:
-                                                              FontWeight.w700,
-                                                          color: const Color(
-                                                            0xFF2563EB,
-                                                          ),
-                                                        ),
-                                                  ),
-                                                ),
                                               Row(
-                                                mainAxisSize: MainAxisSize.min,
                                                 children: [
-                                                  const Icon(
-                                                    LucideIcons.star,
-                                                    size: 11,
-                                                    color: Color(0xFFD97706),
+                                                  Flexible(
+                                                    child: Text(
+                                                      poi.name,
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                      style:
+                                                          GoogleFonts.plusJakartaSans(
+                                                            fontSize: 14,
+                                                            fontWeight:
+                                                                FontWeight.w800,
+                                                            color: const Color(
+                                                              0xFF0F172A,
+                                                            ),
+                                                          ),
+                                                    ),
                                                   ),
-                                                  const SizedBox(width: 2),
-                                                  Text(
-                                                    '${poi.rating}',
-                                                    style:
-                                                        GoogleFonts.plusJakartaSans(
-                                                          fontSize: 10.5,
-                                                          fontWeight:
-                                                              FontWeight.w700,
+                                                ],
+                                              ),
+                                              const SizedBox(height: 3),
+                                              Wrap(
+                                                spacing: 5,
+                                                runSpacing: 3,
+                                                crossAxisAlignment:
+                                                    WrapCrossAlignment.center,
+                                                children: [
+                                                  Container(
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                          horizontal: 5,
+                                                          vertical: 2,
+                                                        ),
+                                                    decoration: BoxDecoration(
+                                                      color: const Color(
+                                                        0xFFF1F5F9,
+                                                      ),
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            6,
+                                                          ),
+                                                    ),
+                                                    child: Text(
+                                                      poi.category,
+                                                      style:
+                                                          GoogleFonts.plusJakartaSans(
+                                                            fontSize: 9.0,
+                                                            fontWeight:
+                                                                FontWeight.w700,
+                                                            color: const Color(
+                                                              0xFF475569,
+                                                            ),
+                                                          ),
+                                                    ),
+                                                  ),
+                                                  if (poi.mallId != null &&
+                                                      poi.mallId!.isNotEmpty)
+                                                    Container(
+                                                      padding:
+                                                          const EdgeInsets.symmetric(
+                                                            horizontal: 5,
+                                                            vertical: 2,
+                                                          ),
+                                                      decoration: BoxDecoration(
+                                                        color: const Color(
+                                                          0xFFEFF6FF,
+                                                        ),
+                                                        borderRadius:
+                                                            BorderRadius.circular(
+                                                              6,
+                                                            ),
+                                                        border: Border.all(
                                                           color: const Color(
-                                                            0xFF64748B,
+                                                            0xFFDBEAFE,
                                                           ),
                                                         ),
+                                                      ),
+                                                      child: Text(
+                                                        (widget.mallService?.catalog ??
+                                                                    [])
+                                                                .where(
+                                                                  (m) =>
+                                                                      m.id ==
+                                                                      poi.mallId,
+                                                                )
+                                                                .firstOrNull
+                                                                ?.name ??
+                                                            poi.mallId!
+                                                                .replaceFirst(
+                                                                  'mall-',
+                                                                  '',
+                                                                )
+                                                                .toUpperCase(),
+                                                        style:
+                                                            GoogleFonts.plusJakartaSans(
+                                                              fontSize: 9.0,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w700,
+                                                              color:
+                                                                  const Color(
+                                                                    0xFF2563EB,
+                                                                  ),
+                                                            ),
+                                                      ),
+                                                    ),
+                                                  Row(
+                                                    mainAxisSize:
+                                                        MainAxisSize.min,
+                                                    children: [
+                                                      const Icon(
+                                                        LucideIcons.star,
+                                                        size: 11,
+                                                        color: Color(
+                                                          0xFFD97706,
+                                                        ),
+                                                      ),
+                                                      const SizedBox(width: 2),
+                                                      Text(
+                                                        '${poi.rating}',
+                                                        style:
+                                                            GoogleFonts.plusJakartaSans(
+                                                              fontSize: 10.5,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w700,
+                                                              color:
+                                                                  const Color(
+                                                                    0xFF64748B,
+                                                                  ),
+                                                            ),
+                                                      ),
+                                                    ],
                                                   ),
                                                 ],
                                               ),
                                             ],
                                           ),
-                                        ],
-                                      ),
-                                    ),
+                                        ),
 
-                                    // Action Buttons
-                                    InkWell(
-                                      onTap: () => _openAddEditPoiScreen(poi),
-                                      borderRadius: BorderRadius.circular(10),
-                                      child: Container(
-                                        padding: const EdgeInsets.all(8),
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFFEFF6FF),
+                                        // Action Buttons
+                                        InkWell(
+                                          onTap: () =>
+                                              _openAddEditPoiScreen(poi),
                                           borderRadius: BorderRadius.circular(
                                             10,
                                           ),
-                                          border: Border.all(
-                                            color: const Color(0xFFBFDBFE),
+                                          child: Container(
+                                            padding: const EdgeInsets.all(8),
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFFEFF6FF),
+                                              borderRadius:
+                                                  BorderRadius.circular(10),
+                                              border: Border.all(
+                                                color: const Color(0xFFBFDBFE),
+                                              ),
+                                            ),
+                                            child: const Icon(
+                                              LucideIcons.pencil,
+                                              size: 15,
+                                              color: Color(0xFF2563EB),
+                                            ),
                                           ),
                                         ),
-                                        child: const Icon(
-                                          LucideIcons.pencil,
-                                          size: 15,
-                                          color: Color(0xFF2563EB),
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    InkWell(
-                                      onTap: () => _confirmDeletePoi(poi),
-                                      borderRadius: BorderRadius.circular(10),
-                                      child: Container(
-                                        padding: const EdgeInsets.all(8),
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFFFEF2F2),
+                                        const SizedBox(width: 8),
+                                        InkWell(
+                                          onTap: () => _confirmDeletePoi(poi),
                                           borderRadius: BorderRadius.circular(
                                             10,
                                           ),
-                                          border: Border.all(
-                                            color: const Color(0xFFFECACA),
-                                          ),
-                                        ),
-                                        child: const Icon(
-                                          LucideIcons.trash2,
-                                          size: 15,
-                                          color: Color(0xFFEF4444),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-
-                                // Dedicated Full-Width Coordinates Section
-                                if (poi.location.latitude != 0.0 ||
-                                    poi.location.longitude != 0.0) ...[
-                                  const SizedBox(height: 8),
-                                  Container(
-                                    width: double.infinity,
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 10,
-                                      vertical: 6,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFFF8FAFC),
-                                      borderRadius: BorderRadius.circular(10),
-                                      border: Border.all(
-                                        color: const Color(0xFFE2E8F0),
-                                      ),
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        const Icon(
-                                          LucideIcons.mapPin,
-                                          size: 12,
-                                          color: Color(0xFF2563EB),
-                                        ),
-                                        const SizedBox(width: 6),
-                                        Expanded(
-                                          child: Wrap(
-                                            alignment: WrapAlignment.spaceBetween,
-                                            crossAxisAlignment:
-                                                WrapCrossAlignment.center,
-                                            spacing: 6,
-                                            runSpacing: 2,
-                                            children: [
-                                              Text(
-                                                '${poi.location.latitude.toStringAsFixed(6)}°N, ${poi.location.longitude.toStringAsFixed(6)}°E',
-                                                style: GoogleFonts.jetBrainsMono(
-                                                  fontSize: 10.5,
-                                                  fontWeight: FontWeight.w600,
-                                                  color: const Color(0xFF334155),
-                                                ),
+                                          child: Container(
+                                            padding: const EdgeInsets.all(8),
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFFFEF2F2),
+                                              borderRadius:
+                                                  BorderRadius.circular(10),
+                                              border: Border.all(
+                                                color: const Color(0xFFFECACA),
                                               ),
-                                              Container(
-                                                padding: const EdgeInsets.symmetric(
-                                                  horizontal: 5,
-                                                  vertical: 1.5,
-                                                ),
-                                                decoration: BoxDecoration(
-                                                  color: const Color(0xFFEFF6FF),
-                                                  borderRadius:
-                                                      BorderRadius.circular(5),
-                                                  border: Border.all(
-                                                    color: const Color(0xFFDBEAFE),
-                                                  ),
-                                                ),
-                                                child: Text(
-                                                  'Alt: ${poi.location.height.toStringAsFixed(1)}m',
-                                                  style: GoogleFonts.jetBrainsMono(
-                                                    fontSize: 10,
-                                                    fontWeight: FontWeight.w700,
-                                                    color: const Color(0xFF1D4ED8),
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
+                                            ),
+                                            child: const Icon(
+                                              LucideIcons.trash2,
+                                              size: 15,
+                                              color: Color(0xFFEF4444),
+                                            ),
                                           ),
                                         ),
                                       ],
                                     ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          );
+
+                                    // Dedicated Full-Width Coordinates Section
+                                    if (poi.location.latitude != 0.0 ||
+                                        poi.location.longitude != 0.0) ...[
+                                      const SizedBox(height: 8),
+                                      Container(
+                                        width: double.infinity,
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 6,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFF8FAFC),
+                                          borderRadius: BorderRadius.circular(
+                                            10,
+                                          ),
+                                          border: Border.all(
+                                            color: const Color(0xFFE2E8F0),
+                                          ),
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            const Icon(
+                                              LucideIcons.mapPin,
+                                              size: 12,
+                                              color: Color(0xFF2563EB),
+                                            ),
+                                            const SizedBox(width: 6),
+                                            Expanded(
+                                              child: Wrap(
+                                                alignment:
+                                                    WrapAlignment.spaceBetween,
+                                                crossAxisAlignment:
+                                                    WrapCrossAlignment.center,
+                                                spacing: 6,
+                                                runSpacing: 2,
+                                                children: [
+                                                  Text(
+                                                    '${poi.location.latitude.toStringAsFixed(6)}°N, ${poi.location.longitude.toStringAsFixed(6)}°E',
+                                                    style:
+                                                        GoogleFonts.jetBrainsMono(
+                                                          fontSize: 10.5,
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                          color: const Color(
+                                                            0xFF334155,
+                                                          ),
+                                                        ),
+                                                  ),
+                                                  Container(
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                          horizontal: 5,
+                                                          vertical: 1.5,
+                                                        ),
+                                                    decoration: BoxDecoration(
+                                                      color: const Color(
+                                                        0xFFEFF6FF,
+                                                      ),
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            5,
+                                                          ),
+                                                      border: Border.all(
+                                                        color: const Color(
+                                                          0xFFDBEAFE,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    child: Text(
+                                                      'Alt: ${poi.location.height.toStringAsFixed(1)}m',
+                                                      style:
+                                                          GoogleFonts.jetBrainsMono(
+                                                            fontSize: 10,
+                                                            fontWeight:
+                                                                FontWeight.w700,
+                                                            color: const Color(
+                                                              0xFF1D4ED8,
+                                                            ),
+                                                          ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              );
                             },
                           ),
                   ),
@@ -956,6 +1175,7 @@ class _GpsConvergenceResult {
 /// FULL-SCREEN POI CREATION & EDITING SCREEN
 class AddEditPoiScreen extends StatefulWidget {
   final DestinationPOI? existingPoi;
+  final String? initialMallId;
   final GeodeticCoords? userCoords;
   final List<DestinationPOI> destinations;
   final MallDatabaseService? mallService;
@@ -964,6 +1184,7 @@ class AddEditPoiScreen extends StatefulWidget {
   const AddEditPoiScreen({
     super.key,
     this.existingPoi,
+    this.initialMallId,
     this.userCoords,
     required this.destinations,
     this.mallService,
@@ -1011,6 +1232,132 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
     'SERVICES',
   ];
 
+  String _selectedImageUrl = '';
+
+  // ignore: unused_field
+  static const List<Map<String, String>> storeImageLibrary = [
+    {
+      'path': 'assets/images/shops/kelly_felder_designer_lounge.jpg',
+      'title': 'Kelly Felder Designer Lounge',
+      'category': 'RETAIL & FASHION',
+    },
+    {
+      'path': 'assets/images/shops/cotton_collection.jpg',
+      'title': 'Cotton Collection',
+      'category': 'RETAIL & FASHION',
+    },
+    {
+      'path': 'assets/images/shops/house_of_fashion_outlet.jpg',
+      'title': 'House of Fashion Outlet',
+      'category': 'RETAIL & FASHION',
+    },
+    {
+      'path': 'assets/images/shops/hugo_boss_luxury_apparel.jpg',
+      'title': 'Hugo Boss Luxury Apparel',
+      'category': 'RETAIL & FASHION',
+    },
+    {
+      'path': 'assets/images/shops/barefoot_ceylon_handwoven.jpg',
+      'title': 'Barefoot Ceylon Handwoven',
+      'category': 'RETAIL & FASHION',
+    },
+    {
+      'path': 'assets/images/shops/samsung_smart_experience_zone.jpg',
+      'title': 'Samsung Smart Experience',
+      'category': 'TECH & ELECTRONICS',
+    },
+    {
+      'path': 'assets/images/shops/abans_elite_apple_lg_store.jpg',
+      'title': 'Abans Elite (Apple & LG)',
+      'category': 'TECH & ELECTRONICS',
+    },
+    {
+      'path': 'assets/images/shops/singer_mega_experience_center.jpg',
+      'title': 'Singer Mega Appliances',
+      'category': 'TECH & ELECTRONICS',
+    },
+    {
+      'path': 'assets/images/shops/dialog_axiata_experience_centre.jpg',
+      'title': 'Dialog Axiata 5G Hub',
+      'category': 'TECH & ELECTRONICS',
+    },
+    {
+      'path': 'assets/images/shops/mobitel_slt_broadband_lounge.jpg',
+      'title': 'Mobitel SLT Broadband Lounge',
+      'category': 'TECH & ELECTRONICS',
+    },
+    {
+      'path': 'assets/images/shops/barista_ceylon_espresso_bar.jpg',
+      'title': 'Barista Ceylon Espresso Bar',
+      'category': 'FOOD & DRINK',
+    },
+    {
+      'path': 'assets/images/shops/dilmah_tea_lounge.jpg',
+      'title': 'Dilmah t-Lounge & Desserts',
+      'category': 'FOOD & DRINK',
+    },
+    {
+      'path': 'assets/images/shops/food_studio_ceylon_court.jpg',
+      'title': 'Food Studio Ceylon Court',
+      'category': 'FOOD & DRINK',
+    },
+    {
+      'path': 'assets/images/shops/ministry_of_crab_express.jpg',
+      'title': 'Ministry of Crab Express',
+      'category': 'FOOD & DRINK',
+    },
+    {
+      'path': 'assets/images/shops/taco_bell_sri_lanka.jpg',
+      'title': 'Taco Bell Sri Lanka',
+      'category': 'FOOD & DRINK',
+    },
+    {
+      'path': 'assets/images/shops/keells_super_hypermarket.jpg',
+      'title': 'Keells Super Hypermarket',
+      'category': 'SERVICES',
+    },
+    {
+      'path': 'assets/images/shops/keells_express_supermarket_b1.jpg',
+      'title': 'Keells Express Supermarket B1',
+      'category': 'SERVICES',
+    },
+    {
+      'path': 'assets/images/shops/spa_ceylon_luxury_ayurveda.jpg',
+      'title': 'Spa Ceylon Luxury Ayurveda',
+      'category': 'SERVICES',
+    },
+    {
+      'path': 'assets/images/shops/concierge_information_desk.jpg',
+      'title': 'Concierge Information Desk',
+      'category': 'SERVICES',
+    },
+    {
+      'path': 'assets/images/shops/pvr_scope_cinemas_imax.jpg',
+      'title': 'PVR Scope Cinemas IMAX',
+      'category': 'ENTERTAINMENT',
+    },
+    {
+      'path': 'assets/images/shops/b1_auto_car_wash.jpg',
+      'title': 'B1 Auto Car Wash & Detailing',
+      'category': 'SERVICES',
+    },
+    {
+      'path': 'assets/images/shops/b1_eco_ev_charging_hub.jpg',
+      'title': 'B1 Eco EV Charging Hub',
+      'category': 'SERVICES',
+    },
+    {
+      'path': 'assets/images/shops/b1_executive_valet_concierge.jpg',
+      'title': 'Executive Valet Concierge',
+      'category': 'SERVICES',
+    },
+    {
+      'path': 'assets/images/shops/b1_luggage_lockers.jpg',
+      'title': 'B1 Luggage Lockers',
+      'category': 'SERVICES',
+    },
+  ];
+
   double _floorOffset(int flr) => flr < 0 ? (flr * 4.5) : ((flr - 1) * 4.5);
 
   @override
@@ -1026,6 +1373,9 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
     _statusController = TextEditingController(
       text: p?.openStatus ?? 'Open Today: 10 AM - 10 PM',
     );
+    _selectedImageUrl = (p?.imageUrl != null && p!.imageUrl!.trim().isNotEmpty)
+        ? p.imageUrl!
+        : (p != null ? p.effectiveImageUrl : '');
 
     _floorNumber = p?.floorNumber ?? 1;
 
@@ -1034,10 +1384,16 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
 
     if (p?.mallId != null && p!.mallId!.isNotEmpty) {
       _selectedMallId = p.mallId!;
+    } else if (widget.initialMallId != null &&
+        widget.initialMallId!.isNotEmpty) {
+      _selectedMallId = widget.initialMallId!;
     } else {
+      final selected = _malls.where((m) => m.isSelected).firstOrNull;
       final active = _malls.where((m) => m.isActive).firstOrNull;
       _selectedMallId =
-          active?.id ?? (_malls.isNotEmpty ? _malls.first.id : '');
+          selected?.id ??
+          active?.id ??
+          (_malls.isNotEmpty ? _malls.first.id : '');
     }
 
     _loadMallsFromDatabase();
@@ -1104,10 +1460,17 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
               widget.existingPoi!.mallId!.isNotEmpty &&
               _malls.any((m) => m.id == widget.existingPoi!.mallId)) {
             _selectedMallId = widget.existingPoi!.mallId!;
+          } else if (widget.initialMallId != null &&
+              widget.initialMallId!.isNotEmpty &&
+              _malls.any((m) => m.id == widget.initialMallId)) {
+            _selectedMallId = widget.initialMallId!;
           } else {
+            final selected = _malls.where((m) => m.isSelected).firstOrNull;
             final active = _malls.where((m) => m.isActive).firstOrNull;
             _selectedMallId =
-                active?.id ?? (_malls.isNotEmpty ? _malls.first.id : '');
+                selected?.id ??
+                active?.id ??
+                (_malls.isNotEmpty ? _malls.first.id : '');
           }
         });
       }
@@ -1400,7 +1763,7 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
               }
             }, onError: (_) {});
 
-        // Allow up to 2.4 seconds for satellite convergence
+        // Allow up to 2.4 milliseconds for satellite convergence
         await Future.any([
           completer.future,
           Future.delayed(const Duration(milliseconds: 2400)),
@@ -1566,6 +1929,408 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
     }
   }
 
+  Future<void> _pickImage(ImageSource source) async {
+    try {
+      final picker = ImagePicker();
+      final XFile? pickedFile = await picker.pickImage(
+        source: source,
+        maxWidth: 512,
+        maxHeight: 512,
+        imageQuality: 70,
+      );
+
+      if (pickedFile != null) {
+        final bytes = await pickedFile.readAsBytes();
+        final base64String = 'data:image/jpeg;base64,${base64Encode(bytes)}';
+        ShopImage.cacheBytes(base64String, bytes);
+        setState(() {
+          _selectedImageUrl = base64String;
+        });
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: const [
+                  Icon(LucideIcons.checkCircle2, color: Colors.white, size: 18),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Shop image loaded from phone storage successfully!',
+                    ),
+                  ),
+                ],
+              ),
+              backgroundColor: const Color(0xFF10B981),
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to pick image from phone storage: $e'),
+            backgroundColor: const Color(0xFFEF4444),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
+  void _showImageSourcePicker() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFCBD5E1),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Upload Shop Image',
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
+                  color: const Color(0xFF0F172A),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Upload a storefront photo from your phone gallery storage or take a photo with the camera.',
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 12,
+                  color: const Color(0xFF64748B),
+                ),
+              ),
+              const SizedBox(height: 18),
+              ListTile(
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 6,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  side: const BorderSide(color: Color(0xFFBFDBFE), width: 1.5),
+                ),
+                tileColor: const Color(0xFFEFF6FF),
+                title: Text(
+                  'Choose from Phone Gallery',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: const Color(0xFF1E3A8A),
+                  ),
+                ),
+                subtitle: Text(
+                  'Select photo from local device storage / gallery',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 11.5,
+                    color: const Color(0xFF3B82F6),
+                  ),
+                ),
+                trailing: const Icon(
+                  LucideIcons.chevronRight,
+                  size: 18,
+                  color: Color(0xFF2563EB),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickImage(ImageSource.gallery);
+                },
+              ),
+              const SizedBox(height: 10),
+              ListTile(
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 6,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  side: const BorderSide(color: Color(0xFFE2E8F0)),
+                ),
+                tileColor: const Color(0xFFF8FAFC),
+                title: Text(
+                  'Take Photo with Camera',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: const Color(0xFF0F172A),
+                  ),
+                ),
+                subtitle: Text(
+                  'Snap a live picture of the shop entrance',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 11.5,
+                    color: const Color(0xFF64748B),
+                  ),
+                ),
+                trailing: const Icon(
+                  LucideIcons.chevronRight,
+                  size: 18,
+                  color: Color(0xFF94A3B8),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickImage(ImageSource.camera);
+                },
+              ),
+              const SizedBox(height: 14),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildImageUploadCard() {
+    final bool hasImage = _selectedImageUrl.trim().isNotEmpty;
+
+    return _buildFormFieldCard(
+      title: 'STORE IMAGE (REQUIRED)',
+      icon: LucideIcons.image,
+      iconColor: hasImage ? const Color(0xFF16A34A) : const Color(0xFF2563EB),
+      children: [
+        if (hasImage) ...[
+          // Live Image Preview with Overlay Controls
+          ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: Stack(
+              children: [
+                SizedBox(
+                  width: double.infinity,
+                  height: 150,
+                  child: ShopImage(
+                    imagePathOrUrl: _selectedImageUrl,
+                    fit: BoxFit.cover,
+                  ),
+                ),
+                Positioned.fill(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.transparent,
+                          Colors.black.withValues(alpha: 0.65),
+                        ],
+                        stops: const [0.4, 1.0],
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: 10,
+                  right: 10,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 9,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF10B981),
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.2),
+                          blurRadius: 6,
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          LucideIcons.check,
+                          size: 12,
+                          color: Colors.white,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          'PHOTO ATTACHED',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  bottom: 10,
+                  child: Text(
+                    _selectedImageUrl.startsWith('data:image')
+                        ? 'Phone Storage Photo (${(_selectedImageUrl.length / 1024).round()} KB)'
+                        : _selectedImageUrl.split('/').last,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _showImageSourcePicker,
+                  icon: const Icon(LucideIcons.refreshCw, size: 14),
+                  label: const Text('Change Photo'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF2563EB),
+                    side: const BorderSide(color: Color(0xFFBFDBFE)),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              OutlinedButton.icon(
+                onPressed: () => setState(() => _selectedImageUrl = ''),
+                icon: const Icon(LucideIcons.trash2, size: 14),
+                label: const Text('Remove'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFEF4444),
+                  side: const BorderSide(color: Color(0xFFFCA5A5)),
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 10,
+                    horizontal: 14,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ] else ...[
+          // Empty State - Image is REQUIRED
+          InkWell(
+            onTap: _showImageSourcePicker,
+            borderRadius: BorderRadius.circular(16),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 16),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEF2F2),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFFF87171), width: 1.5),
+              ),
+              child: Column(
+                children: [
+                  Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFEE2E2),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: const Color(0xFFFCA5A5)),
+                    ),
+                    child: const Icon(
+                      LucideIcons.imagePlus,
+                      size: 22,
+                      color: Color(0xFFDC2626),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Store Photo Required *',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                      color: const Color(0xFF991B1B),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Upload a photo from your phone storage/gallery to show on store directory and AR navigation.',
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 11.5,
+                      color: const Color(0xFF7F1D1D),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        flex: 3,
+                        child: ElevatedButton.icon(
+                          onPressed: () => _pickImage(ImageSource.gallery),
+                          icon: const Icon(LucideIcons.image, size: 16),
+                          label: const Text('Phone Gallery'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF2563EB),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            elevation: 1,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        flex: 2,
+                        child: OutlinedButton.icon(
+                          onPressed: () => _pickImage(ImageSource.camera),
+                          icon: const Icon(LucideIcons.camera, size: 16),
+                          label: const Text('Camera'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFF0F172A),
+                            side: const BorderSide(color: Color(0xFFCBD5E1)),
+                            backgroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
   void _savePoi() {
     final name = _nameController.text.trim();
     if (name.isEmpty) {
@@ -1573,6 +2338,29 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
         const SnackBar(
           content: Text('Please enter a Store / POI Name.'),
           backgroundColor: Color(0xFFEF4444),
+        ),
+      );
+      return;
+    }
+
+    final img = _selectedImageUrl.trim();
+    if (img.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: const [
+              Icon(LucideIcons.imagePlus, color: Colors.white, size: 18),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Shop image is required. Please upload or choose a store photo.',
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: const Color(0xFFEF4444),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
         ),
       );
       return;
@@ -1591,6 +2379,12 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
         double.tryParse(_heightController.text) ??
         (_activeBaseAltitude + _floorOffset(_floorNumber));
 
+    final effectiveMallId = _selectedMallId.isNotEmpty
+        ? _selectedMallId
+        : (widget.initialMallId != null && widget.initialMallId!.isNotEmpty
+              ? widget.initialMallId!
+              : (_malls.isNotEmpty ? _malls.first.id : ''));
+
     final newPoi = DestinationPOI(
       id: isEditing
           ? widget.existingPoi!.id
@@ -1603,8 +2397,9 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
           ? _statusController.text.trim()
           : 'Open Today: 10 AM - 10 PM',
       description: _descController.text.trim(),
+      imageUrl: img,
       location: GeodeticCoords(latitude: lat, longitude: lng, height: alt),
-      mallId: _selectedMallId.isNotEmpty ? _selectedMallId : null,
+      mallId: effectiveMallId.isNotEmpty ? effectiveMallId : null,
     );
 
     widget.onSavePoi(newPoi, isEditing);
@@ -2240,7 +3035,11 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
             ),
             const SizedBox(height: 16),
 
-            // CARD 2: GEODETIC 3D POSITIONING (WGS84)
+            // CARD 2: STORE IMAGE (REQUIRED)
+            _buildImageUploadCard(),
+            const SizedBox(height: 16),
+
+            // CARD 3: GEODETIC 3D POSITIONING (WGS84)
             _buildFormFieldCard(
               title: 'GEODETIC POSITIONING (WGS84)',
               icon: LucideIcons.mapPin,
@@ -2257,11 +3056,26 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
                             MaterialPageRoute(
                               builder: (context) => AdminOSMMapScreen(
                                 userCoords:
-                                    widget.userCoords ??
-                                    const GeodeticCoords(
-                                      latitude: 0.0,
-                                      longitude: 0.0,
-                                      height: 0.0,
+                                    _lastStabilizedCoords ??
+                                    GeodeticCoords(
+                                      latitude:
+                                          double.tryParse(
+                                            _latController.text,
+                                          ) ??
+                                          widget.userCoords?.latitude ??
+                                          0.0,
+                                      longitude:
+                                          double.tryParse(
+                                            _lngController.text,
+                                          ) ??
+                                          widget.userCoords?.longitude ??
+                                          0.0,
+                                      height:
+                                          double.tryParse(
+                                            _heightController.text,
+                                          ) ??
+                                          widget.userCoords?.height ??
+                                          0.0,
                                     ),
                                 destinations: widget.destinations,
                                 isPickerMode: true,
@@ -2443,7 +3257,7 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
                       child: _buildTextInput(
                         label: 'Latitude (°N)',
                         controller: _latController,
-                        hintText: '8.502424',
+                        hintText: 'Auto (Live GPS)',
                         onChanged: (_) {
                           setState(() {
                             _isCoordinatesPinned = true;
@@ -2457,7 +3271,7 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
                       child: _buildTextInput(
                         label: 'Longitude (°E)',
                         controller: _lngController,
-                        hintText: '81.181251',
+                        hintText: 'Auto (Live GPS)',
                         onChanged: (_) {
                           setState(() {
                             _isCoordinatesPinned = true;

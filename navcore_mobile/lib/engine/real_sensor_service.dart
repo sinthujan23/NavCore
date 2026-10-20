@@ -165,12 +165,24 @@ class RealSensorService {
   }
 
   double _smoothedPitch = 0.0;
-  final double _alpha = 0.25;
+  double _smoothedHeading = 0.0;
+  PitchTiltDirection _lastNotifiedTiltDir = PitchTiltDirection.level;
 
   DateTime _lastPitchNotifyTime = DateTime.now();
   DateTime _lastHeadingNotifyTime = DateTime.now();
+  DateTime _lastPressureNotifyTime = DateTime.now();
   double _lastNotifiedHeading = -999.0;
   double _lastNotifiedPitch = -999.0;
+  double _lastNotifiedPressure = -999.0;
+
+  // Filtered accelerometer gravity vector components to strip high-frequency vibration
+  double _filtAccelX = 0.0;
+  double _filtAccelY = 0.0;
+  double _filtAccelZ = 9.81;
+
+  // Dynamic device stillness / stationary detection state
+  bool _isDeviceStationary = false;
+  int _stationaryCounter = 0;
 
   void startHardwareStreams({
     required Function(GeodeticCoords coords, double accuracyMeters)
@@ -182,6 +194,17 @@ class RealSensorService {
     onPressureUpdated,
   }) {
     stopHardwareStreams();
+
+    // Immediately trigger location if already known or available
+    if (_lastCoords != null && _lastCoords!.latitude != 0.0) {
+      onLocationUpdated(_lastCoords!, _lastAccuracyMeters);
+    } else {
+      getLastKnownOrCurrentPosition().then((pos) {
+        if (pos != null && pos.latitude != 0.0) {
+          onLocationUpdated(pos, _lastAccuracyMeters);
+        }
+      });
+    }
 
     // 1. GPS Position Stream
     const locationSettings = LocationSettings(
@@ -242,16 +265,52 @@ class RealSensorService {
           _accelY = rawY.isNaN || rawY.isInfinite ? 0.0 : rawY;
           _accelZ = rawZ.isNaN || rawZ.isInfinite ? 9.81 : rawZ;
 
-          final pitchRad = math.atan2(-_accelZ, _accelY.abs());
+          // Low-pass filter the gravity vector components (strips vibration & micro-noise)
+          const double lpf = 0.15;
+          _filtAccelX = (lpf * _accelX) + ((1.0 - lpf) * _filtAccelX);
+          _filtAccelY = (lpf * _accelY) + ((1.0 - lpf) * _filtAccelY);
+          _filtAccelZ = (lpf * _accelZ) + ((1.0 - lpf) * _filtAccelZ);
+
+          // Measure dynamic motion energy (deviation from filtered gravity vector)
+          final double dynamicMotion = math.sqrt(
+            (_accelX - _filtAccelX) * (_accelX - _filtAccelX) +
+            (_accelY - _filtAccelY) * (_accelY - _filtAccelY) +
+            (_accelZ - _filtAccelZ) * (_accelZ - _filtAccelZ),
+          );
+
+          // Detect stillness: motionless phone exhibits very low dynamic acceleration
+          if (dynamicMotion < 0.22) {
+            _stationaryCounter = math.min(50, _stationaryCounter + 1);
+          } else {
+            _stationaryCounter = 0;
+          }
+          _isDeviceStationary = _stationaryCounter >= 4;
+
+          // Calculate raw pitch from filtered gravity vector
+          // Negate Z so pointing UP produces +pitch, DOWN produces -pitch
+          final pitchRad = math.atan2(-_filtAccelZ, _filtAccelY.abs());
           final rawPitchDeg = pitchRad * (180.0 / math.pi);
           final safePitchDeg = rawPitchDeg.isNaN || rawPitchDeg.isInfinite
               ? 0.0
               : rawPitchDeg;
 
-          // Low-Pass Smoothing Filter
-          _smoothedPitch =
-              (_alpha * safePitchDeg) + ((1.0 - _alpha) * _smoothedPitch);
+          if (_lastNotifiedPitch == -999.0) {
+            _smoothedPitch = safePitchDeg;
+            _lastNotifiedPitch = safePitchDeg;
+          } else {
+            final pitchDiff = safePitchDeg - _smoothedPitch;
+            if (_isDeviceStationary) {
+              // Stationary deadband: ignore thermal sensor jitter < 0.8°
+              if (pitchDiff.abs() >= 0.8) {
+                _smoothedPitch += pitchDiff * 0.04;
+              }
+            } else {
+              // Responsive tracking during real movement
+              _smoothedPitch += pitchDiff * 0.22;
+            }
+          }
 
+          // Determine pitch tilt direction with hysteresis
           PitchTiltDirection dir = PitchTiltDirection.level;
           if (_smoothedPitch > 15.0) {
             dir = PitchTiltDirection.up;
@@ -260,11 +319,15 @@ class RealSensorService {
           }
 
           final now = DateTime.now();
-          final pitchDelta = (_smoothedPitch - _lastNotifiedPitch).abs();
-          if (now.difference(_lastPitchNotifyTime).inMilliseconds >= 33 ||
-              pitchDelta >= 0.4) {
+          final pitchChange = (_smoothedPitch - _lastNotifiedPitch).abs();
+          // CRITICAL: Only notify when there is an actual meaningful change >= 0.3°
+          // OR when tilt direction changes, with minimum 50ms interval.
+          // NEVER notify purely because time elapsed if pitch hasn't changed!
+          if ((pitchChange >= 0.3 || dir != _lastNotifiedTiltDir) &&
+              now.difference(_lastPitchNotifyTime).inMilliseconds >= 50) {
             _lastPitchNotifyTime = now;
             _lastNotifiedPitch = _smoothedPitch;
+            _lastNotifiedTiltDir = dir;
             if (onPitchUpdated != null) {
               onPitchUpdated(_smoothedPitch, dir);
             }
@@ -280,12 +343,12 @@ class RealSensorService {
           double magY = event.y.isNaN || event.y.isInfinite ? 0.0 : event.y;
           double magZ = event.z.isNaN || event.z.isInfinite ? 0.0 : event.z;
 
-          // Pitch & Roll estimate from accelerometer
+          // Pitch & Roll estimate from filtered accelerometer
           double roll = math.atan2(
-            -_accelX,
-            math.sqrt(_accelY * _accelY + _accelZ * _accelZ),
+            -_filtAccelX,
+            math.sqrt(_filtAccelY * _filtAccelY + _filtAccelZ * _filtAccelZ),
           );
-          double pitch = math.atan2(_accelZ, _accelY.abs());
+          double pitch = math.atan2(_filtAccelZ, _filtAccelY.abs());
 
           // Tilt compensated magnetic calculation
           double magCompX = magX * math.cos(pitch) + magZ * math.sin(pitch);
@@ -296,7 +359,6 @@ class RealSensorService {
 
           double headingDeg;
           if (magCompX.abs() < 1e-5 && magCompY.abs() < 1e-5) {
-            // Fallback when magnetometer is uncalibrated or zero (common on iOS simulator / uncalibrated sensors)
             headingDeg = _currentHeadingDegrees;
           } else {
             double headingRad = math.atan2(-magCompY, magCompX);
@@ -307,14 +369,36 @@ class RealSensorService {
             headingDeg = 0.0;
           }
 
-          final now = DateTime.now();
-          final headingDelta = (headingDeg - _lastNotifiedHeading).abs();
-          if (now.difference(_lastHeadingNotifyTime).inMilliseconds >= 33 ||
-              headingDelta >= 0.3) {
-            _lastHeadingNotifyTime = now;
+          if (_lastNotifiedHeading == -999.0) {
+            _smoothedHeading = headingDeg;
             _lastNotifiedHeading = headingDeg;
             _currentHeadingDegrees = headingDeg;
-            onHeadingUpdated(headingDeg);
+          } else {
+            // Shortest angular difference (-180° to +180°)
+            double diff = (headingDeg - _smoothedHeading + 540) % 360 - 180;
+
+            if (_isDeviceStationary) {
+              // Stationary deadband: ignore ambient magnetic sensor noise floor (< 1.2°)
+              if (diff.abs() >= 1.2) {
+                _smoothedHeading = (_smoothedHeading + diff * 0.04 + 360) % 360;
+              }
+            } else {
+              // Responsive tracking while turning device
+              _smoothedHeading = (_smoothedHeading + diff * 0.22 + 360) % 360;
+            }
+          }
+
+          final now = DateTime.now();
+          final headingChange =
+              (_smoothedHeading - _lastNotifiedHeading + 540) % 360 - 180;
+          // Only notify when heading changes by >= 0.4° with at least 50ms interval.
+          // NEVER notify purely because 33ms elapsed if heading did not change!
+          if (headingChange.abs() >= 0.4 &&
+              now.difference(_lastHeadingNotifyTime).inMilliseconds >= 50) {
+            _lastHeadingNotifyTime = now;
+            _lastNotifiedHeading = _smoothedHeading;
+            _currentHeadingDegrees = _smoothedHeading;
+            onHeadingUpdated(_smoothedHeading);
           }
         });
 
@@ -328,30 +412,41 @@ class RealSensorService {
             double gyroY = event.y.isNaN || event.y.isInfinite ? 0.0 : event.y;
             double gyroZ = event.z.isNaN || event.z.isInfinite ? 0.0 : event.z;
 
+            final double gyroSpeed = math.sqrt(
+              gyroX * gyroX + gyroY * gyroY + gyroZ * gyroZ,
+            );
             final now = DateTime.now();
+
+            // If phone is stationary or gyro speed is within noise floor (< 0.05 rad/s ~ 2.8°/s):
+            // DO NOT integrate gyro drift! This stops phantom auto-spinning.
+            if (gyroSpeed < 0.05 || _isDeviceStationary) {
+              _lastGyroTime = now;
+              return;
+            }
+
             if (_lastGyroTime != null) {
               final dt =
-                  now.difference(_lastGyroTime!).inMicroseconds / 1000000.0;
+                  now.difference(_lastGyroTime!).inMicroseconds /
+                  1000000.0;
               if (dt > 0.001 && dt < 0.1) {
-                // Integrate gyro pitch rate (X axis) & yaw rate (Y/Z axes)
-                final pitchRad = math.atan2(_accelZ, _accelY.abs());
+                // Integrate gyro yaw rate during active rotation
+                final pitchRad = math.atan2(_filtAccelZ, _filtAccelY.abs());
                 final sinP = math.sin(pitchRad).abs();
                 final cosP = math.cos(pitchRad).abs();
                 final yawRate = (gyroY * cosP) + (gyroZ * sinP);
                 final gyroHeadingDelta = (yawRate * dt) * (180.0 / math.pi);
 
-                // Complementary pitch integration using gyroX
-                final gyroPitchDelta = (gyroX * dt) * (180.0 / math.pi);
-                _smoothedPitch =
-                    (0.95 * (_smoothedPitch + gyroPitchDelta)) +
-                    (0.05 * _smoothedPitch);
+                _smoothedHeading =
+                    (_smoothedHeading - gyroHeadingDelta + 360.0) % 360.0;
 
-                double newHeading =
-                    (_currentHeadingDegrees - gyroHeadingDelta + 360.0) % 360.0;
-                if ((newHeading - _lastNotifiedHeading).abs() >= 0.1) {
-                  _lastNotifiedHeading = newHeading;
-                  _currentHeadingDegrees = newHeading;
-                  onHeadingUpdated(newHeading);
+                final headingChange =
+                    (_smoothedHeading - _lastNotifiedHeading + 540) % 360 - 180;
+                if (headingChange.abs() >= 0.4 &&
+                    now.difference(_lastHeadingNotifyTime).inMilliseconds >= 50) {
+                  _lastHeadingNotifyTime = now;
+                  _lastNotifiedHeading = _smoothedHeading;
+                  _currentHeadingDegrees = _smoothedHeading;
+                  onHeadingUpdated(_smoothedHeading);
                 }
               }
             }
@@ -383,8 +478,16 @@ class RealSensorService {
                   (_baroAlpha * rawPressure) +
                   ((1.0 - _baroAlpha) * _smoothedPressureHpa);
 
-              if (onPressureUpdated != null) {
-                onPressureUpdated(_rawPressureHpa, _smoothedPressureHpa);
+              final now = DateTime.now();
+              final pressureChange =
+                  (_smoothedPressureHpa - _lastNotifiedPressure).abs();
+              if ((pressureChange >= 0.04 || _lastNotifiedPressure == -999.0) &&
+                  now.difference(_lastPressureNotifyTime).inMilliseconds >= 200) {
+                _lastPressureNotifyTime = now;
+                _lastNotifiedPressure = _smoothedPressureHpa;
+                if (onPressureUpdated != null) {
+                  onPressureUpdated(_rawPressureHpa, _smoothedPressureHpa);
+                }
               }
             },
             onError: (err) {

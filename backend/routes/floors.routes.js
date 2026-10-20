@@ -10,11 +10,23 @@ const { requireAdmin } = require('../middleware/auth');
 router.get('/:mallId', (req, res) => {
   const mallId = (req.params.mallId || '').trim();
   const lowerMallId = mallId.toLowerCase();
-  let list = db.filter('floorHeights', f => (f.mallId || '').trim().toLowerCase() === lowerMallId);
+  let list = db.filter('floorHeights', f => {
+    const fMall = (f.mallId || '').trim().toLowerCase();
+    return fMall === lowerMallId ||
+      fMall === lowerMallId.replace(/^mall-/, '') ||
+      lowerMallId === fMall.replace(/^mall-/, '') ||
+      (fMall.length > 0 && (fMall.includes(lowerMallId) || lowerMallId.includes(fMall)));
+  });
 
   // If no floors exist in DB yet for this mall, automatically populate standard floors from mall metadata
   if (list.length === 0) {
-    const mall = db.find('malls', m => (m.id || '').trim().toLowerCase() === lowerMallId);
+    const mall = db.find('malls', m => {
+      const mMall = (m.id || '').trim().toLowerCase();
+      return mMall === lowerMallId ||
+        mMall === lowerMallId.replace(/^mall-/, '') ||
+        lowerMallId === mMall.replace(/^mall-/, '') ||
+        (mMall.length > 0 && (mMall.includes(lowerMallId) || lowerMallId.includes(mMall)));
+    });
     if (mall) {
       const floorCount = Number(mall.floorCount) || 3;
       const gap = Number(mall.floorGapMeters) || 3.8;

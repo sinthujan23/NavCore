@@ -36,9 +36,9 @@ class AdminOSMMapScreen extends StatefulWidget {
 
 class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
   late final MapController _mapController;
-  late LatLng _currentCenter;
+  LatLng? _currentCenter;
   LatLng? _selectedPickerPoint;
-  
+
   List<DestinationPOI> _osmDiscoveredPOIs = [];
   bool _isLoadingOSM = false;
   final double _discoveryRadiusMeters = 500.0;
@@ -49,71 +49,110 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
   void initState() {
     super.initState();
     _mapController = MapController();
-    _currentCenter = LatLng(
-      widget.userCoords.latitude != 0.0 ? widget.userCoords.latitude : 8.5024,
-      widget.userCoords.longitude != 0.0 ? widget.userCoords.longitude : 81.1812,
-    );
 
-    _fetchLiveOSMVenues();
+    final bool hasValidUserCoords =
+        widget.userCoords.latitude != 0.0 && widget.userCoords.longitude != 0.0;
+    if (hasValidUserCoords) {
+      _currentCenter = LatLng(
+        widget.userCoords.latitude,
+        widget.userCoords.longitude,
+      );
+      _fetchLiveOSMVenues();
+    }
+
     _fetchLiveGPSAndCenter();
   }
 
   Future<void> _fetchLiveGPSAndCenter() async {
     try {
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) return;
+      if (!serviceEnabled) {
+        if (mounted && _currentCenter == null) {
+          setState(() {
+            _currentCenter = const LatLng(0.0, 0.0);
+          });
+        }
+        return;
+      }
 
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) return;
+        if (permission == LocationPermission.denied) {
+          if (mounted && _currentCenter == null) {
+            setState(() {
+              _currentCenter = const LatLng(0.0, 0.0);
+            });
+          }
+          return;
+        }
       }
-      if (permission == LocationPermission.deniedForever) return;
+      if (permission == LocationPermission.deniedForever) {
+        if (mounted && _currentCenter == null) {
+          setState(() {
+            _currentCenter = const LatLng(0.0, 0.0);
+          });
+        }
+        return;
+      }
 
       final last = await Geolocator.getLastKnownPosition();
       if (last != null && mounted) {
+        final wasNull = _currentCenter == null;
         setState(() {
           _currentCenter = LatLng(last.latitude, last.longitude);
         });
-        _mapController.move(_currentCenter, 16.5);
+        if (!wasNull) {
+          _mapController.move(_currentCenter!, 16.5);
+        }
         _fetchLiveOSMVenues();
       }
 
       final pos = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 10),
+          timeLimit: Duration(seconds: 8),
         ),
       );
 
       if (mounted) {
+        final wasNull = _currentCenter == null;
         setState(() {
           _currentCenter = LatLng(pos.latitude, pos.longitude);
         });
-        _mapController.move(_currentCenter, 16.5);
+        if (!wasNull) {
+          _mapController.move(_currentCenter!, 16.5);
+        }
         _fetchLiveOSMVenues();
       }
     } catch (e) {
       debugPrint('Live GPS fetch error in OSM explorer: $e');
+      if (mounted && _currentCenter == null) {
+        setState(() {
+          _currentCenter = const LatLng(0.0, 0.0);
+        });
+      }
     }
   }
 
   Future<void> _fetchLiveOSMVenues() async {
+    if (_currentCenter == null) return;
     setState(() {
       _isLoadingOSM = true;
     });
 
     try {
       final userGeodetic = GeodeticCoords(
-        latitude: _currentCenter.latitude,
-        longitude: _currentCenter.longitude,
+        latitude: _currentCenter!.latitude,
+        longitude: _currentCenter!.longitude,
         height: widget.userCoords.height,
       );
 
-      final places = await OSMPlaceDiscoveryService.instance.fetchRealOSMPlacesAroundUser(
-        userCoords: userGeodetic,
-        radiusMeters: _discoveryRadiusMeters,
-      );
+      final places = await OSMPlaceDiscoveryService.instance
+          .fetchRealOSMPlacesAroundUser(
+            userCoords: userGeodetic,
+            radiusMeters: _discoveryRadiusMeters,
+          );
 
       if (mounted) {
         setState(() {
@@ -147,8 +186,12 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
   Color _getCategoryColor(String category) {
     final c = category.toUpperCase();
     if (c.contains('FOOD')) return const Color(0xFFF59E0B); // Amber
-    if (c.contains('RETAIL') || c.contains('FASHION')) return const Color(0xFF8B5CF6); // Purple
-    if (c.contains('TECH') || c.contains('ELECTRONIC')) return const Color(0xFF3B82F6); // Blue
+    if (c.contains('RETAIL') || c.contains('FASHION')) {
+      return const Color(0xFF8B5CF6); // Purple
+    }
+    if (c.contains('TECH') || c.contains('ELECTRONIC')) {
+      return const Color(0xFF3B82F6); // Blue
+    }
     if (c.contains('PARKING')) return const Color(0xFF64748B); // Slate
     if (c.contains('SERVICES')) return const Color(0xFF10B981); // Emerald
     return const Color(0xFF6366F1); // Indigo default
@@ -157,23 +200,33 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
   IconData _getCategoryIcon(String category) {
     final c = category.toUpperCase();
     if (c.contains('FOOD')) return LucideIcons.utensils;
-    if (c.contains('RETAIL') || c.contains('FASHION')) return LucideIcons.shoppingBag;
-    if (c.contains('TECH') || c.contains('ELECTRONIC')) return LucideIcons.smartphone;
+    if (c.contains('RETAIL') || c.contains('FASHION')) {
+      return LucideIcons.shoppingBag;
+    }
+    if (c.contains('TECH') || c.contains('ELECTRONIC')) {
+      return LucideIcons.smartphone;
+    }
     if (c.contains('PARKING')) return LucideIcons.car;
     if (c.contains('SERVICES')) return LucideIcons.info;
     return LucideIcons.mapPin;
   }
 
   List<DestinationPOI> get _effectiveDisplayPOIs {
-    final combined = <DestinationPOI>[...widget.destinations, ..._osmDiscoveredPOIs];
+    final combined = <DestinationPOI>[
+      ...widget.destinations,
+      ..._osmDiscoveredPOIs,
+    ];
     final uniqueMap = <String, DestinationPOI>{};
     for (final p in combined) {
       uniqueMap[p.id] = p;
     }
-    
+
     return uniqueMap.values.where((poi) {
-      final matchesFloor = _selectedFloorFilter == 0 || poi.floorNumber == _selectedFloorFilter;
-      final matchesCategory = _selectedCategory == 'ALL' || poi.category.toUpperCase().contains(_selectedCategory);
+      final matchesFloor =
+          _selectedFloorFilter == 0 || poi.floorNumber == _selectedFloorFilter;
+      final matchesCategory =
+          _selectedCategory == 'ALL' ||
+          poi.category.toUpperCase().contains(_selectedCategory);
       return matchesFloor && matchesCategory;
     }).toList();
   }
@@ -181,7 +234,8 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
   LatLng _getDispersedCoords(LatLng center, int index, int totalInCluster) {
     if (totalInCluster <= 1) return center;
     final double radius = 0.00015 + (index ~/ 8) * 0.00010;
-    final double angle = (index % 8) * (2 * math.pi / math.min(totalInCluster, 8));
+    final double angle =
+        (index % 8) * (2 * math.pi / math.min(totalInCluster, 8));
     return LatLng(
       center.latitude + radius * math.cos(angle),
       center.longitude + radius * math.sin(angle) * 1.2,
@@ -191,7 +245,8 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
   List<Marker> _buildPoiMarkers(List<DestinationPOI> displayPOIs) {
     final Map<String, List<DestinationPOI>> clusters = {};
     for (final poi in displayPOIs) {
-      final key = '${(poi.location.latitude * 10000).round()}_${(poi.location.longitude * 10000).round()}';
+      final key =
+          '${(poi.location.latitude * 10000).round()}_${(poi.location.longitude * 10000).round()}';
       clusters.putIfAbsent(key, () => []).add(poi);
     }
 
@@ -201,7 +256,11 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
       for (int i = 0; i < poiList.length; i++) {
         final poi = poiList[i];
         final rawLatLng = LatLng(poi.location.latitude, poi.location.longitude);
-        final dispersedLatLng = _getDispersedCoords(rawLatLng, i, poiList.length);
+        final dispersedLatLng = _getDispersedCoords(
+          rawLatLng,
+          i,
+          poiList.length,
+        );
         final color = _getCategoryColor(poi.category);
 
         markers.add(
@@ -215,19 +274,33 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 3,
+                    ),
                     decoration: BoxDecoration(
                       color: color,
                       borderRadius: BorderRadius.circular(10),
                       boxShadow: const [
-                        BoxShadow(color: Colors.black38, blurRadius: 4, offset: Offset(0, 2)),
+                        BoxShadow(
+                          color: Colors.black38,
+                          blurRadius: 4,
+                          offset: Offset(0, 2),
+                        ),
                       ],
-                      border: Border.all(color: Colors.white.withValues(alpha: 0.3), width: 1),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.3),
+                        width: 1,
+                      ),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(_getCategoryIcon(poi.category), size: 11, color: Colors.white),
+                        Icon(
+                          _getCategoryIcon(poi.category),
+                          size: 11,
+                          color: Colors.white,
+                        ),
                         const SizedBox(width: 3),
                         Flexible(
                           child: Text(
@@ -243,7 +316,10 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
                         ),
                         const SizedBox(width: 3),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 3,
+                            vertical: 1,
+                          ),
                           decoration: BoxDecoration(
                             color: Colors.black.withValues(alpha: 0.35),
                             borderRadius: BorderRadius.circular(3),
@@ -260,7 +336,11 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
                       ],
                     ),
                   ),
-                  const Icon(LucideIcons.chevronDown, size: 10, color: Color(0xFF1E293B)),
+                  const Icon(
+                    LucideIcons.chevronDown,
+                    size: 10,
+                    color: Color(0xFF1E293B),
+                  ),
                 ],
               ),
             ),
@@ -274,14 +354,68 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
 
   @override
   Widget build(BuildContext meContext) {
+    if (_currentCenter == null) {
+      return Scaffold(
+        backgroundColor: const Color(0xFF0F172A),
+        appBar: AppBar(
+          backgroundColor: const Color(0xFF1E293B),
+          elevation: 0,
+          leading: IconButton(
+            icon: const Icon(LucideIcons.arrowLeft, color: Colors.white),
+            onPressed: () => Navigator.pop(context),
+          ),
+          title: Text(
+            widget.isPickerMode
+                ? 'Pick Coordinates on OSM'
+                : 'OpenStreetMap Live Admin Explorer',
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+            ),
+          ),
+        ),
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(
+                width: 32,
+                height: 32,
+                child: CircularProgressIndicator(
+                  strokeWidth: 3,
+                  color: Color(0xFF38BDF8),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Locating your position...',
+                style: GoogleFonts.plusJakartaSans(
+                  color: const Color(0xFF94A3B8),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     final displayPOIs = _effectiveDisplayPOIs;
-    final combined = <DestinationPOI>[...widget.destinations, ..._osmDiscoveredPOIs];
-    final availableFloors = combined.map((p) => p.floorNumber).toSet().toList()..sort();
-    final availableCategories = combined
-        .map((p) => p.category.toUpperCase().trim())
-        .where((c) => c.isNotEmpty)
-        .toSet()
-        .toList()..sort();
+    final combined = <DestinationPOI>[
+      ...widget.destinations,
+      ..._osmDiscoveredPOIs,
+    ];
+    final availableFloors = combined.map((p) => p.floorNumber).toSet().toList()
+      ..sort();
+    final availableCategories =
+        combined
+            .map((p) => p.category.toUpperCase().trim())
+            .where((c) => c.isNotEmpty)
+            .toSet()
+            .toList()
+          ..sort();
 
     return Scaffold(
       backgroundColor: const Color(0xFF0F172A),
@@ -296,7 +430,9 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              widget.isPickerMode ? 'Pick Coordinates on OSM' : 'OpenStreetMap Live Admin Explorer',
+              widget.isPickerMode
+                  ? 'Pick Coordinates on OSM'
+                  : 'OpenStreetMap Live Admin Explorer',
               style: GoogleFonts.plusJakartaSans(
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
@@ -318,7 +454,10 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
                 ? const SizedBox(
                     width: 18,
                     height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF38BDF8)),
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Color(0xFF38BDF8),
+                    ),
                   )
                 : const Icon(LucideIcons.refreshCw, color: Color(0xFF38BDF8)),
             onPressed: _fetchLiveOSMVenues,
@@ -333,7 +472,7 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
           FlutterMap(
             mapController: _mapController,
             options: MapOptions(
-              initialCenter: _currentCenter,
+              initialCenter: _currentCenter!,
               initialZoom: 16.5,
               maxZoom: 19.0,
               minZoom: 10.0,
@@ -351,14 +490,17 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
                 markers: [
                   // User Live Location Marker
                   Marker(
-                    point: LatLng(widget.userCoords.latitude, widget.userCoords.longitude),
+                    point: _currentCenter!,
                     width: 44,
                     height: 44,
                     child: Container(
                       decoration: BoxDecoration(
                         color: const Color(0xFF0284C7).withValues(alpha: 0.25),
                         shape: BoxShape.circle,
-                        border: Border.all(color: const Color(0xFF38BDF8), width: 2),
+                        border: Border.all(
+                          color: const Color(0xFF38BDF8),
+                          width: 2,
+                        ),
                       ),
                       child: Center(
                         child: Container(
@@ -387,10 +529,18 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
                               color: Color(0xFFE11D48),
                               shape: BoxShape.circle,
                               boxShadow: [
-                                BoxShadow(color: Colors.black38, blurRadius: 6, offset: Offset(0, 3)),
+                                BoxShadow(
+                                  color: Colors.black38,
+                                  blurRadius: 6,
+                                  offset: Offset(0, 3),
+                                ),
                               ],
                             ),
-                            child: const Icon(LucideIcons.mapPin, color: Colors.white, size: 20),
+                            child: const Icon(
+                              LucideIcons.mapPin,
+                              color: Colors.white,
+                              size: 20,
+                            ),
                           ),
                         ],
                       ),
@@ -422,7 +572,9 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
                             return Padding(
                               padding: const EdgeInsets.only(left: 6),
                               child: _buildFilterChip(
-                                f < 0 ? 'Basement $f' : (f == 1 ? 'Floor 1' : 'Floor $f'),
+                                f < 0
+                                    ? 'Basement $f'
+                                    : (f == 1 ? 'Floor 1' : 'Floor $f'),
                                 f,
                                 f < 0 ? LucideIcons.car : LucideIcons.layers,
                               ),
@@ -431,7 +583,8 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
                         ],
                       ),
                     ),
-                    if (availableCategories.length > 1) const SizedBox(height: 8),
+                    if (availableCategories.length > 1)
+                      const SizedBox(height: 8),
                   ],
                   // Category Filter Bar
                   if (availableCategories.length > 1)
@@ -471,7 +624,11 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
     final isSelected = _selectedFloorFilter == floorValue;
     return ChoiceChip(
       showCheckmark: false,
-      avatar: Icon(icon, size: 14, color: isSelected ? Colors.white : const Color(0xFF94A3B8)),
+      avatar: Icon(
+        icon,
+        size: 14,
+        color: isSelected ? Colors.white : const Color(0xFF94A3B8),
+      ),
       label: Text(
         label,
         style: GoogleFonts.plusJakartaSans(
@@ -505,7 +662,9 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF38BDF8) : const Color(0xFF1E293B).withValues(alpha: 0.9),
+          color: isSelected
+              ? const Color(0xFF38BDF8)
+              : const Color(0xFF1E293B).withValues(alpha: 0.9),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
             color: isSelected ? const Color(0xFF38BDF8) : Colors.white24,
@@ -532,7 +691,11 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
         color: const Color(0xFF1E293B),
         borderRadius: BorderRadius.circular(20),
         boxShadow: const [
-          BoxShadow(color: Colors.black54, blurRadius: 12, offset: Offset(0, 4)),
+          BoxShadow(
+            color: Colors.black54,
+            blurRadius: 12,
+            offset: Offset(0, 4),
+          ),
         ],
         border: Border.all(color: const Color(0xFF334155)),
       ),
@@ -542,10 +705,16 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
         children: [
           Row(
             children: [
-              const Icon(LucideIcons.mapPin, color: Color(0xFF38BDF8), size: 20),
+              const Icon(
+                LucideIcons.mapPin,
+                color: Color(0xFF38BDF8),
+                size: 20,
+              ),
               const SizedBox(width: 8),
               Text(
-                hasSelection ? 'Location Point Selected' : 'Tap anywhere on OSM Map to select point',
+                hasSelection
+                    ? 'Location Point Selected'
+                    : 'Tap anywhere on OSM Map to select point',
                 style: GoogleFonts.plusJakartaSans(
                   fontSize: 14,
                   fontWeight: FontWeight.bold,
@@ -586,7 +755,9 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF0284C7),
                 disabledBackgroundColor: const Color(0xFF475569),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
               ),
               child: Text(
                 'Confirm Selected Coordinates',
@@ -610,7 +781,11 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
         color: const Color(0xFF1E293B).withValues(alpha: 0.95),
         borderRadius: BorderRadius.circular(20),
         boxShadow: const [
-          BoxShadow(color: Colors.black54, blurRadius: 12, offset: Offset(0, 4)),
+          BoxShadow(
+            color: Colors.black54,
+            blurRadius: 12,
+            offset: Offset(0, 4),
+          ),
         ],
         border: Border.all(color: const Color(0xFF334155)),
       ),
@@ -624,7 +799,11 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(LucideIcons.globe, color: Color(0xFF38BDF8), size: 16),
+                    const Icon(
+                      LucideIcons.globe,
+                      color: Color(0xFF38BDF8),
+                      size: 16,
+                    ),
                     const SizedBox(width: 6),
                     Flexible(
                       child: Text(
@@ -656,7 +835,11 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
           const SizedBox(width: 8),
           ElevatedButton.icon(
             onPressed: () => _fetchLiveGPSAndCenter(),
-            icon: const Icon(LucideIcons.crosshair, size: 14, color: Colors.white),
+            icon: const Icon(
+              LucideIcons.crosshair,
+              size: 14,
+              color: Colors.white,
+            ),
             label: Text(
               'My Location',
               style: GoogleFonts.plusJakartaSans(
@@ -667,7 +850,9 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
             ),
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFF0284C7),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               minimumSize: Size.zero,
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -699,10 +884,15 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
                   Container(
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: _getCategoryColor(poi.category).withValues(alpha: 0.2),
+                      color: _getCategoryColor(
+                        poi.category,
+                      ).withValues(alpha: 0.2),
                       borderRadius: BorderRadius.circular(14),
                     ),
-                    child: Icon(_getCategoryIcon(poi.category), color: _getCategoryColor(poi.category)),
+                    child: Icon(
+                      _getCategoryIcon(poi.category),
+                      color: _getCategoryColor(poi.category),
+                    ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -740,7 +930,11 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
               const SizedBox(height: 12),
               Row(
                 children: [
-                  const Icon(LucideIcons.mapPin, size: 14, color: Color(0xFF38BDF8)),
+                  const Icon(
+                    LucideIcons.mapPin,
+                    size: 14,
+                    color: Color(0xFF38BDF8),
+                  ),
                   const SizedBox(width: 6),
                   Text(
                     'Lat: ${poi.location.latitude.toStringAsFixed(6)}, Lon: ${poi.location.longitude.toStringAsFixed(6)}',
@@ -762,7 +956,9 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
                       Navigator.pop(context);
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
-                          content: Text('Imported "${poi.name}" into Admin POIs!'),
+                          content: Text(
+                            'Imported "${poi.name}" into Admin POIs!',
+                          ),
                           backgroundColor: const Color(0xFF10B981),
                         ),
                       );
@@ -777,7 +973,9 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
                     ),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF10B981),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
                   ),
                 ),

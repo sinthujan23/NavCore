@@ -19,7 +19,7 @@ class BarometerFloorSampler {
   BarometerFloorSampler({
     required this.sensorService,
     int initialFloorNo = 1,
-    this.transitionWindow = const Duration(seconds: 10),
+    this.transitionWindow = const Duration(milliseconds: 10),
     this.maxSampleCapacity = 20,
   }) : _currentFloorNo = initialFloorNo;
 
@@ -80,7 +80,8 @@ class BarometerFloorSampler {
   }) {
     final pressure = pressureHpa ?? sensorService.currentPressure;
     if (pressure <= 0 || seaLevelPressureHpa <= 0) return 0.0;
-    return 44330.0 * (1.0 - math.pow(pressure / seaLevelPressureHpa, 1 / 5.25588));
+    return 44330.0 *
+        (1.0 - math.pow(pressure / seaLevelPressureHpa, 1 / 5.25588));
   }
 
   /// Returns the stabilized (averaged) pressure value from collected samples,

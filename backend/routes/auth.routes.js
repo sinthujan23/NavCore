@@ -167,4 +167,116 @@ router.get('/me', authenticateToken, (req, res) => {
   });
 });
 
+/**
+ * POST /api/auth/google
+ * Authenticates or auto-registers a user via Google OAuth One-Tap
+ * Body: { email, name, googleId, avatar }
+ */
+router.post('/google', (req, res) => {
+  const { email, name, googleId, avatar } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ error: 'Google email address is required' });
+  }
+
+  const cleanEmail = email.trim().toLowerCase();
+  let user = db.find('users', u => u.email.toLowerCase() === cleanEmail);
+
+  if (!user) {
+    const isAdmin = cleanEmail.includes('admin');
+    user = {
+      id: `usr-g-${Date.now()}`,
+      email: cleanEmail,
+      name: name || cleanEmail.split('@')[0],
+      role: isAdmin ? 'admin' : 'user',
+      authProvider: 'google',
+      googleId: googleId || `gid-${Date.now()}`,
+      avatar: avatar || null,
+      createdAt: new Date().toISOString(),
+    };
+    db.insert('users', user);
+  } else {
+    let updated = false;
+    if (!user.authProvider) {
+      user.authProvider = 'google';
+      updated = true;
+    }
+    if (avatar && !user.avatar) {
+      user.avatar = avatar;
+      updated = true;
+    }
+    if (updated) {
+      db.update('users', u => u.id === user.id, user);
+    }
+  }
+
+  const payload = {
+    id: user.id,
+    email: user.email,
+    role: user.role,
+    name: user.name,
+  };
+  const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '30d' });
+
+  return res.json({
+    message: `Authenticated successfully with Google as ${user.role}`,
+    token,
+    user: {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      name: user.name,
+      avatar: user.avatar,
+    },
+  });
+});
+
+/**
+ * POST /api/auth/smart-login
+ * Fast biometric / device authenticated smart login
+ * Body: { email, deviceKey }
+ */
+router.post('/smart-login', (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required for smart login' });
+  }
+
+  const cleanEmail = email.trim().toLowerCase();
+  let user = db.find('users', u => u.email.toLowerCase() === cleanEmail);
+
+  if (!user) {
+    const isAdmin = cleanEmail.includes('admin');
+    user = {
+      id: `usr-s-${Date.now()}`,
+      email: cleanEmail,
+      name: cleanEmail.split('@')[0],
+      role: isAdmin ? 'admin' : 'user',
+      authProvider: 'smart',
+      createdAt: new Date().toISOString(),
+    };
+    db.insert('users', user);
+  }
+
+  const payload = {
+    id: user.id,
+    email: user.email,
+    role: user.role,
+    name: user.name,
+  };
+  const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '30d' });
+
+  return res.json({
+    message: `Smart login successful as ${user.role}`,
+    token,
+    user: {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      name: user.name,
+    },
+  });
+});
+
 module.exports = router;

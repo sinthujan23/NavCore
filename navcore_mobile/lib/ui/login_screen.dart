@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../data/api_service.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'widgets/nexnav_logo_widget.dart';
 
 enum UserRole { guest, user, admin }
@@ -102,12 +103,15 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isConfirmPasswordVisible = false;
   bool _rememberMe = true;
   bool _isLoading = false;
+  bool _isGoogleLoading = false;
   String _activeServerUrl = ApiService.defaultBaseUrl;
 
   static const String _prefRememberMe = 'NexNav_remember_me';
   static const String _prefSavedEmail = 'NexNav_remembered_email';
   static const String _prefSavedRole = 'NexNav_remembered_role';
   static const String _prefAutoLogin = 'NexNav_auto_login_enabled';
+  static const String _googleServerClientId =
+      '120287082166-5io846ej4iho3aho5o2pe25fnjtphrod.apps.googleusercontent.com';
 
   @override
   void initState() {
@@ -243,7 +247,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         color: Color(0xFF2563EB),
                       ),
                       label: Text(
-                        'Production Cloud',
+                        'Production Cloud (nexnav.hashnate.com)',
                         style: GoogleFonts.plusJakartaSans(
                           fontSize: 11,
                           fontWeight: FontWeight.w600,
@@ -255,54 +259,6 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                       onPressed: () {
                         controller.text = ApiService.productionServerUrl;
-                        setDialogState(() {
-                          testResult = null;
-                        });
-                      },
-                    ),
-                    ActionChip(
-                      avatar: const Icon(
-                        LucideIcons.laptop,
-                        size: 13,
-                        color: Color(0xFF475569),
-                      ),
-                      label: Text(
-                        'Local PC (:5000)',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      backgroundColor: const Color(0xFFF1F5F9),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      onPressed: () {
-                        controller.text = 'http://192.168.1.100:5000/api';
-                        setDialogState(() {
-                          testResult = null;
-                        });
-                      },
-                    ),
-                    ActionChip(
-                      avatar: const Icon(
-                        LucideIcons.smartphone,
-                        size: 13,
-                        color: Color(0xFF475569),
-                      ),
-                      label: Text(
-                        'Emulator',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      backgroundColor: const Color(0xFFF1F5F9),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      onPressed: () {
-                        controller.text = 'http://10.0.2.2:5000/api';
                         setDialogState(() {
                           testResult = null;
                         });
@@ -385,7 +341,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                     setDialogState(() {
                                       testing = false;
                                       testResult =
-                                          'Online (200 OK • ${sw.elapsedMilliseconds}ms)';
+                                          'Online (200 OK â€¢ ${sw.elapsedMilliseconds}ms)';
                                       testResultColor = const Color(0xFF10B981);
                                     });
                                   } else {
@@ -730,6 +686,166 @@ class _LoginScreenState extends State<LoginScreen> {
     );
 
     widget.onLoginSuccess(userRole, authResult.email ?? emailInput);
+  }
+
+  Future<void> _handleGoogleSignIn() async {
+    setState(() => _isGoogleLoading = true);
+
+    try {
+      GoogleSignInAccount? googleUser;
+      try {
+        final googleSignIn = GoogleSignIn(
+          scopes: ['email', 'profile'],
+          serverClientId: _googleServerClientId,
+        );
+        // Disconnect/sign out any cached account so the native "Choose an account" sheet always pops up
+        try {
+          await googleSignIn.signOut();
+        } catch (_) {}
+
+        googleUser = await googleSignIn.signIn();
+      } catch (clientErr) {
+        debugPrint(
+          '[GoogleSignIn] Server client error: $clientErr, falling back to direct sign-in...',
+        );
+        final fallbackSignIn = GoogleSignIn(
+          scopes: ['email', 'profile'],
+        );
+        try {
+          await fallbackSignIn.signOut();
+        } catch (_) {}
+        googleUser = await fallbackSignIn.signIn();
+      }
+
+      if (googleUser == null) {
+        // User dismissed/canceled the native Google account picker
+        if (mounted) setState(() => _isGoogleLoading = false);
+        return;
+      }
+
+      final email = googleUser.email.trim();
+      final name = googleUser.displayName ?? email.split('@')[0];
+      final googleId = googleUser.id;
+      final avatar = googleUser.photoUrl;
+
+      final authResult = await ApiService.instance.loginWithGoogle(
+        email: email,
+        name: name,
+        googleId: googleId,
+        avatar: avatar,
+      );
+
+      if (!mounted) return;
+      setState(() => _isGoogleLoading = false);
+
+      if (!authResult.isSuccess) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(
+                  LucideIcons.alertCircle,
+                  color: Colors.white,
+                  size: 20,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    authResult.errorMessage ?? 'Google authentication failed',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: const Color(0xFFEF4444),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+          ),
+        );
+        return;
+      }
+
+      final userRole =
+          (authResult.role == 'admin' || email.toLowerCase().contains('admin'))
+          ? UserRole.admin
+          : UserRole.user;
+
+      final prefs = await SharedPreferences.getInstance();
+      if (_rememberMe) {
+        await prefs.setBool(_prefRememberMe, true);
+        await prefs.setString(_prefSavedEmail, email);
+        await prefs.setString(_prefSavedRole, userRole.name);
+        await prefs.setBool(_prefAutoLogin, true);
+      } else {
+        await prefs.setBool(_prefRememberMe, false);
+        await prefs.remove(_prefSavedEmail);
+        await prefs.remove(_prefSavedRole);
+        await prefs.setBool(_prefAutoLogin, false);
+      }
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(LucideIcons.globe, size: 18, color: Color(0xFF4285F4)),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Signed in with Google as $email',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: const Color(0xFF0F172A),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+
+      widget.onLoginSuccess(userRole, email);
+    } catch (e) {
+      debugPrint('[GoogleSignIn] Real verification result/error: $e');
+      if (!mounted) return;
+      setState(() => _isGoogleLoading = false);
+      final errStr = e.toString().toLowerCase();
+      if (errStr.contains('cancel') || errStr.contains('abort')) {
+        // User voluntarily dismissed or canceled the native Google account picker
+        return;
+      }
+      String userMessage = 'Google Sign-In: $e';
+      if (errStr.contains('10') || errStr.contains('developer_error')) {
+        userMessage =
+            'Google Sign-In: Android SHA-1 fingerprint needs to be registered in Google Cloud / Firebase console.';
+      } else if (errStr.contains('network') || errStr.contains('7')) {
+        userMessage =
+            'Google Sign-In: Network connection issue. Please check your internet connection.';
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            userMessage,
+            style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.w600),
+          ),
+          backgroundColor: const Color(0xFFEF4444),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+        ),
+      );
+    }
   }
 
   @override
@@ -1260,7 +1376,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         ],
                       ],
 
-                      // Remember Me (Only in Log In Mode)
+                      // Remember Me Control (Only in Log In Mode)
                       if (!_isSignUpMode) ...[
                         const SizedBox(height: 12),
                         Row(
@@ -1315,7 +1431,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ],
 
-                      const SizedBox(height: 20),
+                      const SizedBox(height: 18),
 
                       // Submit Button
                       ElevatedButton(
@@ -1351,6 +1467,90 @@ class _LoginScreenState extends State<LoginScreen> {
                                   ),
                                   const SizedBox(width: 8),
                                   const Icon(LucideIcons.arrowRight, size: 16),
+                                ],
+                              ),
+                      ),
+
+                      const SizedBox(height: 18),
+
+                      // Modern Social & Smart Login Divider
+                      Row(
+                        children: [
+                          const Expanded(
+                            child: Divider(
+                              color: Color(0xFFE2E8F0),
+                              thickness: 1,
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            child: Text(
+                              'OR CONTINUE WITH',
+                              style: GoogleFonts.plusJakartaSans(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: const Color(0xFF94A3B8),
+                                letterSpacing: 0.6,
+                              ),
+                            ),
+                          ),
+                          const Expanded(
+                            child: Divider(
+                              color: Color(0xFFE2E8F0),
+                              thickness: 1,
+                            ),
+                          ),
+                        ],
+                      ),
+
+                      const SizedBox(height: 16),
+
+                      // Continue with Google Button
+                      OutlinedButton(
+                        onPressed: (_isLoading || _isGoogleLoading)
+                            ? null
+                            : _handleGoogleSignIn,
+                        style: OutlinedButton.styleFrom(
+                          backgroundColor: Colors.white,
+                          foregroundColor: const Color(0xFF0F172A),
+                          minimumSize: const Size(double.infinity, 50),
+                          side: const BorderSide(
+                            color: Color(0xFFCBD5E1),
+                            width: 1.2,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          elevation: 0,
+                        ),
+                        child: _isGoogleLoading
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.2,
+                                  color: Color(0xFF4285F4),
+                                ),
+                              )
+                            : Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const Icon(
+                                    LucideIcons.globe,
+                                    size: 20,
+                                    color: Color(0xFF4285F4),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Text(
+                                    _isSignUpMode
+                                        ? 'Sign up with Google'
+                                        : 'Continue with Google',
+                                    style: GoogleFonts.plusJakartaSans(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w700,
+                                      color: const Color(0xFF1E293B),
+                                    ),
+                                  ),
                                 ],
                               ),
                       ),
@@ -1414,10 +1614,7 @@ class _LoginScreenState extends State<LoginScreen> {
       decoration: BoxDecoration(
         color: const Color(0xFFFEF2F2),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: const Color(0xFFFECACA),
-          width: 1.0,
-        ),
+        border: Border.all(color: const Color(0xFFFECACA), width: 1.0),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1443,13 +1640,9 @@ class _LoginScreenState extends State<LoginScreen> {
                 children: [
                   const TextSpan(
                     text: 'Missing: ',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                    ),
+                    style: TextStyle(fontWeight: FontWeight.w700),
                   ),
-                  TextSpan(
-                    text: strength.missingRequirements.join(', '),
-                  ),
+                  TextSpan(text: strength.missingRequirements.join(', ')),
                 ],
               ),
             ),

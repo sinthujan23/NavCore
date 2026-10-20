@@ -7,10 +7,7 @@ import 'widgets/nexnav_logo_widget.dart';
 class WelcomeScreen extends StatefulWidget {
   final VoidCallback onLoginPressed;
 
-  const WelcomeScreen({
-    super.key,
-    required this.onLoginPressed,
-  });
+  const WelcomeScreen({super.key, required this.onLoginPressed});
 
   @override
   State<WelcomeScreen> createState() => _WelcomeScreenState();

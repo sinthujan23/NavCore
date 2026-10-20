@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -10,10 +9,13 @@ import '../../data/floor_height_model.dart';
 import '../../data/geocoding_service.dart';
 import '../../data/mall_api_service.dart';
 import '../../data/mall_database_service.dart';
+import '../../engine/ar_sensor_engine.dart';
+import '../../engine/real_sensor_service.dart';
 
 class AdminFloorHeightsScreen extends StatefulWidget {
   final String mallId;
   final RestMallBackendApi apiService;
+  final RealSensorService? sensorService;
   final ValueChanged<List<FloorHeightData>>? onHeightsUpdated;
   final ValueChanged<String>? onMallSelected;
 
@@ -21,6 +23,7 @@ class AdminFloorHeightsScreen extends StatefulWidget {
     super.key,
     this.mallId = '',
     required this.apiService,
+    this.sensorService,
     this.onHeightsUpdated,
     this.onMallSelected,
   });
@@ -44,24 +47,105 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
   // Real-time Barometer & Sensor State
   StreamSubscription<BarometerEvent>? _barometerSubscription;
   double _currentPressureHpa = 1013.25;
-  double _liveBarometerAltitudeM = 8.5;
+  double _liveBarometerAltitudeM = 0.0;
   bool _isBarometerActive = false;
 
   // Current User Location & Elevation Fusion State
   StreamSubscription<Position>? _positionSubscription;
   Position? _currentUserPosition;
-  double _userLocationAltitudeM = 8.5;
+  double _userLocationAltitudeM = 0.0;
   bool _hasLocationFix = false;
 
-  /// Dynamic location-based floor gap derived from OSM tags or architectural typology
-  double get _currentFloorGapM {
-    if (_currentUserPosition != null) {
-      return GeocodingService.resolveDynamicFloorGapFromCoords(
-        latitude: _currentUserPosition!.latitude,
-        longitude: _currentUserPosition!.longitude,
+  final BarometricElevationEngine _elevationEngine = BarometricElevationEngine();
+
+  /// Real-world ground elevation computed dynamically using the phone's barometer
+  /// and the user's location (GNSS Geodetic Datum + Barometric Hypsometric Model fusion)
+  double get _computedRealWorldElevation {
+    double lat = _currentUserPosition?.latitude ?? 0.0;
+    double lon = _currentUserPosition?.longitude ?? 0.0;
+    double rawGpsAlt = _currentUserPosition?.altitude ?? 0.0;
+    double gpsAccuracy = _currentUserPosition?.accuracy ?? 10.0;
+
+    final mall = _selectedMall;
+    if (lat == 0.0 && lon == 0.0 && mall != null) {
+      lat = mall.latitude;
+      lon = mall.longitude;
+    }
+
+    // 1. Resolve base anchor elevation from user's location or mall anchor
+    double baseAnchor = 0.0;
+    if (lat != 0.0 && lon != 0.0) {
+      baseAnchor = GeocodingService.resolveTerrainAltitudeFromCoords(
+        lat,
+        lon,
       );
     }
-    return 3.80;
+    if (baseAnchor <= 0.0 && mall != null && mall.entranceBaseAnchorHeight > 0) {
+      baseAnchor = mall.entranceBaseAnchorHeight;
+    }
+    if (baseAnchor <= 0.0) {
+      baseAnchor = 8.5; // Sri Lanka / Trincomalee ground anchor
+    }
+
+    // 2. Calibrate baseline pressure if uncalibrated
+    final effectivePressure =
+        _currentPressureHpa > 300.0 ? _currentPressureHpa : 1013.25;
+    if (!_elevationEngine.isCalibrated ||
+        _elevationEngine.baselineAnchorHeight == 0.0) {
+      _elevationEngine.calibrateBaseline(effectivePressure, baseAnchor);
+    }
+
+    // 3. Compute dynamic altitude from barometer hypsometric model
+    final baroHeight = _elevationEngine.calculateAbsoluteHeight(
+      effectivePressure,
+    );
+
+    // 4. Fuse with GPS altitude if positive and within reasonable limits (< 4000m)
+    // with good accuracy (< 25m). Negative GPS (like Indian Ocean geoid -84.6m) is filtered.
+    if (rawGpsAlt > 0.0 && rawGpsAlt < 4000.0) {
+      if (gpsAccuracy > 0 && gpsAccuracy < 25.0) {
+        return _elevationEngine.computeFusedLocationHeight(
+          currentPressureHpa: effectivePressure,
+          gpsAltitude: rawGpsAlt,
+          gpsAccuracy: gpsAccuracy,
+        );
+      }
+      return double.parse(rawGpsAlt.toStringAsFixed(2));
+    }
+
+    return double.parse(
+      (baroHeight > 0.0 ? baroHeight : baseAnchor).toStringAsFixed(2),
+    );
+  }
+
+  /// Dynamic height gap between floors computed using the phone's barometer
+  /// and the user's location (architectural typology & micro-atmospheric pressure delta)
+  double get _computedDynamicFloorGap {
+    double lat = _currentUserPosition?.latitude ?? 0.0;
+    double lon = _currentUserPosition?.longitude ?? 0.0;
+    final mall = _selectedMall;
+    if (lat == 0.0 && lon == 0.0 && mall != null) {
+      lat = mall.latitude;
+      lon = mall.longitude;
+    }
+
+    // Check if the smartphone barometer detects pressure difference between floors
+    double? deltaHpa;
+    if (_elevationEngine.isCalibrated &&
+        _elevationEngine.baselinePressure != null &&
+        _currentPressureHpa > 300.0) {
+      deltaHpa = (_elevationEngine.baselinePressure! - _currentPressureHpa).abs();
+    }
+
+    final gap = GeocodingService.resolveDynamicFloorGapFromCoords(
+      latitude: lat,
+      longitude: lon,
+      measuredBarometerDeltaHpa: (deltaHpa != null && deltaHpa > 0.08) ? deltaHpa : null,
+      livePressureHpa: _currentPressureHpa,
+      basePressureHpa: _elevationEngine.baselinePressure,
+    );
+
+    return double.parse(gap.toStringAsFixed(2));
   }
 
   /// Resolved mall metadata for currently selected mall
@@ -76,30 +160,47 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
     return null;
   }
 
-  /// Target floor gap: reads configured floor gap from the selected venue package,
-  /// perfectly propagating the distance configured in Edit Venue Package (Image 2)
-  double get _targetFloorGapM {
-    final mall = _selectedMall;
-    if (mall != null && mall.floorGapMeters > 0) {
-      return mall.floorGapMeters;
-    }
-    return _currentFloorGapM;
-  }
+  /// Target floor gap: automatically computed using phone's barometer and user's location
+  double get _targetFloorGapM => _computedDynamicFloorGap;
 
-  /// Target ground baseline altitude: reads configured ground altitude from the venue package
-  double get _targetGroundAltM {
-    final mall = _selectedMall;
-    if (mall != null && mall.entranceBaseAnchorHeight > 0) {
-      return mall.entranceBaseAnchorHeight;
-    }
-    return _hasLocationFix ? _userLocationAltitudeM : 8.5;
-  }
+  /// Dynamic location-based floor gap alias
+  double get _currentFloorGapM => _computedDynamicFloorGap;
+
+  /// Target ground baseline altitude: automatically computed using phone's barometer and user's location
+  double get _targetGroundAltM => _computedRealWorldElevation;
 
   @override
   void initState() {
     super.initState();
     _selectedMallId = widget.mallId;
     _availableMallIds = widget.mallId.isNotEmpty ? [widget.mallId] : [];
+
+    // Pre-seed from hardware sensor service if available
+    if (widget.sensorService != null) {
+      if (widget.sensorService!.currentPressure > 300.0) {
+        _currentPressureHpa = widget.sensorService!.currentPressure;
+        _isBarometerActive = true;
+      }
+      if (widget.sensorService!.lastCoords != null &&
+          widget.sensorService!.lastCoords!.latitude != 0.0) {
+        _currentUserPosition = Position(
+          latitude: widget.sensorService!.lastCoords!.latitude,
+          longitude: widget.sensorService!.lastCoords!.longitude,
+          timestamp: DateTime.now(),
+          altitude: widget.sensorService!.lastCoords!.height,
+          accuracy: widget.sensorService!.lastAccuracy,
+          heading: 0.0,
+          floor: 0,
+          speed: 0.0,
+          speedAccuracy: 0.0,
+          altitudeAccuracy: 0.0,
+          headingAccuracy: 0.0,
+        );
+        _hasLocationFix = true;
+        _userLocationAltitudeM = _computedRealWorldElevation;
+      }
+    }
+
     _initBarometer();
     _initLocation();
     _initMalls();
@@ -114,50 +215,31 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
 
   void _initBarometer() {
     try {
-      _barometerSubscription = barometerEventStream(
-        samplingPeriod: const Duration(milliseconds: 250),
-      ).listen(
-        (BarometerEvent event) {
-          final p = event.pressure;
-          if (p > 0 && !p.isNaN && !p.isInfinite) {
-            if (mounted) {
-              setState(() {
-                _currentPressureHpa = p;
-                _isBarometerActive = true;
-                final delta = 44330.0 * (1.0 - math.pow(p / 1013.25, 0.1903));
-                final baseTerrain = _currentUserPosition != null
-                    ? (_currentUserPosition!.altitude > 0 && !_currentUserPosition!.altitude.isNaN
-                        ? _currentUserPosition!.altitude
-                        : GeocodingService.resolveTerrainAltitudeFromCoords(
-                            _currentUserPosition!.latitude,
-                            _currentUserPosition!.longitude,
-                          ))
-                    : 8.5;
-                _liveBarometerAltitudeM = double.parse(
-                  (baseTerrain + delta).clamp(-50.0, 9000.0).toStringAsFixed(2),
-                );
-                if (_currentUserPosition != null) {
-                  _userLocationAltitudeM = _computeFusedLocationHeight(
-                    gpsAltitude: _currentUserPosition!.altitude,
-                    gpsAccuracy: _currentUserPosition!.accuracy,
-                    currentPressureHpa: _currentPressureHpa,
-                    lat: _currentUserPosition!.latitude,
-                    lon: _currentUserPosition!.longitude,
-                  );
-                } else {
-                  _userLocationAltitudeM = _liveBarometerAltitudeM;
+      _barometerSubscription =
+          barometerEventStream(
+            samplingPeriod: const Duration(milliseconds: 250),
+          ).listen(
+            (BarometerEvent event) {
+              final p = event.pressure;
+              if (p > 0 && !p.isNaN && !p.isInfinite) {
+                if (mounted) {
+                  setState(() {
+                    _currentPressureHpa = p;
+                    _isBarometerActive = true;
+                    _liveBarometerAltitudeM = _computedRealWorldElevation;
+                    _userLocationAltitudeM = _computedRealWorldElevation;
+                  });
+                  _autoSyncDefaultFloorsToLocation();
                 }
-              });
-            }
-          }
-        },
-        onError: (_) {
-          if (mounted) {
-            setState(() => _isBarometerActive = false);
-          }
-        },
-        cancelOnError: false,
-      );
+              }
+            },
+            onError: (_) {
+              if (mounted) {
+                setState(() => _isBarometerActive = false);
+              }
+            },
+            cancelOnError: false,
+          );
     } catch (_) {
       _isBarometerActive = false;
     }
@@ -181,13 +263,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
         setState(() {
           _currentUserPosition = lastPos;
           _hasLocationFix = true;
-          _userLocationAltitudeM = _computeFusedLocationHeight(
-            gpsAltitude: lastPos.altitude,
-            gpsAccuracy: lastPos.accuracy,
-            currentPressureHpa: _currentPressureHpa,
-            lat: lastPos.latitude,
-            lon: lastPos.longitude,
-          );
+          _userLocationAltitudeM = _computedRealWorldElevation;
         });
         _autoSyncDefaultFloorsToLocation();
       }
@@ -198,54 +274,37 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
         distanceFilter: 2,
       );
 
-      _positionSubscription = Geolocator.getPositionStream(
-        locationSettings: locationSettings,
-      ).listen(
-        (Position pos) {
-          if (mounted) {
-            setState(() {
-              _currentUserPosition = pos;
-              _hasLocationFix = true;
-              _userLocationAltitudeM = _computeFusedLocationHeight(
-                gpsAltitude: pos.altitude,
-                gpsAccuracy: pos.accuracy,
-                currentPressureHpa: _currentPressureHpa,
-                lat: pos.latitude,
-                lon: pos.longitude,
-              );
-            });
-            _autoSyncDefaultFloorsToLocation();
-          }
-        },
-        onError: (_) {},
-      );
+      _positionSubscription =
+          Geolocator.getPositionStream(
+            locationSettings: locationSettings,
+          ).listen((Position pos) {
+            if (mounted) {
+              setState(() {
+                _currentUserPosition = pos;
+                _hasLocationFix = true;
+                _userLocationAltitudeM = _computedRealWorldElevation;
+              });
+              _autoSyncDefaultFloorsToLocation();
+            }
+          }, onError: (_) {});
     } catch (_) {}
   }
 
-  /// Automatically replaces any uncalibrated dummy defaults (15.0m ground or 4.5m gap)
-  /// with venue configured parameters or user location calculated elevation
+  /// Automatically updates floor heights and base altitudes from the phone's barometer
+  /// and the user's location (GNSS + barometric hypsometric model)
   void _autoSyncDefaultFloorsToLocation() {
     if (_floors.isEmpty) return;
-    final hasDummyFloors = _floors.any(
-      (f) =>
-          !f.isLocked &&
-          (f.source == 'default' ||
-              f.heightToNextM == 4.5 ||
-              (f.floorNo == 1 && (f.baseAltitudeM == 15.0 || f.baseAltitudeM <= 0.0))),
-    );
-    if (!hasDummyFloors) return;
 
-    final targetGap = _targetFloorGapM;
-    final targetGround = _targetGroundAltM;
+    final targetGap = _computedDynamicFloorGap;
+    final targetGround = _computedRealWorldElevation;
 
     final updated = _floors.map((f) {
-      if (f.isLocked && f.heightToNextM != 4.5 && f.heightToNextM > 0.0) return f;
-      final gap = (f.heightToNextM == 4.5 || f.heightToNextM <= 0.0)
-          ? targetGap
-          : f.heightToNextM;
+      if (f.isLocked && f.heightToNextM > 0.0) {
+        return f;
+      }
       return f.copyWith(
-        heightToNextM: gap,
-        source: 'gps_baro_fusion',
+        heightToNextM: targetGap,
+        source: 'barometer_gps',
       );
     }).toList();
 
@@ -254,52 +313,32 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
       groundBaselineAlt: targetGround,
     );
 
-    setState(() {
-      _floors = recomputed;
-      _statusMessage =
-          'Height auto-calibrated (${targetGround.toStringAsFixed(2)}m ground • ${targetGap.toStringAsFixed(2)}m gap)';
-    });
-    widget.onHeightsUpdated?.call(_floors);
-  }
-
-  /// Computes optimal elevation based on user's current location:
-  /// Suitable method: GNSS Geodetic Datum (WGS84) + Real-Time Barometric Hypsometric Model fusion
-  double _computeFusedLocationHeight({
-    required double gpsAltitude,
-    required double gpsAccuracy,
-    required double currentPressureHpa,
-    double? lat,
-    double? lon,
-    double seaLevelPressureHpa = 1013.25,
-  }) {
-    // Hypsometric formula for atmospheric pressure
-    final baroAltitudeDelta = 44330.0 *
-        (1.0 - math.pow(currentPressureHpa / seaLevelPressureHpa, 0.1903));
-
-    final targetLat = lat ?? _currentUserPosition?.latitude;
-    final targetLon = lon ?? _currentUserPosition?.longitude;
-    final terrainElevation = (targetLat != null && targetLon != null)
-        ? GeocodingService.resolveTerrainAltitudeFromCoords(targetLat, targetLon)
-        : 8.5;
-
-    if (gpsAltitude > 0 && !gpsAltitude.isNaN && gpsAltitude < 9000.0) {
-      if (gpsAccuracy > 0 && gpsAccuracy < 25.0) {
-        // High confidence GNSS fix: weight GPS altitude as base datum
-        final gpsWeight = (1.0 - (gpsAccuracy / 30.0)).clamp(0.60, 0.90);
-        final fused = (gpsWeight * gpsAltitude) +
-            ((1.0 - gpsWeight) * (terrainElevation + baroAltitudeDelta));
-        return double.parse(fused.toStringAsFixed(2));
+    // Only update if difference is noticeable (> 0.05m)
+    bool hasChanged = false;
+    if (_floors.length != recomputed.length) {
+      hasChanged = true;
+    } else {
+      for (int i = 0; i < _floors.length; i++) {
+        if ((_floors[i].baseAltitudeM - recomputed[i].baseAltitudeM).abs() > 0.05 ||
+            (_floors[i].heightToNextM - recomputed[i].heightToNextM).abs() > 0.05) {
+          hasChanged = true;
+          break;
+        }
       }
-      return double.parse(gpsAltitude.toStringAsFixed(2));
     }
 
-    // Topographic terrain elevation + barometric hypsometric delta
-    final locationHeight = (terrainElevation + baroAltitudeDelta).clamp(0.0, 5000.0);
-    return double.parse(locationHeight.toStringAsFixed(2));
+    if (hasChanged && mounted) {
+      setState(() {
+        _floors = recomputed;
+        _statusMessage =
+            'Real-world elevation computed: Ground ${targetGround.toStringAsFixed(2)}m • Story Gap ${targetGap.toStringAsFixed(2)}m (Phone Barometer & Location)';
+      });
+      widget.onHeightsUpdated?.call(_floors);
+    }
   }
 
   /// Recalculates cumulative base altitudes sequentially based on floor gaps:
-  /// Floor 1 Base Altitude = venue anchor / ground baseline height
+  /// Floor 1 Base Altitude = venue anchor / ground baseline height from phone barometer & location
   /// Floor N Base Altitude = Floor N-1 Base Altitude + Floor N-1 Height To Next
   List<FloorHeightData> _recalculateCumulativeAltitudes(
     List<FloorHeightData> list, {
@@ -315,35 +354,30 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
 
     if (groundBaselineAlt != null && groundBaselineAlt > 0) {
       currentAlt = groundBaselineAlt;
-    } else if (firstFloor.baseAltitudeM > 0 && firstFloor.isLocked && firstFloor.baseAltitudeM != 15.0) {
-      currentAlt = firstFloor.baseAltitudeM;
-    } else if (_targetGroundAltM > 0) {
-      currentAlt = _targetGroundAltM;
-    } else if (_hasLocationFix && _userLocationAltitudeM > 0) {
-      currentAlt = _userLocationAltitudeM;
-    } else if (_currentUserPosition != null) {
-      currentAlt = GeocodingService.resolveTerrainAltitudeFromCoords(
-        _currentUserPosition!.latitude,
-        _currentUserPosition!.longitude,
-      );
-    } else if (firstFloor.baseAltitudeM > 0 && firstFloor.baseAltitudeM != 15.0) {
+    } else if (firstFloor.baseAltitudeM > 0 &&
+        firstFloor.isLocked &&
+        firstFloor.baseAltitudeM != 15.0) {
       currentAlt = firstFloor.baseAltitudeM;
     } else {
-      currentAlt = 8.5;
+      currentAlt = _computedRealWorldElevation;
     }
 
     for (int i = 0; i < sorted.length; i++) {
       final f = sorted[i];
       if (i == 0) {
-        result.add(f.copyWith(
-          baseAltitudeM: double.parse(currentAlt.toStringAsFixed(2)),
-        ));
+        result.add(
+          f.copyWith(
+            baseAltitudeM: double.parse(currentAlt.toStringAsFixed(2)),
+          ),
+        );
       } else {
         final prev = result[i - 1];
         currentAlt = prev.baseAltitudeM + prev.heightToNextM;
-        result.add(f.copyWith(
-          baseAltitudeM: double.parse(currentAlt.toStringAsFixed(2)),
-        ));
+        result.add(
+          f.copyWith(
+            baseAltitudeM: double.parse(currentAlt.toStringAsFixed(2)),
+          ),
+        );
       }
     }
     return result;
@@ -352,11 +386,15 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
   double _calculateSuggestedFloorGap(FloorHeightData floor) {
     if (_isBarometerActive || _hasLocationFix) {
       double prevAlt = _targetGroundAltM;
-      final prevIndex = _floors.indexWhere((f) => f.floorNo == floor.floorNo - 1);
+      final prevIndex = _floors.indexWhere(
+        (f) => f.floorNo == floor.floorNo - 1,
+      );
       if (prevIndex >= 0) {
         prevAlt = _floors[prevIndex].baseAltitudeM;
       }
-      final refAlt = _hasLocationFix ? _userLocationAltitudeM : _liveBarometerAltitudeM;
+      final refAlt = _hasLocationFix
+          ? _userLocationAltitudeM
+          : _liveBarometerAltitudeM;
       final diff = (refAlt - prevAlt).abs();
       if (diff >= 2.0 && diff <= 12.0) {
         return double.parse(diff.toStringAsFixed(2));
@@ -480,7 +518,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
               floorNo: fn,
               heightToNextM: configuredGap,
               baseAltitudeM: double.parse(currentAlt.toStringAsFixed(2)),
-              source: 'admin',
+              source: 'barometer_gps',
               confidence: 1.0,
               isLocked: false,
               updatedAt: DateTime.now().toIso8601String(),
@@ -489,11 +527,16 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
           currentAlt += configuredGap;
         }
       } else {
-        // Automatically sync floor gaps with configured venue floor gap unless manually locked
+        // Automatically compute unlocked floors using phone barometer & user location
         filtered = filtered.map((f) {
-          final isExplicitlyLocked = f.isLocked && f.heightToNextM != 4.5 && f.heightToNextM > 0.0;
+          final isExplicitlyLocked =
+              f.isLocked && f.heightToNextM != 4.5 && f.heightToNextM > 0.0;
           final gap = isExplicitlyLocked ? f.heightToNextM : configuredGap;
-          final isGroundLocked = f.floorNo == 1 && f.isLocked && f.baseAltitudeM != 15.0 && f.baseAltitudeM > 0.0;
+          final isGroundLocked =
+              f.floorNo == 1 &&
+              f.isLocked &&
+              f.baseAltitudeM != 15.0 &&
+              f.baseAltitudeM > 0.0;
           final baseAlt = (f.floorNo == 1 && !isGroundLocked)
               ? configuredGroundAlt
               : f.baseAltitudeM;
@@ -501,7 +544,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
           return f.copyWith(
             heightToNextM: gap,
             baseAltitudeM: baseAlt,
-            source: isExplicitlyLocked ? 'admin' : 'auto_calc',
+            source: isExplicitlyLocked ? 'admin' : 'barometer_gps',
           );
         }).toList();
       }
@@ -544,8 +587,8 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
 
       final updatedList = await widget.apiService.triggerFloorHeightCalculation(
         targetMall,
-        lat: _currentUserPosition?.latitude,
-        lon: _currentUserPosition?.longitude,
+        lat: _currentUserPosition?.latitude ?? _selectedMall?.latitude,
+        lon: _currentUserPosition?.longitude ?? _selectedMall?.longitude,
         barometerPressureHpa: _currentPressureHpa,
         liveAltitudeM: targetGround,
         floorGapM: targetGap,
@@ -562,17 +605,22 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
           (old) => old.floorNo == f.floorNo,
           orElse: () => f,
         );
-        if (existing.isLocked && existing.heightToNextM != 4.5 && existing.heightToNextM > 0.0) {
+        if (existing.isLocked &&
+            existing.heightToNextM != 4.5 &&
+            existing.heightToNextM > 0.0) {
           preserved.add(existing);
         } else {
-          final gap = (f.isLocked && f.heightToNextM != 4.5 && f.heightToNextM > 0.0)
+          final gap =
+              (f.isLocked && f.heightToNextM != 4.5 && f.heightToNextM > 0.0)
               ? f.heightToNextM
               : targetGap;
-          preserved.add(f.copyWith(
-            heightToNextM: gap,
-            source: 'auto_calc',
-            confidence: 1.0,
-          ));
+          preserved.add(
+            f.copyWith(
+              heightToNextM: gap,
+              source: 'barometer_gps',
+              confidence: 1.0,
+            ),
+          );
         }
       }
 
@@ -583,13 +631,15 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
 
       // Push cascaded cumulative altitudes to backend to keep DB synced
       for (final floor in recomputed) {
-        widget.apiService.updateFloorHeight(
-          targetMall,
-          floor.floorNo,
-          heightToNextM: floor.heightToNextM,
-          baseAltitudeM: floor.baseAltitudeM,
-          isLocked: floor.isLocked,
-        ).catchError((_) => floor);
+        widget.apiService
+            .updateFloorHeight(
+              targetMall,
+              floor.floorNo,
+              heightToNextM: floor.heightToNextM,
+              baseAltitudeM: floor.baseAltitudeM,
+              isLocked: floor.isLocked,
+            )
+            .catchError((_) => floor);
       }
 
       if (mounted) {
@@ -597,7 +647,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
           _floors = recomputed;
           _isCalculating = false;
           _statusMessage =
-              'Height auto-calculated: Ground ${targetGround.toStringAsFixed(2)}m • Story Gap ${targetGap.toStringAsFixed(2)}m';
+              'Real-world elevation computed: Ground ${targetGround.toStringAsFixed(2)}m • Story Gap ${targetGap.toStringAsFixed(2)}m (Barometer & Location)';
         });
         widget.onHeightsUpdated?.call(_floors);
       }
@@ -680,8 +730,8 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                   children: [
                     InkWell(
                       onTap: () {
-                        baseAltController.text =
-                            _userLocationAltitudeM.toStringAsFixed(2);
+                        baseAltController.text = _userLocationAltitudeM
+                            .toStringAsFixed(2);
                       },
                       borderRadius: BorderRadius.circular(8),
                       child: Container(
@@ -717,8 +767,8 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                     ),
                     InkWell(
                       onTap: () {
-                        baseAltController.text =
-                            _liveBarometerAltitudeM.toStringAsFixed(2);
+                        baseAltController.text = _liveBarometerAltitudeM
+                            .toStringAsFixed(2);
                       },
                       borderRadius: BorderRadius.circular(8),
                       child: Container(
@@ -766,7 +816,11 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                   ),
                   child: Row(
                     children: [
-                      const Icon(LucideIcons.layers, size: 16, color: Color(0xFF475569)),
+                      const Icon(
+                        LucideIcons.layers,
+                        size: 16,
+                        color: Color(0xFF475569),
+                      ),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
@@ -814,8 +868,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                 children: [
                   InkWell(
                     onTap: () {
-                      textController.text =
-                          _targetFloorGapM.toStringAsFixed(2);
+                      textController.text = _targetFloorGapM.toStringAsFixed(2);
                     },
                     borderRadius: BorderRadius.circular(8),
                     child: Container(
@@ -851,8 +904,9 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                   ),
                   InkWell(
                     onTap: () {
-                      textController.text =
-                          _currentFloorGapM.toStringAsFixed(2);
+                      textController.text = _currentFloorGapM.toStringAsFixed(
+                        2,
+                      );
                     },
                     borderRadius: BorderRadius.circular(8),
                     child: Container(
@@ -953,7 +1007,9 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
 
               // 1. Update this floor in local list with admin source and locked status
               final updatedList = List<FloorHeightData>.from(_floors);
-              final idx = updatedList.indexWhere((f) => f.floorNo == floor.floorNo);
+              final idx = updatedList.indexWhere(
+                (f) => f.floorNo == floor.floorNo,
+              );
               if (idx >= 0) {
                 updatedList[idx] = updatedList[idx].copyWith(
                   heightToNextM: newHeight,
@@ -980,14 +1036,18 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                   isLocked: true,
                 );
                 // Also update subsequent floors on backend to synchronize cascaded base altitudes
-                for (final f in recomputed.where((f) => f.floorNo > floor.floorNo)) {
-                  widget.apiService.updateFloorHeight(
-                    _selectedMallId,
-                    f.floorNo,
-                    heightToNextM: f.heightToNextM,
-                    baseAltitudeM: f.baseAltitudeM,
-                    isLocked: f.isLocked,
-                  ).catchError((_) => f);
+                for (final f in recomputed.where(
+                  (f) => f.floorNo > floor.floorNo,
+                )) {
+                  widget.apiService
+                      .updateFloorHeight(
+                        _selectedMallId,
+                        f.floorNo,
+                        heightToNextM: f.heightToNextM,
+                        baseAltitudeM: f.baseAltitudeM,
+                        isLocked: f.isLocked,
+                      )
+                      .catchError((_) => f);
                 }
               } catch (_) {}
 
@@ -1259,6 +1319,9 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
       case 'admin':
         return const Color(0xFF7E22CE);
       case 'barometer':
+      case 'barometer_gps':
+      case 'gps_baro_fusion':
+      case 'auto_calc':
         return const Color(0xFF15803D);
       case 'osm':
         return const Color(0xFF0284C7);
@@ -1273,12 +1336,31 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
       case 'admin':
         return const Color(0xFFF3E8FF);
       case 'barometer':
+      case 'barometer_gps':
+      case 'gps_baro_fusion':
+      case 'auto_calc':
         return const Color(0xFFDCFCE7);
       case 'osm':
         return const Color(0xFFE0F2FE);
       case 'default':
       default:
         return const Color(0xFFFFEDD5);
+    }
+  }
+
+  String _formatSourceBadgeLabel(String source) {
+    switch (source.toLowerCase()) {
+      case 'barometer':
+      case 'barometer_gps':
+      case 'gps_baro_fusion':
+      case 'auto_calc':
+        return 'BARO + GPS';
+      case 'admin':
+        return 'ADMIN';
+      case 'osm':
+        return 'OSM';
+      default:
+        return source.toUpperCase();
     }
   }
 
@@ -1455,6 +1537,63 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                             style: GoogleFonts.inter(
                               fontWeight: FontWeight.bold,
                               fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Live Barometer & Location Elevation Status Pill
+                  Container(
+                    margin: const EdgeInsets.only(top: 10),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF0FDF4),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xFFBBF7D0)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(LucideIcons.activity, size: 16, color: Color(0xFF16A34A)),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: RichText(
+                            text: TextSpan(
+                              style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF166534)),
+                              children: [
+                                const TextSpan(text: 'Ground Alt: '),
+                                TextSpan(
+                                  text: '${_computedRealWorldElevation.toStringAsFixed(2)} m',
+                                  style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF15803D)),
+                                ),
+                                const TextSpan(text: '  •  Gap: '),
+                                TextSpan(
+                                  text: '${_computedDynamicFloorGap.toStringAsFixed(2)} m',
+                                  style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF0D9488)),
+                                ),
+                                const TextSpan(text: '  •  Baro: '),
+                                TextSpan(
+                                  text: '${_currentPressureHpa.toStringAsFixed(1)} hPa',
+                                  style: const TextStyle(fontWeight: FontWeight.w600),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFDCFCE7),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: const Color(0xFF86EFAC)),
+                          ),
+                          child: Text(
+                            _hasLocationFix ? 'GPS ACTIVE' : 'TERRAIN DATUM',
+                            style: GoogleFonts.inter(
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.w700,
+                              color: const Color(0xFF15803D),
                             ),
                           ),
                         ),
@@ -1747,7 +1886,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                                                     BorderRadius.circular(6),
                                               ),
                                               child: Text(
-                                                floor.source.toUpperCase(),
+                                                _formatSourceBadgeLabel(floor.source),
                                                 style: GoogleFonts.inter(
                                                   color: badgeTextColor,
                                                   fontSize: 11,

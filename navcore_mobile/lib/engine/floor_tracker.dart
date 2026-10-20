@@ -65,6 +65,23 @@ class BuildingElevationProfile {
     required this.floorGapMeters,
     required this.floors,
   });
+
+  BuildingElevationProfile copyWith({
+    String? buildingId,
+    String? name,
+    double? entranceBaseAnchorHeight,
+    double? floorGapMeters,
+    List<FloorLevelConfig>? floors,
+  }) {
+    return BuildingElevationProfile(
+      buildingId: buildingId ?? this.buildingId,
+      name: name ?? this.name,
+      entranceBaseAnchorHeight:
+          entranceBaseAnchorHeight ?? this.entranceBaseAnchorHeight,
+      floorGapMeters: floorGapMeters ?? this.floorGapMeters,
+      floors: floors ?? this.floors,
+    );
+  }
 }
 
 /// Default Unconfigured Reference Building Specification

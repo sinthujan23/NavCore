@@ -13,7 +13,18 @@ router.get('/', (req, res) => {
   let results = db.get('destinations');
 
   if (mallId) {
-    results = results.filter(d => d.mallId === mallId);
+    const qm = (mallId || '').trim().toLowerCase();
+    if (qm !== 'all' && qm.length > 0) {
+      results = results.filter(d => {
+        const dm = (d.mallId || '').trim().toLowerCase();
+        if (!dm) return true;
+        return dm === qm ||
+          dm === qm.replace(/^mall-/, '') ||
+          qm === dm.replace(/^mall-/, '') ||
+          dm.includes(qm) ||
+          qm.includes(dm);
+      });
+    }
   }
 
   if (floorNumber !== undefined) {
@@ -35,12 +46,16 @@ router.get('/', (req, res) => {
   }
 
   // Deduplicate before returning
-  const seen = new Set();
+  const seenIds = new Set();
+  const seenKeys = new Set();
   const deduped = [];
   for (const d of results) {
-    const key = `${(d.name || '').trim().toLowerCase()}#${d.floorNumber}#${d.mallId || ''}`;
-    if (!seen.has(key)) {
-      seen.add(key);
+    const dId = (d.id || '').trim().toLowerCase();
+    const dMall = (d.mallId || '').trim().toLowerCase().replace(/^mall-/, '').replace(/^0+/, '');
+    const key = `${(d.name || '').trim().toLowerCase()}#${d.floorNumber}#${dMall}`;
+    if (!seenIds.has(dId) && !seenKeys.has(key)) {
+      if (dId) seenIds.add(dId);
+      seenKeys.add(key);
       deduped.push(d);
     }
   }
@@ -75,12 +90,18 @@ router.post('/', requireAdmin, (req, res) => {
   const targetFloor = body.floorNumber !== undefined ? Number(body.floorNumber) : 1;
 
   // Prevent duplicate creation: check by id or (mallId + trimmed lowercased name + floorNumber)
-  const existing = db.find('destinations', d =>
-    (body.id && d.id === body.id) ||
-    (d.mallId === targetMallId &&
-      (d.name || '').trim().toLowerCase() === (body.name || '').trim().toLowerCase() &&
-      Number(d.floorNumber) === targetFloor)
-  );
+  const normTargetMall = (targetMallId || '').trim().toLowerCase().replace(/^mall-/, '').replace(/^0+/, '');
+  const existing = db.find('destinations', d => {
+    const dId = (d.id || '').trim().toLowerCase();
+    const bId = (body.id || '').trim().toLowerCase();
+    if (bId && dId === bId) return true;
+    const dMall = (d.mallId || '').trim().toLowerCase().replace(/^mall-/, '').replace(/^0+/, '');
+    const dName = (d.name || '').trim().toLowerCase();
+    const bName = (body.name || '').trim().toLowerCase();
+    return (dMall === normTargetMall || !dMall || !normTargetMall) &&
+      dName === bName &&
+      Number(d.floorNumber) === targetFloor;
+  });
 
   if (existing) {
     const updated = db.update(
@@ -97,6 +118,7 @@ router.post('/', requireAdmin, (req, res) => {
         description: body.description || d.description,
         openStatus: body.openStatus || d.openStatus,
         openingHours: body.openingHours || d.openingHours,
+        imageUrl: body.imageUrl !== undefined ? body.imageUrl : d.imageUrl,
       })
     );
     return res.status(200).json(updated || existing);
@@ -122,6 +144,27 @@ router.post('/', requireAdmin, (req, res) => {
   return res.status(201).json(newPoi);
 });
 
+const normalizeSlotId = (id) => {
+  if (!id) return '';
+  let s = (typeof id === 'string' ? id : (id.id || id.slotId || '')).trim().toLowerCase();
+  s = s.replace(/^parking-/, '');
+  const parts = s.split(/[-_#]/).map(p => p.replace(/^0+/, '')).filter(Boolean);
+  return parts.length ? parts.join('-') : s;
+};
+
+const isMatchingPoiId = (item, targetId) => {
+  if (!item || !targetId) return false;
+  const dId = (item.id || '').trim().toLowerCase();
+  const tId = targetId.trim().toLowerCase();
+  if (dId === tId) return true;
+  const cleanD = dId.replace(/^parking-/, '');
+  const cleanT = tId.replace(/^parking-/, '');
+  if (cleanD === cleanT) return true;
+  const normD = normalizeSlotId(cleanD);
+  const normT = normalizeSlotId(cleanT);
+  return normD.length > 0 && normD === normT;
+};
+
 /**
  * PUT /api/destinations/:id
  * Admin: Update destination POI
@@ -130,9 +173,21 @@ router.put('/:id', requireAdmin, (req, res) => {
   const poiId = req.params.id;
   const updated = db.update(
     'destinations',
-    d => d.id === poiId,
-    d => ({ ...d, ...req.body, id: poiId })
+    d => isMatchingPoiId(d, poiId),
+    d => ({ ...d, ...req.body, id: d.id })
   );
+
+  // Synchronize slot status if this destination represents a parking bay
+  if (req.body.openStatus) {
+    const slotStatus = req.body.openStatus.toLowerCase() === 'occupied'
+      ? 'occupied'
+      : (req.body.openStatus.toLowerCase() === 'reserved' ? 'reserved' : 'free');
+    db.updateAll(
+      'parkingSlots',
+      s => isMatchingPoiId(s, poiId),
+      s => ({ ...s, status: slotStatus })
+    );
+  }
 
   if (!updated) {
     return res.status(404).json({ error: 'Destination POI not found' });
@@ -146,8 +201,22 @@ router.put('/:id', requireAdmin, (req, res) => {
  */
 router.delete('/:id', requireAdmin, (req, res) => {
   const poiId = (req.params.id || '').trim();
-  const lowerPoiId = poiId.toLowerCase();
-  db.delete('destinations', d => (d.id || '').trim().toLowerCase() === lowerPoiId);
+  db.delete('destinations', d => isMatchingPoiId(d, poiId));
+  db.delete('parkingSlots', s => isMatchingPoiId(s, poiId));
+
+  // If a vehicle was parked at this slot, remove it
+  const vehicles = db.get('vehicleLocations') || {};
+  let changed = false;
+  for (const [uId, v] of Object.entries(vehicles)) {
+    if (v.slotId && isMatchingPoiId({ id: v.slotId }, poiId)) {
+      delete vehicles[uId];
+      changed = true;
+    }
+  }
+  if (changed) {
+    db.set('vehicleLocations', vehicles);
+  }
+
   return res.json({ message: `Destination ${poiId} deleted successfully` });
 });
 

@@ -62,7 +62,7 @@ class KalmanPositionFilter {
 
   /// Time update step (Prediction) fed by 60Hz IMU step vectors
   KalmanState predict(
-    double dtSeconds, {
+    double dtmilliseconds, {
     required double dx,
     required double dy,
     required double dz,
@@ -70,9 +70,9 @@ class KalmanPositionFilter {
     const metersPerDegreeLat = 111320.0;
     final metersPerDegreeLon = 111320.0 * cos((state.latitude * pi) / 180.0);
 
-    final deltaLatDeg = (dx * dtSeconds) / metersPerDegreeLat;
-    final deltaLonDeg = (dy * dtSeconds) / max(metersPerDegreeLon, 1.0);
-    final deltaHeight = dz * dtSeconds;
+    final deltaLatDeg = (dx * dtmilliseconds) / metersPerDegreeLat;
+    final deltaLonDeg = (dy * dtmilliseconds) / max(metersPerDegreeLon, 1.0);
+    final deltaHeight = dz * dtmilliseconds;
 
     state.latitude += deltaLatDeg;
     state.longitude += deltaLonDeg;

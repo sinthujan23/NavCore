@@ -17,7 +17,11 @@ router.get('/', (req, res) => {
  * Returns metadata for a specific mall
  */
 router.get('/:id', (req, res) => {
-  const mall = db.find('malls', m => m.id === req.params.id);
+  const reqId = (req.params.id || '').trim().toLowerCase();
+  const mall = db.find('malls', m => {
+    const mId = (m.id || '').trim().toLowerCase();
+    return mId === reqId || mId === reqId.replace(/^mall-/, '') || reqId === mId.replace(/^mall-/, '');
+  });
   if (!mall) {
     return res.status(404).json({ error: 'Mall not found' });
   }
@@ -29,16 +33,29 @@ router.get('/:id', (req, res) => {
  * Returns complete map package: metadata, elevation profile, destinations, entrance markers
  */
 router.get('/:id/package', (req, res) => {
-  const mallId = req.params.id;
-  const mall = db.find('malls', m => m.id === mallId);
+  const reqId = (req.params.id || '').trim().toLowerCase();
+  const mall = db.find('malls', m => {
+    const mId = (m.id || '').trim().toLowerCase();
+    return mId === reqId || mId === reqId.replace(/^mall-/, '') || reqId === mId.replace(/^mall-/, '');
+  });
 
   if (!mall) {
     return res.status(404).json({ error: 'Mall not found' });
   }
 
-  const allDestinations = db.filter('destinations', d => d.mallId === mallId);
-  const floorHeights = db.filter('floorHeights', f => f.mallId === mallId);
-  const entranceMarkers = db.filter('entranceMarkers', e => e.buildingId === mallId);
+  const mallId = mall.id;
+  const allDestinations = db.filter('destinations', d => {
+    const dMall = (d.mallId || '').trim().toLowerCase();
+    return dMall === reqId || dMall === mallId.toLowerCase() || dMall === reqId.replace(/^mall-/, '');
+  });
+  const floorHeights = db.filter('floorHeights', f => {
+    const fMall = (f.mallId || '').trim().toLowerCase();
+    return fMall === reqId || fMall === mallId.toLowerCase() || fMall === reqId.replace(/^mall-/, '');
+  });
+  const entranceMarkers = db.filter('entranceMarkers', e => {
+    const eMall = (e.buildingId || '').trim().toLowerCase();
+    return eMall === reqId || eMall === mallId.toLowerCase() || eMall === reqId.replace(/^mall-/, '');
+  });
 
   // Generate dynamic floor levels from floor heights
   const floors = floorHeights.map(h => {
@@ -104,7 +121,7 @@ router.post('/', requireAdmin, (req, res) => {
     category: body.category || 'Indoor Venue',
     rating: body.rating || '4.8 ★',
     isDownloaded: true,
-    isActive: false,
+    isActive: true,
     entranceBaseAnchorHeight: body.entranceBaseAnchorHeight !== undefined ? Number(body.entranceBaseAnchorHeight) : 0.0,
     floorGapMeters: body.floorGapMeters !== undefined ? Number(body.floorGapMeters) : 4.5,
   };

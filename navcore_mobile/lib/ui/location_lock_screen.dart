@@ -78,7 +78,8 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
         _acquiredCoords!,
         _detectedMall!,
       );
-      _statusText = 'Found ${_detectedMall!.name} (${distM.toInt()}m away, within 500m)!';
+      _statusText =
+          'Found ${_detectedMall!.name} (${distM.toInt()}m away, within 500m)!';
 
       setState(() {
         _currentStep = 2;
@@ -94,6 +95,7 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
       await widget.mallService.autoDownloadAndActivateNearestMall(
         _acquiredCoords!,
         maxRadiusMeters: 500.0,
+        isAdmin: false,
         onProgress: (progress) {
           if (mounted) {
             setState(() {
@@ -117,7 +119,8 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
         _acquiredCoords!,
         nearest,
       );
-      final hasGps = _acquiredCoords!.latitude != 0.0 && _acquiredCoords!.longitude != 0.0;
+      final hasGps =
+          _acquiredCoords!.latitude != 0.0 && _acquiredCoords!.longitude != 0.0;
 
       setState(() {
         _detectedMall = null;
@@ -226,8 +229,8 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
                 _detectedMall != null
                     ? '${_detectedMall!.name} (Within 500m)'
                     : (_nearestMallOutside500m != null
-                        ? 'Nearest: ${_nearestMallOutside500m!.name} (${_nearestDistanceMeters != null ? (_nearestDistanceMeters! < 1000 ? "${_nearestDistanceMeters!.toInt()}m" : "${(_nearestDistanceMeters! / 1000).toStringAsFixed(1)}km") : ">500m"})'
-                        : 'Looking for nearby mall...'),
+                          ? 'Nearest: ${_nearestMallOutside500m!.name} (${_nearestDistanceMeters != null ? (_nearestDistanceMeters! < 1000 ? "${_nearestDistanceMeters!.toInt()}m" : "${(_nearestDistanceMeters! / 1000).toStringAsFixed(1)}km") : ">500m"})'
+                          : 'Looking for nearby mall...'),
                 LucideIcons.building2,
               ),
               const SizedBox(height: 14),
@@ -236,11 +239,11 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
                 'Loading Indoor Map',
                 _detectedMall != null
                     ? (_currentStep >= 3
-                        ? '${(_downloadProgress * 100).toInt()}% Loaded'
-                        : 'Preparing map...')
+                          ? '${(_downloadProgress * 100).toInt()}% Loaded'
+                          : 'Preparing map...')
                     : (_currentStep == 4
-                        ? 'Not loaded (Outside 500m limit)'
-                        : 'Preparing map...'),
+                          ? 'Not loaded (Outside 500m limit)'
+                          : 'Preparing map...'),
                 LucideIcons.downloadCloud,
               ),
 
@@ -303,8 +306,8 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
                           color: _isProcessing
                               ? const Color(0xFF2563EB)
                               : (_detectedMall != null
-                                  ? const Color(0xFF16A34A)
-                                  : const Color(0xFFB45309)),
+                                    ? const Color(0xFF16A34A)
+                                    : const Color(0xFFB45309)),
                           fontSize: 13,
                           fontWeight: FontWeight.w600,
                         ),
@@ -340,19 +343,17 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
                   icon: Icon(
                     _currentStep == 4
                         ? (_detectedMall != null
-                            ? LucideIcons.compass
-                            : LucideIcons.arrowRight)
+                              ? LucideIcons.compass
+                              : LucideIcons.arrowRight)
                         : LucideIcons.refreshCw,
                     size: 20,
                   ),
                   label: Text(
                     _currentStep == 4
                         ? (_detectedMall != null
-                            ? 'Start Navigation'
-                            : 'Continue to App (No Map Loaded)')
-                        : (_isProcessing
-                              ? 'Loading...'
-                              : 'Try Again'),
+                              ? 'Start Navigation'
+                              : 'Continue to App (No Map Loaded)')
+                        : (_isProcessing ? 'Loading...' : 'Try Again'),
                     style: const TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,

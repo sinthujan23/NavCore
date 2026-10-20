@@ -111,10 +111,10 @@ class SensorFusionService {
         gpsCoords ??
         const GeodeticCoords(latitude: 0.0, longitude: 0.0, height: 0.0);
     if (_lastPnPPosition != null && _lastPnPTime != null) {
-      final secondsSincePnP = DateTime.now()
+      final millisecondsSincePnP = DateTime.now()
           .difference(_lastPnPTime!)
-          .inSeconds;
-      if (secondsSincePnP < 180) {
+          .inMilliseconds;
+      if (millisecondsSincePnP < 180) {
         effectivePosition = _lastPnPPosition!;
       }
     }

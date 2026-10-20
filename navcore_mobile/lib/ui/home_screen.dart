@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../data/destinations.dart';
+import '../data/mall_database_service.dart';
 import '../data/parking_service.dart';
 import '../engine/ecef_engine.dart';
 import '../engine/floor_tracker.dart';
@@ -15,6 +16,7 @@ class HomeScreen extends StatefulWidget {
   final GeodeticCoords userCoords;
   final BuildingElevationProfile buildingProfile;
   final List<DestinationPOI> destinations;
+  final MallMetadata? activeMall;
   final VoidCallback onOpenARView;
   final VoidCallback onOpenFloorMap;
   final VoidCallback onOpenMallExplorer;
@@ -22,12 +24,16 @@ class HomeScreen extends StatefulWidget {
   final String userEmail;
   final VoidCallback? onLogout;
   final Future<void> Function()? onRefresh;
+  final bool isAdmin;
+  final VoidCallback? onOpenAdminDashboard;
+  final VoidCallback? onSignIn;
 
   const HomeScreen({
     super.key,
     required this.userCoords,
     required this.buildingProfile,
     required this.destinations,
+    this.activeMall,
     required this.onOpenARView,
     required this.onOpenFloorMap,
     required this.onOpenMallExplorer,
@@ -35,6 +41,9 @@ class HomeScreen extends StatefulWidget {
     this.userEmail = '',
     this.onLogout,
     this.onRefresh,
+    this.isAdmin = false,
+    this.onOpenAdminDashboard,
+    this.onSignIn,
   });
 
   @override
@@ -63,12 +72,27 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    _prewarmImages();
     _parkingService.addListener(_onParkingChanged);
 
     _parkedCardAnimController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 2800),
     )..repeat();
+  }
+
+  @override
+  void didUpdateWidget(covariant HomeScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.destinations != oldWidget.destinations) {
+      _prewarmImages();
+    }
+  }
+
+  void _prewarmImages() {
+    if (widget.destinations.isNotEmpty) {
+      ShopImage.prewarm(widget.destinations.map((d) => d.effectiveImageUrl));
+    }
   }
 
   @override
@@ -89,15 +113,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     if (widget.buildingProfile.buildingId.isEmpty ||
         widget.buildingProfile.floors.isEmpty) {
       return false;
-    }
-    final hasGps =
-        widget.userCoords.latitude != 0.0 && widget.userCoords.longitude != 0.0;
-    if (hasGps && widget.destinations.isNotEmpty) {
-      final distM = haversineDistance(
-        widget.userCoords,
-        widget.destinations.first.location,
-      );
-      if (distM > 500.0) return false;
     }
     return true;
   }
@@ -550,9 +565,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    final activeMallAnchor = widget.destinations.isNotEmpty
-        ? widget.destinations.first.location
-        : widget.userCoords;
+    final activeMallAnchor =
+        (widget.activeMall != null && widget.activeMall!.latitude != 0.0)
+        ? GeodeticCoords(
+            latitude: widget.activeMall!.latitude,
+            longitude: widget.activeMall!.longitude,
+            height: widget.activeMall!.entranceBaseAnchorHeight > 0
+                ? widget.activeMall!.entranceBaseAnchorHeight
+                : widget.userCoords.height,
+          )
+        : (widget.destinations.isNotEmpty
+              ? widget.destinations.first.location
+              : widget.userCoords);
     final effectiveCoords = getEffectiveUserCoords(
       widget.userCoords,
       activeMallAnchor,
@@ -574,6 +598,28 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
     final filteredPOIs = _isMallActiveAndWithin500m
         ? widget.destinations.where((poi) {
+            // Strictly match POIs to the active mall (handling '1' vs '01' format)
+            if (widget.activeMall != null &&
+                poi.mallId != null &&
+                poi.mallId!.isNotEmpty) {
+              final cleanPoiMall = poi.mallId!.trim().toLowerCase().replaceAll(
+                RegExp(r'^0+'),
+                '',
+              );
+              final cleanActiveMall = widget.activeMall!.id
+                  .trim()
+                  .toLowerCase()
+                  .replaceAll(RegExp(r'^0+'), '');
+              if (cleanPoiMall != cleanActiveMall &&
+                  poi.mallId!.trim().toLowerCase() !=
+                      widget.activeMall!.id.trim().toLowerCase()) {
+                return false;
+              }
+            }
+            // Strictly exclude parking stalls from retail shops directory
+            if (ParkingService.isParkingDestination(poi)) {
+              return false;
+            }
             final matchesCategory =
                 _selectedCategory == 'ALL' ||
                 poi.category.toUpperCase() == _selectedCategory;
@@ -591,23 +637,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 poi.floorNumber == _selectedFloorNumber;
             return matchesCategory && matchesSearch && matchesFloor;
           }).toList()
-        : const <DestinationPOI>[];
+        : <DestinationPOI>[];
 
-    filteredPOIs.sort((a, b) {
-      final distA = calculateAccurate3DDistance(
-        effectiveCoords,
-        a.location,
-        userFloorNumber: currentFloor.floorNumber,
-        targetFloorNumber: a.floorNumber,
-      );
-      final distB = calculateAccurate3DDistance(
-        effectiveCoords,
-        b.location,
-        userFloorNumber: currentFloor.floorNumber,
-        targetFloorNumber: b.floorNumber,
-      );
-      return distA.compareTo(distB);
-    });
+    if (filteredPOIs.length > 1) {
+      filteredPOIs.sort((a, b) {
+        final distA = calculateAccurate3DDistance(
+          effectiveCoords,
+          a.location,
+          userFloorNumber: currentFloor.floorNumber,
+          targetFloorNumber: a.floorNumber,
+        );
+        final distB = calculateAccurate3DDistance(
+          effectiveCoords,
+          b.location,
+          userFloorNumber: currentFloor.floorNumber,
+          targetFloorNumber: b.floorNumber,
+        );
+        return distA.compareTo(distB);
+      });
+    }
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
@@ -632,6 +680,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           Expanded(
                             child: Text(
                               'NexNav',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                               style: GoogleFonts.plusJakartaSans(
                                 fontSize: 20,
                                 fontWeight: FontWeight.w800,
@@ -639,6 +689,95 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                               ),
                             ),
                           ),
+                          if (widget.isAdmin && widget.onOpenAdminDashboard != null) ...[
+                            const SizedBox(width: 8),
+                            GestureDetector(
+                              onTap: widget.onOpenAdminDashboard,
+                              child: Container(
+                                height: 34,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 9,
+                                  vertical: 5,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF059669),
+                                  borderRadius: BorderRadius.circular(18),
+                                  boxShadow: const [
+                                    BoxShadow(
+                                      color: Color(0x33059669),
+                                      blurRadius: 6,
+                                      offset: Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(
+                                      LucideIcons.shieldCheck,
+                                      size: 13,
+                                      color: Colors.white,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      'ADMIN PORTAL',
+                                      style: GoogleFonts.plusJakartaSans(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w800,
+                                        color: Colors.white,
+                                        letterSpacing: 0.2,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                          if (widget.onSignIn != null) ...[
+                            const SizedBox(width: 8),
+                            GestureDetector(
+                              onTap: widget.onSignIn,
+                              child: Container(
+                                height: 34,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 6,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: const Color(0xFFE2E8F0),
+                                  ),
+                                  boxShadow: const [
+                                    BoxShadow(
+                                      color: Color(0x14000000),
+                                      blurRadius: 6,
+                                    ),
+                                  ],
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(
+                                      LucideIcons.logIn,
+                                      size: 13,
+                                      color: Color(0xFF2563EB),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      'Sign In',
+                                      style: GoogleFonts.plusJakartaSans(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                        color: const Color(0xFF1E293B),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
                           if (widget.onLogout != null) ...[
                             const SizedBox(width: 8),
                             Material(
@@ -647,12 +786,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                 onTap: widget.onLogout,
                                 borderRadius: BorderRadius.circular(20),
                                 child: Container(
-                                  height: 36,
+                                  height: 34,
                                   padding: const EdgeInsets.fromLTRB(
                                     4,
-                                    4,
-                                    8,
-                                    4,
+                                    3,
+                                    7,
+                                    3,
                                   ),
                                   decoration: BoxDecoration(
                                     color: Colors.white,
@@ -673,8 +812,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
                                       Container(
-                                        width: 28,
-                                        height: 28,
+                                        width: 26,
+                                        height: 26,
                                         decoration: const BoxDecoration(
                                           gradient: LinearGradient(
                                             colors: [
@@ -695,22 +834,29 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                                     : 'U')
                                                 .toUpperCase(),
                                             style: GoogleFonts.plusJakartaSans(
-                                              fontSize: 12,
+                                              fontSize: 11,
                                               fontWeight: FontWeight.w800,
                                               color: Colors.white,
                                             ),
                                           ),
                                         ),
                                       ),
-                                      const SizedBox(width: 7),
-                                      Text(
-                                        widget.userEmail.isNotEmpty
-                                            ? '${widget.userEmail.split('@').first[0].toUpperCase()}${widget.userEmail.split('@').first.substring(1)}'
-                                            : 'User',
-                                        style: GoogleFonts.plusJakartaSans(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w700,
-                                          color: const Color(0xFF0F172A),
+                                      const SizedBox(width: 6),
+                                      ConstrainedBox(
+                                        constraints: BoxConstraints(
+                                          maxWidth: widget.isAdmin ? 55 : 95,
+                                        ),
+                                        child: Text(
+                                          widget.userEmail.isNotEmpty
+                                              ? '${widget.userEmail.split('@').first[0].toUpperCase()}${widget.userEmail.split('@').first.substring(1)}'
+                                              : 'User',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: GoogleFonts.plusJakartaSans(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700,
+                                            color: const Color(0xFF0F172A),
+                                          ),
                                         ),
                                       ),
                                       const SizedBox(width: 8),
@@ -741,7 +887,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         ],
                       ),
 
-                      if (_parkingService.hasParkedVehicle)
+                      if (_parkingService.hasParkedVehicle &&
+                          _isMallActiveAndWithin500m)
                         _buildParkedVehicleHomeCard(
                           _parkingService.currentVehicleLocation!,
                         ),
@@ -857,8 +1004,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                           children: [
                                             Text(
                                               isMallLoaded
-                                                  ? 'CURRENT MALL'
-                                                  : 'NO VENUE WITHIN 500M',
+                                                  ? 'CURRENT VENUE'
+                                                  : 'NO VENUE LOADED',
                                               style: const TextStyle(
                                                 color: Colors.white,
                                                 fontSize: 11,
@@ -907,7 +1054,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                             Text(
                                               isMallLoaded
                                                   ? 'AR READY'
-                                                  : 'OUTSIDE 500M',
+                                                  : 'OUTSIDE COVERAGE',
                                               style: TextStyle(
                                                 color: isMallLoaded
                                                     ? const Color(0xFF60A5FA)
@@ -929,7 +1076,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                 _isMallActiveAndWithin500m &&
                                         widget.buildingProfile.name.isNotEmpty
                                     ? widget.buildingProfile.name
-                                    : 'Outside Mall Coverage Area',
+                                    : (widget.activeMall?.name ??
+                                          'Outside Mall Coverage Area'),
                                 style: GoogleFonts.plusJakartaSans(
                                   color: Colors.white,
                                   fontSize: 21,
@@ -974,7 +1122,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                               ),
                                               const SizedBox(width: 5),
                                               Text(
-                                                'Maps only auto-load within 500m of a venue',
+                                                'Select a venue package from mall explorer',
                                                 style:
                                                     GoogleFonts.plusJakartaSans(
                                                       fontSize: 10.5,
@@ -1193,72 +1341,74 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
 
               // Destinations & Stores Section Header with Selection Dropdowns & Filter Controls
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Flexible(
-                                  child: Text(
-                                    'Destinations & Stores',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: GoogleFonts.plusJakartaSans(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w700,
-                                      color: const Color(0xFF0F172A),
+              if (_isMallActiveAndWithin500m)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      'Destinations & Stores',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: GoogleFonts.plusJakartaSans(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w700,
+                                        color: const Color(0xFF0F172A),
+                                      ),
                                     ),
                                   ),
-                                ),
-                                const SizedBox(width: 6),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 7,
-                                    vertical: 2,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFEFF6FF),
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(
-                                      color: const Color(0xFFBFDBFE),
+                                  const SizedBox(width: 6),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 7,
+                                      vertical: 2,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFEFF6FF),
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(
+                                        color: const Color(0xFFBFDBFE),
+                                      ),
+                                    ),
+                                    child: Text(
+                                      '${filteredPOIs.length}',
+                                      style: GoogleFonts.plusJakartaSans(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                        color: const Color(0xFF2563EB),
+                                      ),
                                     ),
                                   ),
-                                  child: Text(
-                                    '${filteredPOIs.length}',
-                                    style: GoogleFonts.plusJakartaSans(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w700,
-                                      color: const Color(0xFF2563EB),
-                                    ),
-                                  ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      // Dropdowns Bar (Floor & Category)
-                      Row(
-                        children: [
-                          Expanded(child: _buildFloorDropdown(currentFloor)),
-                          const SizedBox(width: 10),
-                          Expanded(child: _buildCategoryDropdown()),
-                        ],
-                      ),
-                    ],
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        // Dropdowns Bar (Floor & Category)
+                        Row(
+                          children: [
+                            Expanded(child: _buildFloorDropdown(currentFloor)),
+                            const SizedBox(width: 10),
+                            Expanded(child: _buildCategoryDropdown()),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
 
-              const SliverToBoxAdapter(child: SizedBox(height: 12)),
+              if (_isMallActiveAndWithin500m)
+                const SliverToBoxAdapter(child: SizedBox(height: 12)),
 
               if (filteredPOIs.isEmpty)
                 SliverToBoxAdapter(
@@ -1276,20 +1426,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       ),
                       child: Builder(
                         builder: (context) {
-                          final bool isMallLoaded =
-                              widget.buildingProfile.buildingId.isNotEmpty &&
-                              widget.buildingProfile.floors.isNotEmpty;
-                          if (!isMallLoaded) {
+                          final bool isNoMall = !_isMallActiveAndWithin500m;
+                          if (isNoMall) {
+                            final bool hasBuilding =
+                                widget.buildingProfile.buildingId.isNotEmpty;
                             return Column(
                               children: [
-                                const Icon(
-                                  LucideIcons.radar,
+                                Icon(
+                                  hasBuilding
+                                      ? LucideIcons.radar
+                                      : LucideIcons.building2,
                                   size: 36,
-                                  color: Color(0xFFF59E0B),
+                                  color: const Color(0xFFF59E0B),
                                 ),
                                 const SizedBox(height: 12),
                                 Text(
-                                  'No Mall Within 500m',
+                                  hasBuilding
+                                      ? 'No Mall Within 500m'
+                                      : 'No Active Venue Selected',
                                   style: GoogleFonts.plusJakartaSans(
                                     fontSize: 15,
                                     fontWeight: FontWeight.w700,
@@ -1297,10 +1451,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                   ),
                                 ),
                                 const SizedBox(height: 4),
-                                const Text(
-                                  'Indoor store maps automatically load when you are within 500m of a venue. Malls above 500m are not loaded in maps.',
+                                Text(
+                                  hasBuilding
+                                      ? 'Indoor store maps automatically load when you are within 500m of a venue. Malls above 500m are not loaded in maps.'
+                                      : 'Shops, floor plans, and parking slots are only visible when a shopping mall is selected or detected within 500m.',
                                   textAlign: TextAlign.center,
-                                  style: TextStyle(
+                                  style: const TextStyle(
                                     fontSize: 12.5,
                                     color: Color(0xFF64748B),
                                   ),

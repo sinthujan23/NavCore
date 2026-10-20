@@ -31,7 +31,13 @@
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>NexNav requires location access to navigate complex multi-story building floor maps.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>NexNav requires camera access for AR navigation mode and scanning PnP entrance nodes.</string>
+	<string>NexNav requires camera access for AR navigation mode and capturing storefront photos.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>NexNav requires access to your iPhone photo library to select and upload storefront images.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>NexNav requires access to your photo library to save storefront photos.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>NexNav requires microphone access if capturing storefront media.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>NexNav requires motion sensor access to track device orientation, camera tilt pitch, step counts, and indoor AR direction guidance.</string>
 	<key>UIApplicationSceneManifest</key>

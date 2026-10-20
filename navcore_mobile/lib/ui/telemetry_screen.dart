@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../engine/ecef_engine.dart';
@@ -17,7 +16,7 @@ class TelemetryScreen extends StatelessWidget {
     super.key,
     required this.userCoords,
     required this.kalmanState,
-    required this.pnpResult,
+    this.pnpResult,
     this.gpsAccuracyMeters = 3.5,
     this.compassHeadingDegrees = 0.0,
   });
@@ -45,34 +44,22 @@ class TelemetryScreen extends StatelessWidget {
         children: [
           _buildTile(
             'REAL MOBILE GPS LOCATION',
-            LucideIcons.navigation,
             'Lat: ${userCoords.latitude.toStringAsFixed(6)}° N\nLon: ${userCoords.longitude.toStringAsFixed(6)}° W\nAltitude: ${userCoords.height.toStringAsFixed(2)} m\nGPS Lock Accuracy: ±${gpsAccuracyMeters.toStringAsFixed(1)} m',
           ),
           const SizedBox(height: 12),
           _buildTile(
             'HARDWARE COMPASS & HEADING',
-            LucideIcons.compass,
             'Magnetometer Heading: ${compassHeadingDegrees.toStringAsFixed(1)}° (${_getCardinalDirection(compassHeadingDegrees)})\nSensor Fusion: Active\nSampling Frequency: High 60Hz',
           ),
           const SizedBox(height: 12),
           _buildTile(
             'ECEF VECTOR (EARTH FIXED FRAME)',
-            LucideIcons.cpu,
             'X_ECEF: ${ecef.x.toStringAsFixed(2)} m\nY_ECEF: ${ecef.y.toStringAsFixed(2)} m\nZ_ECEF: ${ecef.z.toStringAsFixed(2)} m',
           ),
           const SizedBox(height: 12),
           _buildTile(
             'KALMAN FILTER POSITION VARIANCE',
-            LucideIcons.activity,
             'Var Lat: ${kalmanState.varianceLat.toStringAsExponential(3)}\nVar Lon: ${kalmanState.varianceLon.toStringAsExponential(3)}\nVar Height: ${kalmanState.varianceHeight.toStringAsExponential(3)}',
-          ),
-          const SizedBox(height: 12),
-          _buildTile(
-            'PNP HEIGHT LOCK METRICS',
-            LucideIcons.lock,
-            pnpResult != null
-                ? 'Status: LOCKED (${pnpResult!.markerId})\nCamera Height: ${pnpResult!.computedCameraHeightMeters}m\nReprojection Error: ${pnpResult!.residualErrorPx.toStringAsFixed(3)} px'
-                : 'Status: UNCONNECTED (Ready for PnP Scan)',
           ),
         ],
       ),
@@ -90,7 +77,7 @@ class TelemetryScreen extends StatelessWidget {
     return 'NW';
   }
 
-  Widget _buildTile(String title, IconData icon, String body) {
+  Widget _buildTile(String title, String body) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -104,20 +91,14 @@ class TelemetryScreen extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Icon(icon, size: 16, color: const Color(0xFF2563EB)),
-              const SizedBox(width: 8),
-              Text(
-                title,
-                style: GoogleFonts.plusJakartaSans(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w900,
-                  color: Colors.grey[500],
-                  letterSpacing: 1.1,
-                ),
-              ),
-            ],
+          Text(
+            title,
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+              color: Colors.grey[500],
+              letterSpacing: 1.1,
+            ),
           ),
           const SizedBox(height: 10),
           Text(

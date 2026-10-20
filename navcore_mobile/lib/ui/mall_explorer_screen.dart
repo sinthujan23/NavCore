@@ -51,6 +51,7 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
     final list = await widget.mallService.getMallsList();
     if (mounted) {
       setState(() {
+        // All registered venue packages are visible in explorer, with active mall highlighted
         _malls = list;
         _isLoading = false;
       });
@@ -78,6 +79,7 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
 
     await widget.mallService.autoDownloadAndActivateNearestMall(
       widget.userCoords!,
+      isAdmin: false,
       onProgress: (p) {
         if (mounted) {
           setState(() {
@@ -141,7 +143,7 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
   }
 
   Future<void> _activateMall(MallMetadata mall) async {
-    await widget.mallService.setActiveMall(mall.id);
+    await widget.mallService.setActiveMall(mall.id, isAdmin: false);
     await _loadMalls();
     widget.onSelectActiveMall(mall.id);
 
@@ -161,7 +163,8 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final hasGps = widget.userCoords != null &&
+    final hasGps =
+        widget.userCoords != null &&
         widget.userCoords!.latitude != 0.0 &&
         widget.userCoords!.longitude != 0.0;
 
@@ -376,7 +379,9 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                                       child: Center(
                                         child: Text(
                                           (widget.userEmail.isNotEmpty
-                                                  ? widget.userEmail.split('@').first[0]
+                                                  ? widget.userEmail
+                                                        .split('@')
+                                                        .first[0]
                                                   : 'U')
                                               .toUpperCase(),
                                           style: GoogleFonts.plusJakartaSans(
@@ -580,8 +585,8 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                           !hasGps
                               ? 'Acquiring GPS Location'
                               : (_searchQuery.isNotEmpty
-                                  ? 'No Malls Found'
-                                  : 'No Malls Within 500m'),
+                                    ? 'No Malls Found'
+                                    : 'No Malls Within 500m'),
                           style: GoogleFonts.plusJakartaSans(
                             fontSize: 15,
                             fontWeight: FontWeight.w700,
@@ -593,8 +598,8 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                           !hasGps
                               ? 'Please ensure GPS location is enabled so nearby shopping malls can be automatically detected.'
                               : (_searchQuery.isNotEmpty
-                                  ? 'No malls within 500m match "$_searchQuery".'
-                                  : 'Maps only automatically load within 500m. Please move closer to a supported shopping mall.'),
+                                    ? 'No malls within 500m match "$_searchQuery".'
+                                    : 'Maps only automatically load within 500m. Please move closer to a supported shopping mall.'),
                           textAlign: TextAlign.center,
                           style: const TextStyle(
                             fontSize: 12.5,
@@ -687,14 +692,14 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(
-                          color: mall.isActive
+                          color: mall.isSelected
                               ? const Color(0xFF2563EB)
                               : const Color(0xFFE2E8F0),
-                          width: mall.isActive ? 2 : 1,
+                          width: mall.isSelected ? 2 : 1,
                         ),
                         boxShadow: [
                           BoxShadow(
-                            color: mall.isActive
+                            color: mall.isSelected
                                 ? const Color(0x1F2563EB)
                                 : const Color(0x0A000000),
                             blurRadius: 12,
@@ -722,7 +727,7 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                                         ) => Container(
                                           decoration: BoxDecoration(
                                             gradient: LinearGradient(
-                                              colors: mall.isActive
+                                              colors: mall.isSelected
                                                   ? [
                                                       const Color(0xFF1E40AF),
                                                       const Color(0xFF3B82F6),
@@ -795,7 +800,7 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                                   ),
                                 ),
                                 // Top Right: Active Badge
-                                if (mall.isActive)
+                                if (mall.isSelected)
                                   Positioned(
                                     top: 8,
                                     right: 8,
@@ -825,7 +830,7 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                                           ),
                                           SizedBox(width: 3),
                                           Text(
-                                            'ACTIVE',
+                                            'ACTIVE MAP',
                                             style: TextStyle(
                                               color: Colors.white,
                                               fontSize: 9.5,
@@ -974,25 +979,25 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                                         height: 32,
                                         child: ElevatedButton(
                                           style: ElevatedButton.styleFrom(
-                                            backgroundColor: mall.isActive
+                                            backgroundColor: mall.isSelected
                                                 ? const Color(0xFFDCFCE7)
                                                 : const Color(0xFF2563EB),
-                                            foregroundColor: mall.isActive
+                                            foregroundColor: mall.isSelected
                                                 ? const Color(0xFF15803D)
                                                 : Colors.white,
-                                            elevation: mall.isActive ? 0 : 1,
+                                            elevation: mall.isSelected ? 0 : 1,
                                             padding: EdgeInsets.zero,
                                             shape: RoundedRectangleBorder(
                                               borderRadius:
                                                   BorderRadius.circular(10),
                                               side: BorderSide(
-                                                color: mall.isActive
+                                                color: mall.isSelected
                                                     ? const Color(0xFF86EFAC)
                                                     : Colors.transparent,
                                               ),
                                             ),
                                           ),
-                                          onPressed: mall.isActive
+                                          onPressed: mall.isSelected
                                               ? null
                                               : () => _activateMall(mall),
                                           child: Row(
@@ -1000,14 +1005,14 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                                                 MainAxisAlignment.center,
                                             children: [
                                               Icon(
-                                                mall.isActive
+                                                mall.isSelected
                                                     ? LucideIcons.check
                                                     : LucideIcons.navigation,
                                                 size: 13,
                                               ),
                                               const SizedBox(width: 4),
                                               Text(
-                                                mall.isActive
+                                                mall.isSelected
                                                     ? 'Active'
                                                     : 'Use Map',
                                                 style: const TextStyle(

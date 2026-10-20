@@ -147,10 +147,20 @@ class _ARViewportScreenState extends State<ARViewportScreen>
         final matchingMall = allMalls
             .where((m) => m.id == activeMallId)
             .firstOrNull;
+        if (matchingMall == null) {
+          if (mounted) {
+            setState(() {
+              _liveDestinations = const [];
+              _shopMarkerManager.loadShops(const []);
+              _isLoadingBackend = false;
+            });
+          }
+          return;
+        }
         final hasGps =
             widget.userCoords.latitude != 0.0 &&
             widget.userCoords.longitude != 0.0;
-        if (hasGps && matchingMall != null) {
+        if (hasGps) {
           final dist = haversineDistance(
             widget.userCoords,
             GeodeticCoords(
@@ -184,20 +194,14 @@ class _ARViewportScreenState extends State<ARViewportScreen>
 
       List<DestinationPOI> fetched = await ApiService.instance
           .fetchDestinations(mallId: activeMallId);
-      if (fetched.isEmpty) {
-        fetched = await ApiService.instance.fetchDestinations();
-      }
 
       final mallShops = fetched
-          .where((p) => p.mallId == null || p.mallId == activeMallId)
+          .where((p) => p.mallId == activeMallId || p.mallId == null)
           .toList();
-      final targetList = mallShops.isNotEmpty
-          ? mallShops
-          : (fetched.isNotEmpty ? fetched : widget.destinations);
 
-      if (targetList.isNotEmpty && mounted) {
+      if (mallShops.isNotEmpty && mounted) {
         setState(() {
-          _liveDestinations = _deduplicateDestinations(targetList);
+          _liveDestinations = _deduplicateDestinations(mallShops);
           _shopMarkerManager.loadShops(_liveDestinations);
         });
         return;
@@ -205,9 +209,20 @@ class _ARViewportScreenState extends State<ARViewportScreen>
 
       final pkg = await ApiService.instance.fetchMallPackage(activeMallId);
       if (pkg != null && pkg.destinations.isNotEmpty && mounted) {
+        final pkgShops = pkg.destinations
+            .where((p) => p.mallId == null || p.mallId == activeMallId)
+            .toList();
         setState(() {
-          _liveDestinations = _deduplicateDestinations(pkg.destinations);
+          _liveDestinations = _deduplicateDestinations(pkgShops);
           _shopMarkerManager.loadShops(_liveDestinations);
+        });
+        return;
+      }
+
+      if (mounted) {
+        setState(() {
+          _liveDestinations = const [];
+          _shopMarkerManager.loadShops(const []);
         });
       }
     } catch (e) {
@@ -880,10 +895,15 @@ class _ARViewportScreenState extends State<ARViewportScreen>
       final double floorHeightDelta =
           (poi.floorNumber - widget.currentFloor.floorNumber).toDouble();
       final double floorOffset = (floorHeightDelta * 32.0).clamp(-110.0, 110.0);
+
+      // Distance perspective offset: places further away sit slightly higher, closer places slightly lower
+      final double distOffset = -((distM.clamp(1, 35) - 1.0) / 34.0) * 35.0;
+
       final double rawScreenY =
-          (screenHeight * 0.48) +
+          (screenHeight * 0.46) +
           pitchOffset -
-          floorOffset -
+          floorOffset +
+          distOffset -
           (cardHeight / 2.0);
 
       // 5. Dynamic Depth & Camera-Motion Scaling ("increase and decrease" logic)
@@ -967,12 +987,13 @@ class _ARViewportScreenState extends State<ARViewportScreen>
       });
     }
 
-    // 2. Deterministic Multi-Pass 2D Spatial Collision Avoidance Engine
-    // (guarantees zero overlapping cards across floors & zero overlap with target navigation badge)
-    const double baseCardW = 195.0;
-    const double baseCardH = 108.0; // Includes card body + stem + dot
-    const double minGapX = 16.0;
-    const double minGapY = 16.0;
+    // 2. Deterministic 2D Spatial Collision Avoidance Engine
+    // (guarantees ZERO overlapping cards across all floors and screen orientations)
+    const double baseCardW = 190.0;
+    const double baseCardH = 96.0;
+    const double minGapX = 12.0;
+    const double minGapY = 12.0;
+
     final seenRawIds = <String>{};
     final uniqueRawPositioned = <Map<String, dynamic>>[];
     for (final item in rawPositioned) {
@@ -983,185 +1004,265 @@ class _ARViewportScreenState extends State<ARViewportScreen>
         uniqueRawPositioned.add(item);
       }
     }
+
+    // A) Dynamic Responsive Smoothing applied BEFORE collision pass
+    // (ensures camera panning stays fluid without corrupting post-collision separation)
+    for (final item in uniqueRawPositioned) {
+      final poi = item['poi'] as DestinationPOI;
+      final double targetX = item['posX'] as double;
+      final double targetY = item['posY'] as double;
+      final Offset? prevPos = _smoothedCardPositions[poi.id];
+      double smoothX = targetX;
+      double smoothY = targetY;
+
+      if (prevPos != null) {
+        final double moveDist =
+            (Offset(targetX, targetY) - prevPos).distance;
+        final double lerpAlpha =
+            (0.60 + (moveDist / 40.0) * 0.30).clamp(0.60, 0.90);
+        smoothX = prevPos.dx + (targetX - prevPos.dx) * lerpAlpha;
+        smoothY = prevPos.dy + (targetY - prevPos.dy) * lerpAlpha;
+      }
+
+      _smoothedCardPositions[poi.id] = Offset(smoothX, smoothY);
+      item['posX'] = smoothX;
+      item['posY'] = smoothY;
+    }
+
     final List<Map<String, dynamic>> positionedCards = List.from(
       uniqueRawPositioned,
     );
 
-    for (int pass = 0; pass < 5; pass++) {
-      bool hadCollision = false;
-      for (int i = 0; i < positionedCards.length; i++) {
-        final item = positionedCards[i];
-        final poiA = item['poi'] as DestinationPOI;
-        double curX = item['posX'] as double;
-        double curY = item['posY'] as double;
-        final double scaleA = (item['distanceScale'] as double? ?? 1.0);
-        final double wA = baseCardW * scaleA;
-        final double hA = baseCardH * scaleA;
-
-        curX = curX.clamp(10.0, math.max(10.0, screenWidth - wA - 10.0));
-        curY = curY.clamp(
-          topSafeLimit,
-          math.max(topSafeLimit, bottomSafeLimit - hA),
-        );
-
-        // A) Check collision against Active 3D Target Navigation Badge
-        if (targetBadgeRect != null) {
-          final cardRect = Rect.fromLTWH(curX, curY, wA, hA);
-          if (cardRect.overlaps(targetBadgeRect.inflate(10.0))) {
-            hadCollision = true;
-            final double safeUnderY = targetBadgeRect.bottom + minGapY;
-            if (safeUnderY + hA <= bottomSafeLimit) {
-              curY = safeUnderY;
-            } else {
-              if (curX < targetBadgeRect.center.dx) {
-                curX = (targetBadgeRect.left - wA - minGapX).clamp(
-                  10.0,
-                  math.max(10.0, screenWidth - wA - 10.0),
-                );
-              } else {
-                curX = (targetBadgeRect.right + minGapX).clamp(
-                  10.0,
-                  math.max(10.0, screenWidth - wA - 10.0),
-                );
-              }
-            }
-            curY = curY.clamp(
-              topSafeLimit,
-              math.max(topSafeLimit, bottomSafeLimit - hA),
-            );
-            item['posX'] = curX;
-            item['posY'] = curY;
-          }
-        }
-
-        // B) Check collision against other ambient cards
-        for (int j = 0; j < positionedCards.length; j++) {
-          if (i == j) continue;
-          final existing = positionedCards[j];
-          final poiB = existing['poi'] as DestinationPOI;
-          final double exX = existing['posX'] as double;
-          final double exY = existing['posY'] as double;
-          final double scaleB = (existing['distanceScale'] as double? ?? 1.0);
-          final double wB = baseCardW * scaleB;
-          final double hB = baseCardH * scaleB;
-
-          final bool overlapX =
-              (curX < exX + wB + minGapX) && (curX + wA + minGapX > exX);
-          final bool overlapY =
-              (curY < exY + hB + minGapY) && (curY + hA + minGapY > exY);
-
-          if (overlapX && overlapY) {
-            hadCollision = true;
-
-            if (poiA.floorNumber > poiB.floorNumber) {
-              final double newY = exY - hA - minGapY;
-              bool violatesBadge =
-                  targetBadgeRect != null &&
-                  Rect.fromLTWH(
-                    curX,
-                    newY,
-                    wA,
-                    hA,
-                  ).overlaps(targetBadgeRect.inflate(10.0));
-              if (newY >= topSafeLimit && !violatesBadge) {
-                curY = newY;
-              } else {
-                curX = (curX >= exX)
-                    ? (exX + wB + minGapX).clamp(
-                        10.0,
-                        math.max(10.0, screenWidth - wA - 10.0),
-                      )
-                    : (exX - wA - minGapX).clamp(
-                        10.0,
-                        math.max(10.0, screenWidth - wA - 10.0),
-                      );
-              }
-            } else if (poiA.floorNumber < poiB.floorNumber) {
-              final double newY = exY + hB + minGapY;
-              if (newY + hA <= bottomSafeLimit) {
-                curY = newY;
-              } else {
-                curX = (curX >= exX)
-                    ? (exX + wB + minGapX).clamp(
-                        10.0,
-                        math.max(10.0, screenWidth - wA - 10.0),
-                      )
-                    : (exX - wA - minGapX).clamp(
-                        10.0,
-                        math.max(10.0, screenWidth - wA - 10.0),
-                      );
-              }
-            } else {
-              final double shiftYUp = exY - hA - minGapY;
-              final double shiftYDown = exY + hB + minGapY;
-              bool upViolatesBadge =
-                  targetBadgeRect != null &&
-                  Rect.fromLTWH(
-                    curX,
-                    shiftYUp,
-                    wA,
-                    hA,
-                  ).overlaps(targetBadgeRect.inflate(10.0));
-
-              if (shiftYUp >= topSafeLimit &&
-                  !upViolatesBadge &&
-                  (i % 2 == 0)) {
-                curY = shiftYUp;
-              } else if (shiftYDown + hA <= bottomSafeLimit) {
-                curY = shiftYDown;
-              } else if (shiftYUp >= topSafeLimit && !upViolatesBadge) {
-                curY = shiftYUp;
-              } else {
-                curX = (curX >= exX)
-                    ? (exX + wB + minGapX).clamp(
-                        10.0,
-                        math.max(10.0, screenWidth - wA - 10.0),
-                      )
-                    : (exX - wA - minGapX).clamp(
-                        10.0,
-                        math.max(10.0, screenWidth - wA - 10.0),
-                      );
-              }
-            }
-
-            curY = curY.clamp(
-              topSafeLimit,
-              math.max(topSafeLimit, bottomSafeLimit - hA),
-            );
-            item['posX'] = curX;
-            item['posY'] = curY;
-          }
-        }
-      }
-      if (!hadCollision) break;
+    // Initial boundary clamp
+    for (final item in positionedCards) {
+      final double scale = (item['distanceScale'] as double? ?? 1.0);
+      final double w = baseCardW * scale;
+      final double h = baseCardH * scale;
+      item['posX'] = (item['posX'] as double).clamp(
+        10.0,
+        math.max(10.0, screenWidth - w - 10.0),
+      );
+      item['posY'] = (item['posY'] as double).clamp(
+        topSafeLimit,
+        math.max(topSafeLimit, bottomSafeLimit - h),
+      );
     }
 
-    // Dynamic Responsive Smoothing (Zero Deadzone Freezing for Fluid Real-Time Camera Panning)
-    for (int i = 0; i < positionedCards.length; i++) {
-      final item = positionedCards[i];
-      final poiA = item['poi'] as DestinationPOI;
-      final double rawTargetX = item['posX'] as double;
-      final double rawTargetY = item['posY'] as double;
-
-      final Offset? prevPos = _smoothedCardPositions[poiA.id];
-      double finalX = rawTargetX;
-      double finalY = rawTargetY;
-
-      if (prevPos != null) {
-        final double moveDist =
-            (Offset(rawTargetX, rawTargetY) - prevPos).distance;
-        // Responsive lerp: fast camera motions track immediately, small motions smoothly interpolate without freezing
-        final double lerpAlpha = (0.55 + (moveDist / 50.0) * 0.30).clamp(
-          0.55,
-          0.85,
-        );
-        finalX = prevPos.dx + (rawTargetX - prevPos.dx) * lerpAlpha;
-        finalY = prevPos.dy + (rawTargetY - prevPos.dy) * lerpAlpha;
+    // B) Avoid active navigation badge boundary
+    if (targetBadgeRect != null) {
+      final inflatedBadge = targetBadgeRect.inflate(10.0);
+      for (final item in positionedCards) {
+        final double scale = (item['distanceScale'] as double? ?? 1.0);
+        final double w = baseCardW * scale;
+        final double h = baseCardH * scale;
+        double curX = item['posX'] as double;
+        double curY = item['posY'] as double;
+        final cardRect = Rect.fromLTWH(curX, curY, w, h);
+        if (cardRect.overlaps(inflatedBadge)) {
+          final double safeBelow = inflatedBadge.bottom + minGapY;
+          if (safeBelow + h <= bottomSafeLimit) {
+            curY = safeBelow;
+          } else if (inflatedBadge.top - h - minGapY >= topSafeLimit) {
+            curY = inflatedBadge.top - h - minGapY;
+          } else {
+            if (curX < screenWidth / 2) {
+              curX = (inflatedBadge.left - w - minGapX).clamp(
+                10.0,
+                math.max(10.0, screenWidth - w - 10.0),
+              );
+            } else {
+              curX = (inflatedBadge.right + minGapX).clamp(
+                10.0,
+                math.max(10.0, screenWidth - w - 10.0),
+              );
+            }
+          }
+          item['posX'] = curX;
+          item['posY'] = curY.clamp(
+            topSafeLimit,
+            math.max(topSafeLimit, bottomSafeLimit - h),
+          );
+        }
       }
+    }
 
-      _smoothedCardPositions[poiA.id] = Offset(finalX, finalY);
-      item['posX'] = finalX;
-      item['posY'] = finalY;
+    // C) Prioritize cards: active target > current floor > closer distance
+    positionedCards.sort((a, b) {
+      final poiA = a['poi'] as DestinationPOI;
+      final poiB = b['poi'] as DestinationPOI;
+      if (poiA.id == activePOI?.id) return -1;
+      if (poiB.id == activePOI?.id) return 1;
+      final isSameFloorA = poiA.floorNumber == widget.currentFloor.floorNumber;
+      final isSameFloorB = poiB.floorNumber == widget.currentFloor.floorNumber;
+      if (isSameFloorA != isSameFloorB) return isSameFloorA ? -1 : 1;
+      return (a['distM'] as int).compareTo(b['distM'] as int);
+    });
+
+    // D) Multi-Pass Constraint Relaxation
+    for (int pass = 0; pass < 8; pass++) {
+      bool anyOverlap = false;
+      for (int i = 0; i < positionedCards.length; i++) {
+        final cardA = positionedCards[i];
+        final double scaleA = (cardA['distanceScale'] as double? ?? 1.0);
+        final double wA = baseCardW * scaleA;
+        final double hA = baseCardH * scaleA;
+        double ax = cardA['posX'] as double;
+        double ay = cardA['posY'] as double;
+
+        for (int j = i + 1; j < positionedCards.length; j++) {
+          final cardB = positionedCards[j];
+          final double scaleB = (cardB['distanceScale'] as double? ?? 1.0);
+          final double wB = baseCardW * scaleB;
+          final double hB = baseCardH * scaleB;
+          double bx = cardB['posX'] as double;
+          double by = cardB['posY'] as double;
+
+          final bool overlapX =
+              (ax < bx + wB + minGapX) && (ax + wA + minGapX > bx);
+          final bool overlapY =
+              (ay < by + hB + minGapY) && (ay + hA + minGapY > by);
+
+          if (overlapX && overlapY) {
+            anyOverlap = true;
+
+            final double candYDown = ay + hA + minGapY;
+            final double candYUp = ay - hB - minGapY;
+
+            if (by >= ay) {
+              if (candYDown + hB <= bottomSafeLimit) {
+                by = candYDown;
+              } else if (candYUp >= topSafeLimit) {
+                by = candYUp;
+              } else {
+                final double overlapDistY = (ay + hA + minGapY) - by;
+                if (ay - (overlapDistY / 2) >= topSafeLimit &&
+                    candYDown - (overlapDistY / 2) + hB <= bottomSafeLimit) {
+                  ay -= overlapDistY / 2;
+                  by += overlapDistY / 2;
+                } else {
+                  if (bx >= ax) {
+                    bx = (bx + minGapX + 25.0).clamp(
+                      10.0,
+                      math.max(10.0, screenWidth - wB - 10.0),
+                    );
+                    ax = (ax - minGapX - 25.0).clamp(
+                      10.0,
+                      math.max(10.0, screenWidth - wA - 10.0),
+                    );
+                  } else {
+                    bx = (bx - minGapX - 25.0).clamp(
+                      10.0,
+                      math.max(10.0, screenWidth - wB - 10.0),
+                    );
+                    ax = (ax + minGapX + 25.0).clamp(
+                      10.0,
+                      math.max(10.0, screenWidth - wA - 10.0),
+                    );
+                  }
+                }
+              }
+            } else {
+              if (candYUp >= topSafeLimit) {
+                by = candYUp;
+              } else if (candYDown + hB <= bottomSafeLimit) {
+                by = candYDown;
+              } else {
+                final double overlapDistY = (by + hB + minGapY) - ay;
+                if (ay + (overlapDistY / 2) + hA <= bottomSafeLimit &&
+                    by - (overlapDistY / 2) >= topSafeLimit) {
+                  by -= overlapDistY / 2;
+                  ay += overlapDistY / 2;
+                } else {
+                  if (bx >= ax) {
+                    bx = (bx + minGapX + 25.0).clamp(
+                      10.0,
+                      math.max(10.0, screenWidth - wB - 10.0),
+                    );
+                    ax = (ax - minGapX - 25.0).clamp(
+                      10.0,
+                      math.max(10.0, screenWidth - wA - 10.0),
+                    );
+                  } else {
+                    bx = (bx - minGapX - 25.0).clamp(
+                      10.0,
+                      math.max(10.0, screenWidth - wB - 10.0),
+                    );
+                    ax = (ax + minGapX + 25.0).clamp(
+                      10.0,
+                      math.max(10.0, screenWidth - wA - 10.0),
+                    );
+                  }
+                }
+              }
+            }
+
+            cardA['posX'] = ax.clamp(
+              10.0,
+              math.max(10.0, screenWidth - wA - 10.0),
+            );
+            cardA['posY'] = ay.clamp(
+              topSafeLimit,
+              math.max(topSafeLimit, bottomSafeLimit - hA),
+            );
+            cardB['posX'] = bx.clamp(
+              10.0,
+              math.max(10.0, screenWidth - wB - 10.0),
+            );
+            cardB['posY'] = by.clamp(
+              topSafeLimit,
+              math.max(topSafeLimit, bottomSafeLimit - hB),
+            );
+          }
+        }
+      }
+      if (!anyOverlap) break;
+    }
+
+    // E) Guaranteed Final Zero-Overlap Sweep Pass
+    // Guarantees zero residual collisions even in congested vertical clusters
+    for (int i = 0; i < positionedCards.length; i++) {
+      final cardA = positionedCards[i];
+      final double scaleA = (cardA['distanceScale'] as double? ?? 1.0);
+      final double wA = baseCardW * scaleA;
+      final double hA = baseCardH * scaleA;
+      double ax = cardA['posX'] as double;
+      double ay = cardA['posY'] as double;
+
+      for (int j = i + 1; j < positionedCards.length; j++) {
+        final cardB = positionedCards[j];
+        final double scaleB = (cardB['distanceScale'] as double? ?? 1.0);
+        final double wB = baseCardW * scaleB;
+        final double hB = baseCardH * scaleB;
+        double bx = cardB['posX'] as double;
+        double by = cardB['posY'] as double;
+
+        final bool overlapX =
+            (ax < bx + wB + minGapX) && (ax + wA + minGapX > bx);
+        final bool overlapY =
+            (ay < by + hB + minGapY) && (ay + hA + minGapY > by);
+
+        if (overlapX && overlapY) {
+          final double requiredY = ay + hA + minGapY;
+          if (requiredY + hB <= bottomSafeLimit) {
+            cardB['posY'] = requiredY;
+          } else {
+            final double requiredAbove = ay - hB - minGapY;
+            if (requiredAbove >= topSafeLimit) {
+              cardB['posY'] = requiredAbove;
+            } else {
+              // Stagger to opposite horizontal side
+              if (ax < screenWidth / 2) {
+                cardB['posX'] = (screenWidth - wB - 10.0).clamp(
+                  10.0,
+                  math.max(10.0, screenWidth - wB - 10.0),
+                );
+              } else {
+                cardB['posX'] = 10.0;
+              }
+            }
+          }
+        }
+      }
     }
 
     // Sort positioned cards by distance and floor (farther dist first -> renders behind closer places)
@@ -1547,242 +1648,245 @@ class _ARViewportScreenState extends State<ARViewportScreen>
             Positioned.fill(
               child: Stack(
                 children: () {
-                final seenCardKeyIds = <String>{};
-                final uniqueList = visibleCardsInFOV.where((data) {
-                  final p = data['poi'] as DestinationPOI;
-                  final cleanId = p.id.trim();
-                  if (cleanId.isEmpty || seenCardKeyIds.contains(cleanId)) {
-                    return false;
-                  }
-                  seenCardKeyIds.add(cleanId);
-                  return true;
-                }).toList();
+                  final seenCardKeyIds = <String>{};
+                  final uniqueList = visibleCardsInFOV.where((data) {
+                    final p = data['poi'] as DestinationPOI;
+                    final cleanId = p.id.trim();
+                    if (cleanId.isEmpty || seenCardKeyIds.contains(cleanId)) {
+                      return false;
+                    }
+                    seenCardKeyIds.add(cleanId);
+                    return true;
+                  }).toList();
 
-                return uniqueList.map((data) {
-                  final poi = data['poi'] as DestinationPOI;
-                  final distM = data['distM'] as int;
-                  final directionStr = data['directionStr'] as String;
-                  final posX = data['posX'] as double;
-                  final posY = data['posY'] as double;
-                  final cardOpacity = (data['cardOpacity'] as double? ?? 1.0);
-                  final isPitchFocused =
-                      (data['isPitchFocused'] as bool? ?? true);
-                  final cardScale = (data['distanceScale'] as double? ?? 1.0);
+                  return uniqueList.map((data) {
+                    final poi = data['poi'] as DestinationPOI;
+                    final distM = data['distM'] as int;
+                    final directionStr = data['directionStr'] as String;
+                    final posX = data['posX'] as double;
+                    final posY = data['posY'] as double;
+                    final cardOpacity = (data['cardOpacity'] as double? ?? 1.0);
+                    final isPitchFocused =
+                        (data['isPitchFocused'] as bool? ?? true);
+                    final cardScale = (data['distanceScale'] as double? ?? 1.0);
 
-                  final isSelected = activePOI?.id == poi.id;
-                  final double effectiveOpacity = _isNavigatingActive
-                      ? (isSelected
-                            ? 1.0
-                            : (cardOpacity * 0.85).clamp(0.0, 0.90))
-                      : cardOpacity.clamp(0.0, 1.0);
+                    final isSelected = activePOI?.id == poi.id;
+                    final double effectiveOpacity = _isNavigatingActive
+                        ? (isSelected
+                              ? 1.0
+                              : (cardOpacity * 0.85).clamp(0.0, 0.90))
+                        : cardOpacity.clamp(0.0, 1.0);
 
-                  final cardMetrics =
-                      data['spatialMetrics'] as RealWorldSpatialMetrics?;
-                  final int dist3D =
-                      cardMetrics?.euclidean3DDistanceMeters.round() ?? distM;
+                    final cardMetrics =
+                        data['spatialMetrics'] as RealWorldSpatialMetrics?;
+                    final int dist3D =
+                        cardMetrics?.euclidean3DDistanceMeters.round() ?? distM;
 
-                  String floorRelationStr;
-                  final String floorLabel = poi.floorNumber < 0
-                      ? 'B${poi.floorNumber.abs()}'
-                      : 'FLOOR ${poi.floorNumber}';
-                  if (poi.floorNumber == widget.currentFloor.floorNumber) {
-                    floorRelationStr = floorLabel;
-                  } else if (poi.floorNumber >
-                      widget.currentFloor.floorNumber) {
-                    floorRelationStr = '$floorLabel • ▲ UP';
-                  } else {
-                    floorRelationStr = '$floorLabel • ▼ DOWN';
-                  }
+                    String floorRelationStr;
+                    final String floorLabel = poi.floorNumber < 0
+                        ? 'B${poi.floorNumber.abs()}'
+                        : 'FLOOR ${poi.floorNumber}';
+                    if (poi.floorNumber == widget.currentFloor.floorNumber) {
+                      floorRelationStr = floorLabel;
+                    } else if (poi.floorNumber >
+                        widget.currentFloor.floorNumber) {
+                      floorRelationStr = '$floorLabel • ▲ UP';
+                    } else {
+                      floorRelationStr = '$floorLabel • ▼ DOWN';
+                    }
 
-                  return AnimatedPositioned(
-                    key: ValueKey('poi-card-${poi.id}'),
-                    duration: const Duration(milliseconds: 24),
-                    curve: Curves.linear,
-                    left: posX,
-                    top: posY,
-                    child: AnimatedOpacity(
-                      duration: const Duration(milliseconds: 80),
-                      opacity: effectiveOpacity,
-                      child: Transform.scale(
-                        scale: cardScale,
-                        alignment: Alignment.bottomCenter,
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            GestureDetector(
-                              onTap: () => _selectAndNavigate(poi),
-                              child: Container(
-                                width: 195,
-                                padding: const EdgeInsets.all(10),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xEE090D16),
-                                  borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(
-                                    color: isSelected
-                                        ? const Color(0xFF10B981)
-                                        : (isPitchFocused
-                                              ? const Color(0xFF38BDF8)
-                                              : const Color(0xFF1E293B)),
-                                    width: isSelected
-                                        ? 2.0
-                                        : (isPitchFocused ? 1.5 : 1.0),
-                                  ),
-                                  boxShadow: [
-                                    if (isSelected)
-                                      const BoxShadow(
-                                        color: Color(0x6610B981),
-                                        blurRadius: 14,
-                                        spreadRadius: 1,
-                                      ),
-                                  ],
-                                ),
-                                child: Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Text(
-                                            poi.name,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: GoogleFonts.plusJakartaSans(
-                                              color: Colors.white,
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 2),
-                                          Row(
-                                            children: [
-                                              const Icon(
-                                                LucideIcons.star,
-                                                size: 10,
-                                                color: Color(0xFFF59E0B),
-                                              ),
-                                              const SizedBox(width: 3),
-                                              Text(
-                                                '${poi.rating} ★ • 3D: $dist3D m',
-                                                style: const TextStyle(
-                                                  color: Color(0xFFCBD5E1),
-                                                  fontSize: 10,
-                                                  fontWeight: FontWeight.w600,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                          const SizedBox(height: 3),
-                                          Text(
-                                            '$floorRelationStr • ${((cardMetrics?.floorAreaSqMeters ?? _getFloorConfig(poi.floorNumber).floorAreaSqMeters) / 1000).toStringAsFixed(1)}k m²',
-                                            style: TextStyle(
-                                              color: isSelected
-                                                  ? const Color(0xFF34D399)
-                                                  : (poi.floorNumber !=
-                                                            widget
-                                                                .currentFloor
-                                                                .floorNumber
-                                                        ? const Color(
-                                                            0xFFF59E0B,
-                                                          )
-                                                        : const Color(
-                                                            0xFF38BDF8,
-                                                          )),
-                                              fontSize: 8,
-                                              fontWeight: FontWeight.w800,
-                                              letterSpacing: 0.5,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
+                    return AnimatedPositioned(
+                      key: ValueKey('poi-card-${poi.id}'),
+                      duration: const Duration(milliseconds: 24),
+                      curve: Curves.linear,
+                      left: posX,
+                      top: posY,
+                      child: AnimatedOpacity(
+                        duration: const Duration(milliseconds: 80),
+                        opacity: effectiveOpacity,
+                        child: Transform.scale(
+                          scale: cardScale,
+                          alignment: Alignment.bottomCenter,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              GestureDetector(
+                                onTap: () => _selectAndNavigate(poi),
+                                child: Container(
+                                  width: 195,
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xEE090D16),
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(
+                                      color: isSelected
+                                          ? const Color(0xFF10B981)
+                                          : (isPitchFocused
+                                                ? const Color(0xFF38BDF8)
+                                                : const Color(0xFF1E293B)),
+                                      width: isSelected
+                                          ? 2.0
+                                          : (isPitchFocused ? 1.5 : 1.0),
                                     ),
-                                    const SizedBox(width: 6),
-                                    Container(
-                                      width: 34,
-                                      height: 34,
-                                      decoration: BoxDecoration(
-                                        color: isSelected
-                                            ? const Color(0xFF10B981)
-                                            : const Color(0xFF1E293B),
-                                        borderRadius: BorderRadius.circular(10),
-                                        border: Border.all(
-                                          color: isSelected
-                                              ? const Color(0xFF34D399)
-                                              : const Color(0xFF334155),
+                                    boxShadow: [
+                                      if (isSelected)
+                                        const BoxShadow(
+                                          color: Color(0x6610B981),
+                                          blurRadius: 14,
+                                          spreadRadius: 1,
+                                        ),
+                                    ],
+                                  ),
+                                  child: Row(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Text(
+                                              poi.name,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style:
+                                                  GoogleFonts.plusJakartaSans(
+                                                    color: Colors.white,
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Row(
+                                              children: [
+                                                const Icon(
+                                                  LucideIcons.star,
+                                                  size: 10,
+                                                  color: Color(0xFFF59E0B),
+                                                ),
+                                                const SizedBox(width: 3),
+                                                Text(
+                                                  '${poi.rating} ★ • 3D: $dist3D m',
+                                                  style: const TextStyle(
+                                                    color: Color(0xFFCBD5E1),
+                                                    fontSize: 10,
+                                                    fontWeight: FontWeight.w600,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 3),
+                                            Text(
+                                              floorRelationStr,
+                                              style: TextStyle(
+                                                color: isSelected
+                                                    ? const Color(0xFF34D399)
+                                                    : (poi.floorNumber !=
+                                                              widget
+                                                                  .currentFloor
+                                                                  .floorNumber
+                                                          ? const Color(
+                                                              0xFFF59E0B,
+                                                            )
+                                                          : const Color(
+                                                              0xFF38BDF8,
+                                                            )),
+                                                fontSize: 8,
+                                                fontWeight: FontWeight.w800,
+                                                letterSpacing: 0.5,
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                       ),
-                                      child: Column(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.center,
-                                        children: [
-                                          Transform.rotate(
-                                            angle:
-                                                (data['relAngle'] as double) *
-                                                (math.pi / 180.0),
-                                            child: Icon(
-                                              LucideIcons.arrowUp,
-                                              size: 13,
-                                              color: isSelected
-                                                  ? Colors.white
-                                                  : const Color(0xFF00E5FF),
-                                            ),
+                                      const SizedBox(width: 6),
+                                      Container(
+                                        width: 34,
+                                        height: 34,
+                                        decoration: BoxDecoration(
+                                          color: isSelected
+                                              ? const Color(0xFF10B981)
+                                              : const Color(0xFF1E293B),
+                                          borderRadius: BorderRadius.circular(
+                                            10,
                                           ),
-                                          const SizedBox(height: 1),
-                                          Text(
-                                            directionStr,
-                                            style: TextStyle(
-                                              fontSize: 8,
-                                              fontWeight: FontWeight.w900,
-                                              color: isSelected
-                                                  ? Colors.white
-                                                  : const Color(0xFF0F172A),
-                                            ),
+                                          border: Border.all(
+                                            color: isSelected
+                                                ? const Color(0xFF34D399)
+                                                : const Color(0xFF334155),
                                           ),
-                                        ],
+                                        ),
+                                        child: Column(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          children: [
+                                            Transform.rotate(
+                                              angle:
+                                                  (data['relAngle'] as double) *
+                                                  (math.pi / 180.0),
+                                              child: Icon(
+                                                LucideIcons.arrowUp,
+                                                size: 13,
+                                                color: isSelected
+                                                    ? Colors.white
+                                                    : const Color(0xFF00E5FF),
+                                              ),
+                                            ),
+                                            const SizedBox(height: 1),
+                                            Text(
+                                              directionStr,
+                                              style: TextStyle(
+                                                fontSize: 8,
+                                                fontWeight: FontWeight.w900,
+                                                color: isSelected
+                                                    ? Colors.white
+                                                    : const Color(0xFF0F172A),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
                                       ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              CustomPaint(
+                                size: const Size(2, 20),
+                                painter: DottedLinePainter(
+                                  color: isSelected
+                                      ? const Color(0xFF10B981)
+                                      : Colors.white.withValues(alpha: 0.5),
+                                ),
+                              ),
+                              Container(
+                                width: 8,
+                                height: 8,
+                                decoration: BoxDecoration(
+                                  color: isSelected
+                                      ? const Color(0xFF10B981)
+                                      : Colors.white,
+                                  shape: BoxShape.circle,
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: isSelected
+                                          ? const Color(0xFF10B981)
+                                          : Colors.white,
+                                      blurRadius: 6,
                                     ),
                                   ],
                                 ),
                               ),
-                            ),
-                            CustomPaint(
-                              size: const Size(2, 20),
-                              painter: DottedLinePainter(
-                                color: isSelected
-                                    ? const Color(0xFF10B981)
-                                    : Colors.white.withValues(alpha: 0.5),
-                              ),
-                            ),
-                            Container(
-                              width: 8,
-                              height: 8,
-                              decoration: BoxDecoration(
-                                color: isSelected
-                                    ? const Color(0xFF10B981)
-                                    : Colors.white,
-                                shape: BoxShape.circle,
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: isSelected
-                                        ? const Color(0xFF10B981)
-                                        : Colors.white,
-                                    blurRadius: 6,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                  );
-                }).toList();
-              }(),
+                    );
+                  }).toList();
+                }(),
+              ),
             ),
-          ),
 
           // 5. Top Controls & Navigation Guidance HUD Banner
           Positioned(
@@ -2043,7 +2147,7 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                     ),
 
                     // Top Category Filter Chips Bar (when not navigating)
-                    if (!_isNavigatingActive)
+                    if (!_isNavigatingActive && allDestinations.isNotEmpty)
                       Builder(
                         builder: (context) {
                           final allCount = allDestinations.length;
@@ -2551,7 +2655,7 @@ class _ARViewportScreenState extends State<ARViewportScreen>
           elevationDeltaMeters: 0.0,
           euclidean3DDistanceMeters: 0.0,
           distanceFromGroundMeters: (floor.floorNumber - 1).abs() * 4.5,
-          estimatedWalkTimeSeconds: 0.0,
+          estimatedWalkTimemilliseconds: 0.0,
           floorWidthMeters: floor.floorWidthMeters,
           floorLengthMeters: floor.floorLengthMeters,
           floorAreaSqMeters: floor.floorAreaSqMeters,
@@ -2720,7 +2824,7 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                   const SizedBox(height: 4),
                   _buildMathRow(
                     'Est. Real Walk Pace:',
-                    '${(metrics.estimatedWalkTimeSeconds / 60).toStringAsFixed(1)} min (${metrics.estimatedWalkTimeSeconds.toStringAsFixed(0)}s @ 1.4m/s)',
+                    '${(metrics.estimatedWalkTimemilliseconds / 60).toStringAsFixed(1)} min (${metrics.estimatedWalkTimemilliseconds.toStringAsFixed(0)}s @ 1.4m/s)',
                   ),
                 ],
               ),

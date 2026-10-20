@@ -40,6 +40,20 @@ const seedData = {
 class DataStore {
   constructor() {
     this.data = this._load();
+    this._ensureCollections();
+  }
+
+  _ensureCollections() {
+    if (!this.data) this.data = {};
+    if (!Array.isArray(this.data.users)) this.data.users = [];
+    if (!Array.isArray(this.data.malls)) this.data.malls = [];
+    if (!Array.isArray(this.data.entranceMarkers)) this.data.entranceMarkers = [];
+    if (!Array.isArray(this.data.floorHeights)) this.data.floorHeights = [];
+    if (!Array.isArray(this.data.destinations)) this.data.destinations = [];
+    if (!Array.isArray(this.data.parkingSlots)) this.data.parkingSlots = [];
+    if (!this.data.vehicleLocations || typeof this.data.vehicleLocations !== 'object') {
+      this.data.vehicleLocations = {};
+    }
   }
 
   _load() {
@@ -47,7 +61,7 @@ class DataStore {
       if (fs.existsSync(DB_FILE)) {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
         const parsed = JSON.parse(raw);
-        if (parsed.users && parsed.users.length > 0) {
+        if (parsed.users && parsed.users.length > 0 && parsed.malls && parsed.malls.length > 0) {
           return parsed;
         }
       }
@@ -68,7 +82,7 @@ class DataStore {
             return parsedDump;
           }
         }
-      } catch (_) {}
+      } catch (_) { }
     }
 
     this._save(seedData);
@@ -85,20 +99,22 @@ class DataStore {
       const DUMP_ALIAS = path.join(__dirname, '..', 'data', 'dump.json');
       try {
         fs.writeFileSync(DUMP_FILE, content, 'utf-8');
-      } catch (_) {}
+      } catch (_) { }
       try {
         fs.writeFileSync(DUMP_ALIAS, content, 'utf-8');
-      } catch (_) {}
+      } catch (_) { }
     } catch (err) {
       console.error('[DataStore] Error saving database:', err.message);
     }
   }
 
   get(collection) {
+    this._ensureCollections();
     return this.data[collection] || [];
   }
 
   set(collection, items) {
+    this._ensureCollections();
     this.data[collection] = items;
     this._save(this.data);
   }
@@ -114,7 +130,8 @@ class DataStore {
   }
 
   insert(collection, item) {
-    if (!this.data[collection]) {
+    this._ensureCollections();
+    if (!Array.isArray(this.data[collection])) {
       this.data[collection] = [];
     }
     this.data[collection].push(item);
@@ -128,7 +145,11 @@ class DataStore {
   }
 
   update(collection, predicate, updater) {
-    const list = this.get(collection);
+    this._ensureCollections();
+    if (!Array.isArray(this.data[collection])) {
+      this.data[collection] = [];
+    }
+    const list = this.data[collection];
     const index = list.findIndex(predicate);
     if (index !== -1) {
       const updated = updater(list[index]);
@@ -139,8 +160,31 @@ class DataStore {
     return null;
   }
 
+  updateAll(collection, predicate, updater) {
+    this._ensureCollections();
+    if (!Array.isArray(this.data[collection])) {
+      this.data[collection] = [];
+    }
+    const list = this.data[collection];
+    let updatedCount = 0;
+    for (let i = 0; i < list.length; i++) {
+      if (predicate(list[i])) {
+        list[i] = updater(list[i]);
+        updatedCount++;
+      }
+    }
+    if (updatedCount > 0) {
+      this._save(this.data);
+    }
+    return updatedCount;
+  }
+
   delete(collection, predicate) {
-    const list = this.get(collection);
+    this._ensureCollections();
+    if (!Array.isArray(this.data[collection])) {
+      this.data[collection] = [];
+    }
+    const list = this.data[collection];
     const filtered = list.filter(item => !predicate(item));
     this.data[collection] = filtered;
     this._save(this.data);

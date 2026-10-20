@@ -50,7 +50,9 @@ class _BuildingConfigScreenState extends State<BuildingConfigScreen> {
           final floorId = isBasement ? 'B${h.floorNo.abs()}' : 'F${h.floorNo}';
           final floorName = isBasement
               ? 'Basement B${h.floorNo.abs()}'
-              : (h.floorNo == 1 ? 'Ground Floor F1' : 'Upper Floor F${h.floorNo}');
+              : (h.floorNo == 1
+                    ? 'Ground Floor F1'
+                    : 'Upper Floor F${h.floorNo}');
           return FloorLevelConfig(
             floorId: floorId,
             floorNumber: h.floorNo,
@@ -109,7 +111,7 @@ class _BuildingConfigScreenState extends State<BuildingConfigScreen> {
         const SnackBar(
           content: Text('All floors permanently deleted from database.'),
           backgroundColor: Color(0xFF0F172A),
-          duration: Duration(seconds: 2),
+          duration: Duration(milliseconds: 2),
         ),
       );
     }
@@ -120,11 +122,14 @@ class _BuildingConfigScreenState extends State<BuildingConfigScreen> {
 
     FloorLevelConfig? floorToDelete;
     try {
-      floorToDelete = _currentProfile.floors.firstWhere((f) => f.floorId == floorId);
+      floorToDelete = _currentProfile.floors.firstWhere(
+        (f) => f.floorId == floorId,
+      );
     } catch (_) {}
 
-    final updatedFloors =
-        _currentProfile.floors.where((f) => f.floorId != floorId).toList();
+    final updatedFloors = _currentProfile.floors
+        .where((f) => f.floorId != floorId)
+        .toList();
     final updated = BuildingElevationProfile(
       buildingId: _currentProfile.buildingId,
       name: _currentProfile.name,
@@ -140,7 +145,10 @@ class _BuildingConfigScreenState extends State<BuildingConfigScreen> {
     // Permanently delete floor record from backend database & cache
     if (floorToDelete != null && mallId.isNotEmpty) {
       try {
-        await ApiService.instance.deleteFloor(mallId, floorToDelete.floorNumber);
+        await ApiService.instance.deleteFloor(
+          mallId,
+          floorToDelete.floorNumber,
+        );
         final prefs = await SharedPreferences.getInstance();
         await prefs.remove('cache_package_$mallId');
         await prefs.remove('cache_floors_$mallId');
@@ -198,8 +206,8 @@ class _BuildingConfigScreenState extends State<BuildingConfigScreen> {
         final String venueName = geo.placeName.isNotEmpty
             ? geo.placeName
             : (geo.city.isNotEmpty
-                ? '${geo.city} Real Location Profile'
-                : 'Current Location Profile');
+                  ? '${geo.city} Real Location Profile'
+                  : 'Current Location Profile');
 
         final double baseAltitude = geo.groundAltitude;
         final double storyGap = geo.floorGap;
@@ -258,7 +266,10 @@ class _BuildingConfigScreenState extends State<BuildingConfigScreen> {
                 ? const SizedBox(
                     width: 18,
                     height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF2563EB)),
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Color(0xFF2563EB),
+                    ),
                   )
                 : const Icon(LucideIcons.refreshCw, color: Color(0xFF2563EB)),
             onPressed: _isLoading
@@ -298,7 +309,9 @@ class _BuildingConfigScreenState extends State<BuildingConfigScreen> {
                       child: Text(
                         _currentProfile.name.isNotEmpty
                             ? _currentProfile.name
-                            : (_locationCity.isNotEmpty ? _locationCity : 'Current Location Reference'),
+                            : (_locationCity.isNotEmpty
+                                  ? _locationCity
+                                  : 'Current Location Reference'),
                         style: GoogleFonts.plusJakartaSans(
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
@@ -307,7 +320,10 @@ class _BuildingConfigScreenState extends State<BuildingConfigScreen> {
                       ),
                     ),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
                       decoration: BoxDecoration(
                         color: const Color(0xFFEFF6FF),
                         borderRadius: BorderRadius.circular(8),
@@ -316,7 +332,11 @@ class _BuildingConfigScreenState extends State<BuildingConfigScreen> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(LucideIcons.navigation, size: 10, color: Color(0xFF2563EB)),
+                          const Icon(
+                            LucideIcons.navigation,
+                            size: 10,
+                            color: Color(0xFF2563EB),
+                          ),
                           const SizedBox(width: 4),
                           Text(
                             'LIVE GPS',
@@ -331,7 +351,8 @@ class _BuildingConfigScreenState extends State<BuildingConfigScreen> {
                     ),
                   ],
                 ),
-                if (_currentCoords != null && _currentCoords!.latitude != 0.0) ...[
+                if (_currentCoords != null &&
+                    _currentCoords!.latitude != 0.0) ...[
                   const SizedBox(height: 6),
                   Text(
                     'GPS: ${_currentCoords!.latitude.toStringAsFixed(6)}°, ${_currentCoords!.longitude.toStringAsFixed(6)}°',
@@ -342,21 +363,21 @@ class _BuildingConfigScreenState extends State<BuildingConfigScreen> {
                     ),
                   ),
                 ],
-                const SizedBox(height: 6),
-                Text(
-                  'Base Anchor Height: ${_currentProfile.entranceBaseAnchorHeight.toStringAsFixed(1)}m WGS84 | Story Gap: ${_currentProfile.floorGapMeters > 0 ? '${_currentProfile.floorGapMeters.toStringAsFixed(1)}m' : 'Not Set'}',
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: const Color(0xFF475569),
-                  ),
-                ),
+
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
-                  onPressed: _isLoading ? null : _autoResolveElevationFromRealLocation,
-                  icon: const Icon(LucideIcons.crosshair, size: 14, color: Color(0xFF2563EB)),
+                  onPressed: _isLoading
+                      ? null
+                      : _autoResolveElevationFromRealLocation,
+                  icon: const Icon(
+                    LucideIcons.crosshair,
+                    size: 14,
+                    color: Color(0xFF2563EB),
+                  ),
                   label: Text(
-                    _isLoading ? 'CALCULATING REAL LOCATION...' : 'RE-CALCULATE FROM REAL DEVICE GPS',
+                    _isLoading
+                        ? 'CALCULATING REAL LOCATION...'
+                        : 'RE-CALCULATE FROM REAL DEVICE GPS',
                     style: GoogleFonts.plusJakartaSans(
                       fontSize: 11,
                       fontWeight: FontWeight.w800,
@@ -367,7 +388,9 @@ class _BuildingConfigScreenState extends State<BuildingConfigScreen> {
                     minimumSize: const Size(double.infinity, 38),
                     side: const BorderSide(color: Color(0xFFBFDBFE)),
                     backgroundColor: const Color(0xFFEFF6FF),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
                   ),
                 ),
               ],
@@ -408,12 +431,19 @@ class _BuildingConfigScreenState extends State<BuildingConfigScreen> {
                     const SizedBox(width: 6),
                     TextButton.icon(
                       style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 4,
+                        ),
                         minimumSize: Size.zero,
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                       onPressed: _clearAllFloors,
-                      icon: const Icon(LucideIcons.trash2, size: 12, color: Color(0xFFDC2626)),
+                      icon: const Icon(
+                        LucideIcons.trash2,
+                        size: 12,
+                        color: Color(0xFFDC2626),
+                      ),
                       label: Text(
                         'Remove All',
                         style: GoogleFonts.plusJakartaSans(
@@ -468,7 +498,11 @@ class _BuildingConfigScreenState extends State<BuildingConfigScreen> {
               ),
               child: Column(
                 children: [
-                  const Icon(LucideIcons.mapPinOff, size: 36, color: Color(0xFF94A3B8)),
+                  const Icon(
+                    LucideIcons.mapPinOff,
+                    size: 36,
+                    color: Color(0xFF94A3B8),
+                  ),
                   const SizedBox(height: 12),
                   Text(
                     'No Elevation Bands Configured',
@@ -492,49 +526,66 @@ class _BuildingConfigScreenState extends State<BuildingConfigScreen> {
               ),
             )
           else
-            ..._currentProfile.floors.map((floor) => Card(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  elevation: 0.5,
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: const Color(0xFFEFF6FF),
-                      child: Text(
-                        floor.floorNumber < 0
-                            ? 'B${floor.floorNumber.abs()}'
-                            : 'F${floor.floorNumber}',
-                        style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF2563EB)),
+            ..._currentProfile.floors.map(
+              (floor) => Card(
+                margin: const EdgeInsets.only(bottom: 8),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                elevation: 0.5,
+                child: ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: const Color(0xFFEFF6FF),
+                    child: Text(
+                      floor.floorNumber < 0
+                          ? 'B${floor.floorNumber.abs()}'
+                          : 'F${floor.floorNumber}',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF2563EB),
                       ),
                     ),
-                    title: Text(
-                      floor.name,
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                    ),
-                    subtitle: Text(
-                      'Band: ${floor.bandMinMeters.toStringAsFixed(1)}m – ${floor.bandMaxMeters.toStringAsFixed(1)}m',
-                      style: const TextStyle(fontSize: 11, color: Color(0xFF64748B)),
-                    ),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          '${floor.absoluteHeightMeters.toStringAsFixed(1)}m',
-                          style: GoogleFonts.plusJakartaSans(
-                            fontWeight: FontWeight.w900,
-                            color: const Color(0xFF0F172A),
-                            fontSize: 14,
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        IconButton(
-                          icon: const Icon(LucideIcons.trash2, size: 16, color: Color(0xFFEF4444)),
-                          tooltip: 'Delete floor',
-                          onPressed: () => _deleteFloor(floor.floorId),
-                        ),
-                      ],
+                  ),
+                  title: Text(
+                    floor.name,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
                     ),
                   ),
-                )),
+                  subtitle: Text(
+                    'Band: ${floor.bandMinMeters.toStringAsFixed(1)}m – ${floor.bandMaxMeters.toStringAsFixed(1)}m',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF64748B),
+                    ),
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '${floor.absoluteHeightMeters.toStringAsFixed(1)}m',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontWeight: FontWeight.w900,
+                          color: const Color(0xFF0F172A),
+                          fontSize: 14,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      IconButton(
+                        icon: const Icon(
+                          LucideIcons.trash2,
+                          size: 16,
+                          color: Color(0xFFEF4444),
+                        ),
+                        tooltip: 'Delete floor',
+                        onPressed: () => _deleteFloor(floor.floorId),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
