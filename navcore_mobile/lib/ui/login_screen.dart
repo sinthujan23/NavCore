@@ -1325,6 +1325,23 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
+  void _handleForgotPasswordBack() {
+    if (_isResettingPassword || _isVerifyingResetCode || _isSendingResetCode) return;
+
+    if (_forgotPasswordStep == 3) {
+      _forgotNewPasswordController.clear();
+      _forgotConfirmPasswordController.clear();
+      _isForgotNewPasswordVisible = false;
+      _isForgotConfirmPasswordVisible = false;
+      setState(() => _forgotPasswordStep = 2);
+    } else if (_forgotPasswordStep == 2) {
+      _forgotResendTimer?.cancel();
+      setState(() => _forgotPasswordStep = 1);
+    } else {
+      setState(() => _isForgotPasswordMode = false);
+    }
+  }
+
   Widget _buildForgotPasswordStep1() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1829,6 +1846,28 @@ class _LoginScreenState extends State<LoginScreen> {
                       letterSpacing: 0.8,
                     ),
                   ),
+          ),
+        ),
+
+        const SizedBox(height: 18),
+
+        // Back to Verification Code link
+        Center(
+          child: TextButton.icon(
+            onPressed: _handleForgotPasswordBack,
+            icon: const Icon(
+              LucideIcons.arrowLeft,
+              size: 15,
+              color: Color(0xFF64748B),
+            ),
+            label: Text(
+              'Back to Verification Code',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: const Color(0xFF64748B),
+              ),
+            ),
           ),
         ),
       ],
@@ -2360,14 +2399,7 @@ class _LoginScreenState extends State<LoginScreen> {
         canPop: false,
         onPopInvokedWithResult: (didPop, result) {
           if (didPop) return;
-          if (_forgotPasswordStep == 3) {
-            return;
-          } else if (_forgotPasswordStep == 2) {
-            _forgotResendTimer?.cancel();
-            setState(() => _forgotPasswordStep = 1);
-          } else {
-            setState(() => _isForgotPasswordMode = false);
-          }
+          _handleForgotPasswordBack();
         },
         child: Scaffold(
           backgroundColor: const Color(0xFFF8FAFC),
@@ -2375,19 +2407,11 @@ class _LoginScreenState extends State<LoginScreen> {
             backgroundColor: Colors.transparent,
             elevation: 0,
             automaticallyImplyLeading: false,
-            leading: _forgotPasswordStep == 3
-                ? null
-                : IconButton(
-                    icon: const Icon(LucideIcons.arrowLeft, color: Color(0xFF0F172A)),
-                    onPressed: () {
-                      if (_forgotPasswordStep == 2) {
-                        _forgotResendTimer?.cancel();
-                        setState(() => _forgotPasswordStep = 1);
-                      } else {
-                        setState(() => _isForgotPasswordMode = false);
-                      }
-                    },
-                  ),
+            leading: IconButton(
+              icon: const Icon(LucideIcons.arrowLeft, color: Color(0xFF0F172A)),
+              tooltip: 'Back',
+              onPressed: _handleForgotPasswordBack,
+            ),
             centerTitle: true,
           ),
           body: SafeArea(
