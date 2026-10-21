@@ -160,14 +160,16 @@ class ShopDetailsScreen extends StatelessWidget {
                             Container(
                               width: 6,
                               height: 6,
-                              decoration: const BoxDecoration(
-                                color: Color(0xFF22C55E),
+                              decoration: BoxDecoration(
+                                color: destination.isOpen
+                                    ? const Color(0xFF22C55E)
+                                    : const Color(0xFFEF4444),
                                 shape: BoxShape.circle,
                               ),
                             ),
                             const SizedBox(width: 5),
                             Text(
-                              destination.openStatus,
+                              destination.statusOnly,
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 11,
@@ -302,21 +304,12 @@ class ShopDetailsScreen extends StatelessWidget {
                             Expanded(
                               child: _buildModernSpecTile(
                                 title: 'Status',
-                                value: destination.openStatus,
+                                value: destination.statusOnly,
                               ),
                             ),
                           ],
                         ),
                       ),
-                      if (destination.location.latitude != 0.0 ||
-                          destination.location.longitude != 0.0) ...[
-                        const SizedBox(height: 12),
-                        _buildModernSpecTile(
-                          title: 'Geodetic Coordinates',
-                          value:
-                              '${destination.location.latitude.toStringAsFixed(6)}°N, ${destination.location.longitude.toStringAsFixed(6)}°E • Alt: ${destination.location.height.toStringAsFixed(1)}m',
-                        ),
-                      ],
                     ],
                   ),
 

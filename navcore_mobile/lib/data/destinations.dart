@@ -195,6 +195,27 @@ class DestinationPOI {
     return 'assets/images/shops/odel_flagship_store.jpg';
   }
 
+  /// Clean status text without time details (e.g. "Open" or "Closed")
+  String get statusOnly {
+    final raw = openStatus.trim();
+    if (raw.isEmpty) return 'Open';
+    final lower = raw.toLowerCase();
+    if (lower.contains('closed') || lower.contains('close')) {
+      return 'Closed';
+    }
+    if (lower.contains('open')) {
+      return 'Open';
+    }
+    if (raw.contains(':')) {
+      final prefix = raw.split(':')[0].trim();
+      if (prefix.isNotEmpty) return prefix;
+    }
+    return raw;
+  }
+
+  /// Whether the destination is currently open
+  bool get isOpen => !statusOnly.toLowerCase().contains('close');
+
   /// Opening hours from database. Returns openStatus or default if not specified.
   String get effectiveOpeningHours {
     if (openingHours != null && openingHours!.trim().isNotEmpty) {
