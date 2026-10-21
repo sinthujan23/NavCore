@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -13,6 +15,38 @@ enum SensorPermissionStatus {
   permanentlyDenied,
   restricted,
   unknown,
+}
+
+class AccessStatusReport {
+  final bool isLocationGranted;
+  final bool isLocationPermanentlyDenied;
+  final bool isCameraGranted;
+  final bool isCameraPermanentlyDenied;
+  final bool isGpsServiceEnabled;
+
+  const AccessStatusReport({
+    required this.isLocationGranted,
+    required this.isLocationPermanentlyDenied,
+    required this.isCameraGranted,
+    required this.isCameraPermanentlyDenied,
+    required this.isGpsServiceEnabled,
+  });
+
+  bool get isAllFulfilled =>
+      isLocationGranted && isCameraGranted && isGpsServiceEnabled;
+
+  bool get hasAnyPermanentlyDenied =>
+      isLocationPermanentlyDenied || isCameraPermanentlyDenied;
+
+  int get fulfilledCount {
+    int count = 0;
+    if (isLocationGranted) count++;
+    if (isCameraGranted) count++;
+    if (isGpsServiceEnabled) count++;
+    return count;
+  }
+
+  int get totalCount => 3;
 }
 
 class SensorStatusReport {
@@ -62,15 +96,173 @@ class RealSensorService {
   bool get isGpsGranted => _isGpsPermissionGranted;
   bool get isCameraGranted => _isCameraPermissionGranted;
 
-  Future<SensorStatusReport> requestAllPermissions() async {
+  /// Inspect current permission and hardware statuses without triggering OS popups
+  Future<AccessStatusReport> checkAllAccessStatus() async {
+    try {
+      final locStatus = await Permission.location.status;
+      final camStatus = await Permission.camera.status;
+      final isGpsEnabled = await Geolocator.isLocationServiceEnabled();
+
+      _isGpsPermissionGranted = locStatus.isGranted;
+      _isCameraPermissionGranted = camStatus.isGranted;
+
+      return AccessStatusReport(
+        isLocationGranted: locStatus.isGranted,
+        isLocationPermanentlyDenied: locStatus.isPermanentlyDenied,
+        isCameraGranted: camStatus.isGranted,
+        isCameraPermanentlyDenied: camStatus.isPermanentlyDenied,
+        isGpsServiceEnabled: isGpsEnabled,
+      );
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error checking access status: $e');
+      }
+      return const AccessStatusReport(
+        isLocationGranted: false,
+        isLocationPermanentlyDenied: false,
+        isCameraGranted: false,
+        isCameraPermanentlyDenied: false,
+        isGpsServiceEnabled: false,
+      );
+    }
+  }
+
+  static const MethodChannel _locationAccuracyChannel =
+      MethodChannel('com.navcore.app/location_accuracy');
+
+  /// Check whether GPS location service is enabled on the device
+  Future<bool> isLocationServiceEnabled() async {
+    return await Geolocator.isLocationServiceEnabled();
+  }
+
+  /// Check whether Google Location Accuracy (high accuracy) is satisfied
+  Future<bool> isLocationAccuracySatisfied() async {
+    if (!Platform.isAndroid) {
+      return await Geolocator.isLocationServiceEnabled();
+    }
+    try {
+      final bool? satisfied = await _locationAccuracyChannel
+          .invokeMethod<bool>('isLocationAccuracyEnabled');
+      return satisfied ?? await Geolocator.isLocationServiceEnabled();
+    } catch (_) {
+      return await Geolocator.isLocationServiceEnabled();
+    }
+  }
+
+  /// Triggers the native Google Play Services Location Accuracy resolution bottom sheet / dialog on Android
+  /// ("For a better experience, your device will need to use Location Accuracy: Device location, Location Accuracy... [Turn on]")
+  Future<bool> requestGoogleLocationAccuracy() async {
+    if (!Platform.isAndroid) {
+      return await Geolocator.isLocationServiceEnabled();
+    }
+    try {
+      final bool? satisfied = await _locationAccuracyChannel
+          .invokeMethod<bool>('requestLocationAccuracy');
+      return satisfied ?? false;
+    } catch (e) {
+      if (kDebugMode) {
+        print('[RealSensorService] Location accuracy resolution error: $e');
+      }
+      return await Geolocator.isLocationServiceEnabled();
+    }
+  }
+
+  /// Request precise location permission from user and prompt location accuracy if needed
+  Future<PermissionStatus> requestLocationPermission() async {
+    try {
+      final status = await Permission.location.request();
+      _isGpsPermissionGranted = status.isGranted;
+      if (status.isGranted) {
+        // Trigger Google Location Accuracy dialog if GPS / accuracy is off
+        final isAccurate = await isLocationAccuracySatisfied();
+        if (!isAccurate) {
+          await requestGoogleLocationAccuracy();
+        }
+        try {
+          await getCurrentPosition(promptAccuracy: false)
+              .timeout(const Duration(seconds: 4));
+        } catch (_) {}
+      }
+      return status;
+    } catch (e) {
+      if (kDebugMode) print('Error requesting location permission: $e');
+      return PermissionStatus.denied;
+    }
+  }
+
+  /// Request camera permission from user
+  Future<PermissionStatus> requestCameraPermission() async {
+    try {
+      final status = await Permission.camera.request();
+      _isCameraPermissionGranted = status.isGranted;
+      return status;
+    } catch (e) {
+      if (kDebugMode) print('Error requesting camera permission: $e');
+      return PermissionStatus.denied;
+    }
+  }
+
+  /// Request all required app accesses in one unified flow
+  Future<AccessStatusReport> requestAllRequiredAccesses() async {
     try {
       final locStatus = await Permission.location.request();
       _isGpsPermissionGranted = locStatus.isGranted;
 
+      bool isGpsEnabled = await isLocationAccuracySatisfied();
+      if (locStatus.isGranted && !isGpsEnabled) {
+        isGpsEnabled = await requestGoogleLocationAccuracy();
+      }
+
+      if (locStatus.isGranted) {
+        try {
+          await getCurrentPosition(promptAccuracy: false)
+              .timeout(const Duration(seconds: 4));
+        } catch (_) {}
+      }
+
       final camStatus = await Permission.camera.request();
       _isCameraPermissionGranted = camStatus.isGranted;
 
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      return AccessStatusReport(
+        isLocationGranted: locStatus.isGranted,
+        isLocationPermanentlyDenied: locStatus.isPermanentlyDenied,
+        isCameraGranted: camStatus.isGranted,
+        isCameraPermanentlyDenied: camStatus.isPermanentlyDenied,
+        isGpsServiceEnabled: isGpsEnabled,
+      );
+    } catch (e) {
+      if (kDebugMode) print('Error requesting all accesses: $e');
+      return checkAllAccessStatus();
+    }
+  }
+
+  /// Open device GPS hardware settings
+  Future<bool> openDeviceLocationSettings() async {
+    return await Geolocator.openLocationSettings();
+  }
+
+  /// Open app settings page in OS
+  Future<bool> openDeviceAppSettings() async {
+    return await openAppSettings();
+  }
+
+  Future<SensorStatusReport> requestAllPermissions() async {
+    try {
+      // 1. Request OS Location runtime permission (Fine & Coarse)
+      final locStatus = await Permission.location.request();
+      _isGpsPermissionGranted = locStatus.isGranted;
+
+      // 2. Prompt native Google Location Accuracy dialog if GPS / accuracy is off
+      bool serviceEnabled = await isLocationAccuracySatisfied();
+      if (!serviceEnabled && _isGpsPermissionGranted) {
+        serviceEnabled = await requestGoogleLocationAccuracy();
+      } else if (!serviceEnabled) {
+        serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      }
+
+      // 3. Request OS Camera runtime permission
+      final camStatus = await Permission.camera.request();
+      _isCameraPermissionGranted = camStatus.isGranted;
 
       return SensorStatusReport(
         isGpsEnabled: serviceEnabled,
@@ -94,11 +286,16 @@ class RealSensorService {
     }
   }
 
-  Future<GeodeticCoords?> getCurrentPosition() async {
+  Future<GeodeticCoords?> getCurrentPosition({bool promptAccuracy = false}) async {
     try {
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
-        return null;
+        if (promptAccuracy) {
+          serviceEnabled = await requestGoogleLocationAccuracy();
+        }
+        if (!serviceEnabled) {
+          return null;
+        }
       }
 
       LocationPermission permission = await Geolocator.checkPermission();
@@ -137,9 +334,12 @@ class RealSensorService {
     }
   }
 
-  Future<GeodeticCoords?> getLastKnownOrCurrentPosition() async {
+  Future<GeodeticCoords?> getLastKnownOrCurrentPosition({bool promptAccuracy = false}) async {
     try {
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled && promptAccuracy) {
+        serviceEnabled = await requestGoogleLocationAccuracy();
+      }
       if (!serviceEnabled) return null;
 
       LocationPermission permission = await Geolocator.checkPermission();
@@ -161,7 +361,7 @@ class RealSensorService {
         return _lastCoords;
       }
     } catch (_) {}
-    return getCurrentPosition();
+    return getCurrentPosition(promptAccuracy: promptAccuracy);
   }
 
   double _smoothedPitch = 0.0;

@@ -7,7 +7,8 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "db:seed": "node scripts/seed.js",
-    "db:dump": "node scripts/seed.js --dump"
+    "db:dump": "node scripts/seed.js --dump",
+    "db:clean-users": "node scripts/clean-users.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

@@ -201,7 +201,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           currentPressureHpa: _smoothedPressure,
         );
       }
-      if (syncTick % 2 == 0) {
+      // Sync active mall parking stalls every 30s (20 ticks) instead of every 3s to avoid overloading backend
+      if (syncTick % 20 == 0) {
         final active = _resolveActiveMall();
         if (active != null && active.id.isNotEmpty) {
           ParkingService.instance.syncSlotsSilently(active.id);

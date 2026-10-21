@@ -378,8 +378,10 @@ class ParkingService extends ChangeNotifier {
       _slotStreamController.stream;
   bool get isLiveStreamActive => _isLiveStreamActive;
 
-  /// Starts periodic background synchronization with backend server (1s for ultra-fast reaction)
-  void startLiveSync({int intervalSeconds = 1}) {
+  DateTime? _lastSyncTime;
+
+  /// Starts periodic background synchronization with backend server (optimized to 25s to prevent server overload)
+  void startLiveSync({int intervalSeconds = 25}) {
     _liveSyncTimer?.cancel();
     _liveSyncTimer = Timer.periodic(Duration(seconds: intervalSeconds), (_) {
       if (_activeMallId.isNotEmpty) {
@@ -394,10 +396,17 @@ class ParkingService extends ChangeNotifier {
     _liveSyncTimer = null;
   }
 
-  /// Silent synchronization that fetches latest slots from backend without clearing on transient errors
-  Future<void> syncSlotsSilently(String mallId) async {
+  /// Silent synchronization that fetches latest slots from backend with throttling to prevent server overload
+  Future<void> syncSlotsSilently(String mallId, {bool force = false}) async {
     final cleanId = mallId.trim();
     if (cleanId.isEmpty || _isSyncing) return;
+
+    // Minimum 10-second cooldown between network syncs unless forced
+    final now = DateTime.now();
+    if (!force && _lastSyncTime != null && now.difference(_lastSyncTime!).inSeconds < 10) {
+      return;
+    }
+    _lastSyncTime = now;
     _isSyncing = true;
     final normId = normalizeMallId(cleanId);
 
@@ -861,8 +870,8 @@ class ParkingService extends ChangeNotifier {
     final normId = normalizeMallId(cleanId);
     _activeMallId = normId;
 
-    // Ensure live background sync is active whenever venue slots are loaded (1s polling)
-    startLiveSync(intervalSeconds: 1);
+    // Ensure live background sync is active whenever venue slots are loaded (25s polling to avoid server overload)
+    startLiveSync(intervalSeconds: 25);
 
     try {
       final prefs = await SharedPreferences.getInstance();

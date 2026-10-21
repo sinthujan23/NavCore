@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:geolocator/geolocator.dart';
 
 import 'engine/bearing_engine.dart';
 import 'engine/ecef_engine.dart';
@@ -25,6 +26,7 @@ import 'ui/welcome_screen.dart';
 import 'ui/login_screen.dart';
 import 'ui/admin_dashboard_screen.dart';
 import 'ui/location_lock_screen.dart';
+
 
 import 'ui/home_screen.dart';
 import 'ui/ar_viewport_screen.dart';
@@ -59,12 +61,16 @@ void main() {
   runApp(const NexNavApp());
 }
 
+final GlobalKey<ScaffoldMessengerState> rootScaffoldMessengerKey =
+    GlobalKey<ScaffoldMessengerState>();
+
 class NexNavApp extends StatelessWidget {
   const NexNavApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      scaffoldMessengerKey: rootScaffoldMessengerKey,
       title: 'NexNav',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
@@ -91,8 +97,11 @@ class NexNavMainNavigation extends StatefulWidget {
   State<NexNavMainNavigation> createState() => _NexNavMainNavigationState();
 }
 
-class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
+class _NexNavMainNavigationState extends State<NexNavMainNavigation>
+    with WidgetsBindingObserver {
   AuthScreenState _authScreenState = AuthScreenState.welcome;
+  bool _isHardwareInitialized = false;
+
   UserRole _currentRole = UserRole.guest;
   UserRole _requestedLoginRole = UserRole.user;
   String _userEmail = '';
@@ -126,17 +135,39 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
   late final KalmanPositionFilter _kalmanFilter;
   Timer? _imuTimer;
   Timer? _autoSyncTimer;
+  Timer? _locationGatePollTimer;
   StreamSubscription? _apiSyncSubscription;
+  StreamSubscription<ServiceStatus>? _gpsServiceSubscription;
   bool _isBackgroundSyncRunning = false;
+  bool _isLocationServiceEnabled = true;
+  bool _isLocationPermissionGranted = true;
   final GlobalKey<FloorPlanScreenState> _floorPlanKey =
       GlobalKey<FloorPlanScreenState>();
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _kalmanFilter = KalmanPositionFilter(_userCoords);
-    _initializeRealHardware();
-    _loadInitialBackendData();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkAccessAndStartFlow();
+      _checkLocationStatus();
+    });
+
+    // Listen to device GPS hardware toggle in real-time: auto-redirect to phone settings if turned off
+    _gpsServiceSubscription =
+        Geolocator.getServiceStatusStream().listen((status) async {
+      if (status == ServiceStatus.disabled) {
+        await _redirectToLocationSettingsIfNeeded();
+      }
+      _checkLocationStatus();
+    });
+
+    // Continuous poll for device notification shade toggles
+    _locationGatePollTimer = Timer.periodic(
+      const Duration(milliseconds: 1500),
+      (_) => _checkLocationStatus(triggerRebuild: false),
+    );
 
     // Multi-device real-time sync listeners
     _apiSyncSubscription = ApiService.instance.syncStream.listen((event) {
@@ -148,13 +179,113 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
     });
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkLocationStatus();
+      _recheckAccessOnResume();
+    }
+  }
+
+  DateTime? _lastSettingsRedirectTime;
+
+  /// Automatically redirects to phone location settings when location access is turned off
+  Future<void> _redirectToLocationSettingsIfNeeded() async {
+    final now = DateTime.now();
+    if (_lastSettingsRedirectTime != null &&
+        now.difference(_lastSettingsRedirectTime!).inSeconds < 4) {
+      return; // Cooldown to avoid repetitive intents
+    }
+    _lastSettingsRedirectTime = now;
+    try {
+      final isServiceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!isServiceEnabled) {
+        await Geolocator.openLocationSettings();
+      } else {
+        final perm = await Geolocator.checkPermission();
+        if (perm == LocationPermission.deniedForever) {
+          await Geolocator.openAppSettings();
+        } else if (perm == LocationPermission.denied) {
+          await Geolocator.requestPermission();
+        }
+      }
+    } catch (e) {
+      debugPrint('[Main] Could not open location settings: $e');
+    }
+  }
+
+  Future<void> _checkLocationStatus({bool triggerRebuild = true}) async {
+    try {
+      final isServiceEnabled = await Geolocator.isLocationServiceEnabled();
+      final perm = await Geolocator.checkPermission();
+      final isPermGranted = perm == LocationPermission.always ||
+          perm == LocationPermission.whileInUse;
+
+      if (!mounted) return;
+
+      // Automatically open phone settings when location access is turned off
+      if (_isLocationServiceEnabled && !isServiceEnabled) {
+        _redirectToLocationSettingsIfNeeded();
+      }
+
+      final bool changed = (_isLocationServiceEnabled != isServiceEnabled) ||
+          (_isLocationPermissionGranted != isPermGranted);
+
+      if (changed || triggerRebuild) {
+        setState(() {
+          _isLocationServiceEnabled = isServiceEnabled;
+          _isLocationPermissionGranted = isPermGranted;
+        });
+
+        if (isServiceEnabled && isPermGranted) {
+          _recheckAccessOnResume();
+        }
+      }
+    } catch (_) {}
+  }
+
+  /// Initial hardware and backend assessment on app boot
+  Future<void> _checkAccessAndStartFlow() async {
+    try {
+      await _initializeRealHardware();
+    } catch (e) {
+      debugPrint('[Main] Hardware init non-fatal error: $e');
+    }
+
+    try {
+      await _loadInitialBackendData();
+    } catch (e) {
+      debugPrint('[Main] Initial backend data error: $e');
+    }
+  }
+
+  /// Re-check access status when returning from device Settings or other apps
+  Future<void> _recheckAccessOnResume() async {
+    if (!_isHardwareInitialized) {
+      await _initializeRealHardware();
+    } else {
+      final realPos =
+          await _sensorService.getCurrentPosition(promptAccuracy: false);
+      if (realPos != null && realPos.latitude != 0.0 && mounted) {
+        setState(() {
+          _userCoords = realPos;
+          _kalmanFilter.setPosition(_userCoords);
+        });
+      }
+    }
+  }
+
   Future<void> _initializeRealHardware() async {
-    // 1. Request OS Permissions for Location & Camera
+    // 1. Request real-time OS Permissions for Location, native Google Location Accuracy dialog, and Camera
     final report = await _sensorService.requestAllPermissions();
+    if (report.hasLocationPermission) {
+      _isHardwareInitialized = true;
+    }
 
     // 2. Fetch current real GPS position (cached or live)
-    final realPos = await _sensorService.getLastKnownOrCurrentPosition();
-    if (realPos != null) {
+    final realPos =
+        await _sensorService.getLastKnownOrCurrentPosition(promptAccuracy: true);
+    if (realPos != null && mounted) {
       double resolvedInitialHeight = realPos.height;
       if (resolvedInitialHeight <= 0.0 || resolvedInitialHeight > 4000.0) {
         resolvedInitialHeight = _buildingProfile.entranceBaseAnchorHeight > 0
@@ -323,10 +454,6 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
 
     // 4. Auto-load nearest or global venue map package based on user's GPS position
     await _autoLoadNearestMallMap();
-
-    if (!report.hasLocationPermission && mounted) {
-      _showPermissionOnboardingDialog();
-    }
   }
 
   List<DestinationPOI> _deduplicateDestinations(List<DestinationPOI> list) {
@@ -534,6 +661,10 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
 
   Future<void> _syncLatestDataFromServer({bool force = false}) async {
     if (_isBackgroundSyncRunning || !mounted) return;
+    if (_authScreenState == AuthScreenState.welcome ||
+        _authScreenState == AuthScreenState.login) {
+      return;
+    }
     _isBackgroundSyncRunning = true;
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -824,52 +955,13 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
     }
   }
 
-  void _showPermissionOnboardingDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: const Row(
-          children: [
-            Icon(LucideIcons.shieldAlert, color: Color(0xFF2563EB)),
-            SizedBox(width: 8),
-            Text(
-              'Location & AR Access',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-          ],
-        ),
-        content: const Text(
-          'NexNav requires Location access to lock your real GPS position and Camera access for AR indoor navigation.',
-        ),
-        actions: [
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF2563EB),
-            ),
-            onPressed: () async {
-              Navigator.pop(context);
-              await _sensorService.requestAllPermissions();
-              final pos = await _sensorService.getCurrentPosition();
-              if (pos != null) {
-                _userCoords = pos;
-                await _autoLoadNearestMallMap();
-              }
-            },
-            child: const Text(
-              'Allow Real Location',
-              style: TextStyle(color: Colors.white),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _locationGatePollTimer?.cancel();
     _autoSyncTimer?.cancel();
     _apiSyncSubscription?.cancel();
+    _gpsServiceSubscription?.cancel();
     _sensorService.stopHardwareStreams();
     _imuTimer?.cancel();
     super.dispose();
@@ -1046,7 +1138,7 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
     final isAdmin = _currentRole == UserRole.admin;
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
         titlePadding: const EdgeInsets.fromLTRB(22, 22, 22, 10),
@@ -1104,7 +1196,7 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
                       borderRadius: BorderRadius.circular(12),
                     ),
                   ),
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: () => Navigator.pop(dialogCtx),
                   child: Text(
                     'Cancel',
                     style: GoogleFonts.plusJakartaSans(
@@ -1127,29 +1219,26 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
                     ),
                     elevation: 0,
                   ),
-                  onPressed: () async {
-                    Navigator.pop(context);
-                    final prefs = await SharedPreferences.getInstance();
-                    await prefs.setBool('NexNav_auto_login_enabled', false);
-                    await ApiService.instance.logout();
-                    final userMallId = prefs.getString(
-                      'NexNav_user_active_mall_id',
-                    );
-                    if (userMallId != null && userMallId.isNotEmpty) {
-                      await _loadActiveMallPackage(userMallId, isAdmin: false);
-                    }
+                  onPressed: () {
+                    // 1. Immediately dismiss dialog and pop any modal/sub-routes back to root
+                    Navigator.of(dialogCtx, rootNavigator: true)
+                        .popUntil((route) => route.isFirst);
+
+                    // 2. Instantly switch to the Login screen with 0ms delay
                     if (mounted) {
                       setState(() {
                         _currentRole = UserRole.guest;
                         _userEmail = '';
-                        _requestedLoginRole = isAdmin
-                            ? UserRole.admin
-                            : UserRole.user;
+                        _requestedLoginRole =
+                            isAdmin ? UserRole.admin : UserRole.user;
                         _authScreenState = AuthScreenState.login;
+                        _currentIndex = 0;
+                        _arTargetDestination = null;
                       });
                     }
-                    // ignore: use_build_context_synchronously
-                    ScaffoldMessenger.of(context).showSnackBar(
+
+                    // 3. Immediately display confirmation message
+                    rootScaffoldMessengerKey.currentState?.showSnackBar(
                       SnackBar(
                         content: Row(
                           children: [
@@ -1176,8 +1265,12 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(14),
                         ),
+                        duration: const Duration(seconds: 3),
                       ),
                     );
+
+                    // 4. Asynchronously clear tokens, saved session, and auto-login in background
+                    _performAsyncLogout();
                   },
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -1202,8 +1295,22 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
     );
   }
 
+  void _performAsyncLogout() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('NexNav_auto_login_enabled', false);
+      await ApiService.instance.logout();
+    } catch (e) {
+      debugPrint('[Logout] Error clearing session: $e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    return _buildActiveContent();
+  }
+
+  Widget _buildActiveContent() {
     // 1. Welcome Screen State
     if (_authScreenState == AuthScreenState.welcome) {
       return WelcomeScreen(
@@ -1238,6 +1345,40 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
                   : AuthScreenState.setup;
             }
           });
+
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Row(
+                    children: [
+                      const Icon(
+                        LucideIcons.checkCircle2,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Account authenticated successfully! Welcome to NexNav, $email.',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  backgroundColor: const Color(0xFF0F172A),
+                  behavior: SnackBarBehavior.floating,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  duration: const Duration(seconds: 4),
+                ),
+              );
+            }
+          });
+
           if (role == UserRole.admin) {
             final adminMallId = prefs.getString('NexNav_admin_active_mall_id');
             if (adminMallId != null && adminMallId.isNotEmpty) {
@@ -1256,7 +1397,7 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation> {
     // 3. Admin Dashboard Screen State
     if (_authScreenState == AuthScreenState.adminDashboard) {
       return AdminDashboardScreen(
-        adminEmail: _userEmail.isNotEmpty ? _userEmail : 'admin@nexnav.com',
+        adminEmail: _userEmail.isNotEmpty ? _userEmail : 'administrator@nexnav.io',
         userCoords: _userCoords,
         buildingProfile: _buildingProfile,
         destinations: _destinations,

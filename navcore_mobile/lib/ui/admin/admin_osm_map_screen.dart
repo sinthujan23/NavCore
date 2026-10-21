@@ -248,6 +248,29 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
   }
 
   List<DestinationPOI> get _effectiveDisplayPOIs {
+    // In 'All Malls' overview mode, indicate only all malls within 500m on the map.
+    // Shops are only displayed once a specific mall is chosen.
+    if (_selectedMallFilter == 'ALL') {
+      return const <DestinationPOI>[];
+    }
+
+    final selectedMall = _mallsWithin500m.where((m) {
+      final mId = m.id.trim().toLowerCase().replaceAll(RegExp(r'^0+'), '');
+      final sId = _selectedMallFilter.trim().toLowerCase().replaceAll(RegExp(r'^0+'), '');
+      return mId == sId || m.name.trim().toLowerCase() == _selectedMallFilter.trim().toLowerCase();
+    }).firstOrNull;
+
+    final selIds = <String>{
+      _selectedMallFilter.trim().toLowerCase(),
+      _selectedMallFilter.trim().toLowerCase().replaceAll(RegExp(r'^0+'), ''),
+      _selectedMallFilter.trim().toLowerCase().replaceFirst(RegExp(r'^mall-'), ''),
+      if (selectedMall != null) ...[
+        selectedMall.id.trim().toLowerCase(),
+        selectedMall.id.trim().toLowerCase().replaceAll(RegExp(r'^0+'), ''),
+        selectedMall.name.trim().toLowerCase(),
+      ],
+    };
+
     final combined = <DestinationPOI>[
       ...widget.destinations,
       ..._osmDiscoveredPOIs,
@@ -266,41 +289,29 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
           )
         : null;
 
-    final allowedMallIds = <String>{};
-    for (final m in _mallsWithin500m) {
-      final clean = m.id.trim().toLowerCase();
-      allowedMallIds.add(clean);
-      allowedMallIds.add(clean.replaceFirst(RegExp(r'^mall-'), ''));
-      allowedMallIds.add(clean.replaceAll(RegExp(r'^0+'), ''));
-      if (clean.length == 1) allowedMallIds.add('0$clean');
-    }
-
     return uniqueMap.values.where((poi) {
-      // 0. Filter by selected mall if a specific mall is chosen
-      if (_selectedMallFilter != 'ALL') {
-        if (poi.mallId == null || poi.mallId!.trim().isEmpty) return false;
-        final poiMall =
-            poi.mallId!.trim().toLowerCase().replaceAll(RegExp(r'^0+'), '');
-        final selMall = _selectedMallFilter
-            .trim()
-            .toLowerCase()
-            .replaceAll(RegExp(r'^0+'), '');
-        if (poiMall != selMall) {
-          return false;
+      // 0. Filter by selected mall: POI must belong to the chosen mall
+      final poiMall = poi.mallId?.trim().toLowerCase();
+      final poiMallClean = poiMall?.replaceAll(RegExp(r'^0+'), '');
+      bool matchesMall = poiMall != null &&
+          (selIds.contains(poiMall) || (poiMallClean != null && selIds.contains(poiMallClean)));
+
+      // If POI has no mallId, check if it is within 60 meters of the selected mall
+      if (!matchesMall && selectedMall != null && (poiMall == null || poiMall.isEmpty)) {
+        final mallGeo = GeodeticCoords(
+          latitude: selectedMall.latitude,
+          longitude: selectedMall.longitude,
+          height: selectedMall.entranceBaseAnchorHeight,
+        );
+        final dist = haversineDistance(mallGeo, poi.location);
+        if (dist <= 60.0) {
+          matchesMall = true;
         }
       }
 
-      // 1. If POI belongs to a mall, that mall MUST be within 500m!
-      // Any other mall's POIs are strictly NOT visible.
-      if (poi.mallId != null && poi.mallId!.trim().isNotEmpty) {
-        final poiMall =
-            poi.mallId!.trim().toLowerCase().replaceAll(RegExp(r'^0+'), '');
-        if (!allowedMallIds.contains(poiMall)) {
-          return false;
-        }
-      }
+      if (!matchesMall) return false;
 
-      // 2. Physical distance check to user location:
+      // 1. Physical distance check to user location (within 500m)
       if (userGeo != null) {
         final dist = haversineDistance(userGeo, poi.location);
         if (dist > 500.0) {
@@ -355,7 +366,11 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
             onTap: () {
               setState(() {
                 _selectedMallFilter = mall.id;
+                _selectedFloorFilter = 0;
               });
+              if (widget.onSelectActiveMall != null) {
+                widget.onSelectActiveMall!(mall.id);
+              }
               _mapController.move(mallLatLng, 17.5);
               _showMallDetailsBottomSheet(mall, distM);
             },
@@ -369,8 +384,8 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
                     gradient: LinearGradient(
                       colors: isActive
                           ? [
-                              const Color(0xFF059669),
-                              const Color(0xFF047857),
+                              const Color(0xFF2563EB),
+                              const Color(0xFF1D4ED8),
                             ]
                           : [
                               const Color(0xFF1E293B),
@@ -380,7 +395,7 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
                       color: isActive
-                          ? const Color(0xFF34D399)
+                          ? const Color(0xFF60A5FA)
                           : const Color(0xFF38BDF8),
                       width: 1.5,
                     ),
@@ -659,27 +674,33 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
         : null;
 
     final displayPOIs = _effectiveDisplayPOIs;
-    final combined = <DestinationPOI>[
-      ...widget.destinations,
-      ..._osmDiscoveredPOIs,
-    ];
-    final Set<int> allFloorNums = combined.map((p) => p.floorNumber).toSet();
-    for (final mall in _mallsWithin500m) {
-      if (_selectedMallFilter == 'ALL' || _selectedMallFilter == mall.id) {
-        final count = mall.floorCount > 0 ? mall.floorCount : 1;
+
+    // Available floors and categories are calculated for the currently selected mall
+    final Set<int> allFloorNums = {};
+    if (_selectedMallFilter != 'ALL') {
+      final selectedMall = _mallsWithin500m.where((m) {
+        final mId = m.id.trim().toLowerCase().replaceAll(RegExp(r'^0+'), '');
+        final sId = _selectedMallFilter.trim().toLowerCase().replaceAll(RegExp(r'^0+'), '');
+        return mId == sId || m.name.trim().toLowerCase() == _selectedMallFilter.trim().toLowerCase();
+      }).firstOrNull;
+
+      if (selectedMall != null) {
+        final count = selectedMall.floorCount > 0 ? selectedMall.floorCount : 1;
         for (int i = 1; i <= count; i++) {
           allFloorNums.add(i);
         }
       }
+      for (final p in displayPOIs) {
+        allFloorNums.add(p.floorNumber);
+      }
     }
     final availableFloors = allFloorNums.toList()..sort();
-    final availableCategories =
-        combined
-            .map((p) => p.category.toUpperCase().trim())
-            .where((c) => c.isNotEmpty)
-            .toSet()
-            .toList()
-          ..sort();
+    final availableCategories = displayPOIs
+        .map((p) => p.category.toUpperCase().trim())
+        .where((c) => c.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
 
     return Scaffold(
       backgroundColor: const Color(0xFF0F172A),
@@ -707,9 +728,9 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
               ),
             ),
             Text(
-              _mallsWithin500m.isNotEmpty
-                  ? '${_mallsWithin500m.map((m) => "${m.name} (${m.floorCount} Floors)").join(' • ')} (Within 500m)'
-                  : '0 Malls • ${displayPOIs.length} Active POIs within 500m',
+              _selectedMallFilter == 'ALL'
+                  ? '${_mallsWithin500m.length} Malls within 500m • Select a mall to view shops'
+                  : '${_mallsWithin500m.where((m) => m.id == _selectedMallFilter || m.name.toLowerCase() == _selectedMallFilter.toLowerCase()).firstOrNull?.name ?? "Selected Mall"} • ${displayPOIs.length} Shops (${_selectedFloorFilter == 0 ? "All Floors" : "Floor $_selectedFloorFilter"})',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: GoogleFonts.plusJakartaSans(
@@ -845,8 +866,8 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
 
           // Top Control Overlay Panel (Malls within 500m, Floor & Category Filters)
           if (_mallsWithin500m.isNotEmpty ||
-              availableFloors.length > 1 ||
-              availableCategories.length > 1)
+              (_selectedMallFilter != 'ALL' && availableFloors.length > 1) ||
+              (_selectedMallFilter != 'ALL' && availableCategories.length > 1))
             Positioned(
               top: 12,
               left: 12,
@@ -896,8 +917,8 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
                     const SizedBox(height: 8),
                   ],
 
-                  // 2. Floor Level Filter Chips
-                  if (availableFloors.length > 1) ...[
+                  // 2. Floor Level Filter Chips (Only shown when a specific mall is selected)
+                  if (_selectedMallFilter != 'ALL' && availableFloors.length > 1) ...[
                     SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
                       child: Row(
@@ -922,8 +943,8 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
                       const SizedBox(height: 8),
                   ],
 
-                  // 3. Category Filter Bar
-                  if (availableCategories.length > 1)
+                  // 3. Category Filter Bar (Only shown when a specific mall is selected)
+                  if (_selectedMallFilter != 'ALL' && availableCategories.length > 1)
                     SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
                       child: Row(
@@ -1013,6 +1034,9 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
           _selectedMallFilter = mallId;
           _selectedFloorFilter = 0; // Reset floor filter when changing mall
         });
+        if (mallId != 'ALL' && widget.onSelectActiveMall != null) {
+          widget.onSelectActiveMall!(mallId);
+        }
         if (targetLatLng != null) {
           _mapController.move(targetLatLng, 17.5);
         } else if (_currentCenter != null) {
@@ -1223,9 +1247,9 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  _mallsWithin500m.isNotEmpty
-                      ? '500m Radius • ${_mallsWithin500m.map((m) => "${m.name} (${m.floorCount}F)").join(', ')}'
-                      : 'Radius: ${_discoveryRadiusMeters.toInt()}m • 0 Malls Detected',
+                  _selectedMallFilter == 'ALL'
+                      ? '500m Radius • ${_mallsWithin500m.length} Malls Nearby (Select a mall to view shops)'
+                      : '${_mallsWithin500m.where((m) => m.id == _selectedMallFilter || m.name.toLowerCase() == _selectedMallFilter.toLowerCase()).firstOrNull?.name ?? "Selected Mall"} • $activePoiCount Shops Available',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: GoogleFonts.plusJakartaSans(

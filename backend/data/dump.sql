@@ -139,4 +139,3 @@ CREATE TABLE vehicle_locations (
 
 -- 1. Users
 INSERT INTO users (id, email, password, name, role, created_at) VALUES ('usr-admin-01', 'admin@nexnav.com', 'Admin@1234', 'System Administrator', 'admin', '2026-10-01T00:00:00.000Z');
-INSERT INTO users (id, email, password, name, role, created_at) VALUES ('usr-regular-01', 'user@nexnav.com', 'User@1234', 'NexNav Shopper', 'user', '2026-10-01T00:00:00.000Z');

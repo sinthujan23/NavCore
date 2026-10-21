@@ -37,3 +37,10 @@ scratch_*.*
 **/scratch_*.*
 scratch/
 **/scratch/
+test_inbox_email.js
+**/test_inbox_email.js
+
+# Environment variables
+.env
+*.env
+**/.env

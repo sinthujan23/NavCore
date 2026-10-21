@@ -364,12 +364,13 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
       }
     });
 
-    _parkingAutoRefreshTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+    // Check server health once on screen entry
+    _checkServerHealth();
+
+    // Auto-refresh parking slots every 25s instead of 1s to prevent server overload
+    _parkingAutoRefreshTimer = Timer.periodic(const Duration(seconds: 25), (_) {
       if (mounted) {
         _loadParkingSlots();
-        if ((_parkingAutoRefreshTimer?.tick ?? 0) % 3 == 0) {
-          _checkServerHealth();
-        }
       }
     });
 
@@ -575,44 +576,6 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                             testResultColor = const Color(0xFFEF4444);
                           }
                         });
-                      },
-                    ),
-                    ActionChip(
-                      avatar: const Icon(
-                        LucideIcons.wifi,
-                        size: 12,
-                        color: Color(0xFF475569),
-                      ),
-                      label: const Text('Local LAN (192.168.1.14:5000)'),
-                      labelStyle: GoogleFonts.plusJakartaSans(
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w600,
-                        color: const Color(0xFF334155),
-                      ),
-                      backgroundColor: const Color(0xFFF8FAFC),
-                      side: const BorderSide(color: Color(0xFFCBD5E1)),
-                      onPressed: () {
-                        controller.text = 'http://192.168.1.14:5000/api';
-                        setDialogState(() => testResult = null);
-                      },
-                    ),
-                    ActionChip(
-                      avatar: const Icon(
-                        LucideIcons.smartphone,
-                        size: 12,
-                        color: Color(0xFF475569),
-                      ),
-                      label: const Text('Emulator (10.0.2.2)'),
-                      labelStyle: GoogleFonts.plusJakartaSans(
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w600,
-                        color: const Color(0xFF334155),
-                      ),
-                      backgroundColor: const Color(0xFFF8FAFC),
-                      side: const BorderSide(color: Color(0xFFCBD5E1)),
-                      onPressed: () {
-                        controller.text = 'http://10.0.2.2:5000/api';
-                        setDialogState(() => testResult = null);
                       },
                     ),
                   ],
@@ -1787,128 +1750,6 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                             floorSlots,
                             myVehicle,
                           ),
-
-                        // User Location Position Pin with Motion Pulsing Radar & Badge
-                        () {
-                          final activeMallAnchor =
-                              widget.destinations.isNotEmpty
-                              ? widget.destinations.first.location
-                              : widget.userCoords;
-                          final effectiveUser = getEffectiveUserCoords(
-                            widget.userCoords,
-                            activeMallAnchor,
-                          );
-
-                          final double centerLat = activeMallAnchor.latitude;
-                          final double centerLon = activeMallAnchor.longitude;
-                          const double pixelsPerDegLat = 800000.0;
-                          const double pixelsPerDegLon = 800000.0;
-
-                          final double deltaLat =
-                              effectiveUser.latitude - centerLat;
-                          final double deltaLon =
-                              effectiveUser.longitude - centerLon;
-
-                          final double rawUserX =
-                              (width / 2) + (deltaLon * pixelsPerDegLon);
-                          final double rawUserY =
-                              (height / 2) - (deltaLat * pixelsPerDegLat);
-
-                          final double userX = rawUserX.clamp(
-                            20.0,
-                            width - 20.0,
-                          );
-                          final double userY = rawUserY.clamp(
-                            20.0,
-                            height - 20.0,
-                          );
-
-                          return Positioned(
-                            left: userX - 18,
-                            top: userY - 18,
-                            child: AnimatedBuilder(
-                              animation: _pulseController,
-                              builder: (context, child) {
-                                final pulse = _pulseController.value;
-                                return SizedBox(
-                                  width: 36,
-                                  height: 36,
-                                  child: Stack(
-                                    alignment: Alignment.center,
-                                    children: [
-                                      // Motion Radar Wave Ring 1
-                                      Transform.scale(
-                                        scale: 1.0 + (pulse * 0.8),
-                                        child: Container(
-                                          width: 32,
-                                          height: 32,
-                                          decoration: BoxDecoration(
-                                            color: const Color(0xFF2563EB)
-                                                .withValues(
-                                                  alpha: 0.3 * (1.0 - pulse),
-                                                ),
-                                            shape: BoxShape.circle,
-                                            border: Border.all(
-                                              color: const Color(0xFF3B82F6)
-                                                  .withValues(
-                                                    alpha: 0.6 * (1.0 - pulse),
-                                                  ),
-                                              width: 1.5,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                      // Motion Pulse Glow
-                                      Transform.scale(
-                                        scale: 1.0 + (pulse * 0.3),
-                                        child: Container(
-                                          width: 22,
-                                          height: 22,
-                                          decoration: BoxDecoration(
-                                            color: const Color(
-                                              0xFF2563EB,
-                                            ).withValues(alpha: 0.35),
-                                            shape: BoxShape.circle,
-                                          ),
-                                        ),
-                                      ),
-                                      // Core Location Pin Dot
-                                      Container(
-                                        width: 14,
-                                        height: 14,
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFF2563EB),
-                                          shape: BoxShape.circle,
-                                          border: Border.all(
-                                            color: Colors.white,
-                                            width: 2.5,
-                                          ),
-                                          boxShadow: const [
-                                            BoxShadow(
-                                              color: Colors.black38,
-                                              blurRadius: 6,
-                                              offset: Offset(0, 2),
-                                            ),
-                                          ],
-                                        ),
-                                        child: Center(
-                                          child: Container(
-                                            width: 4,
-                                            height: 4,
-                                            decoration: const BoxDecoration(
-                                              color: Colors.white,
-                                              shape: BoxShape.circle,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              },
-                            ),
-                          );
-                        }(),
 
                         // Dynamic Floating D-Pad Move Controls (Bottom Right - Shown in Dev Mode)
                         ValueListenableBuilder<bool>(

@@ -63,12 +63,11 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
         _parkingService.syncSlotsSilently(_activeMall!.id);
       }
     });
-    _adminRefreshTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+    _checkServerHealth();
+    // Optimized: Refresh every 20s instead of every 1s to prevent server overload
+    _adminRefreshTimer = Timer.periodic(const Duration(seconds: 20), (_) {
       if (mounted && _activeMall != null && !_isLoading) {
         _parkingService.syncSlotsSilently(_activeMall!.id);
-      }
-      if (mounted && (_adminRefreshTimer?.tick ?? 0) % 3 == 0) {
-        _checkServerHealth();
       }
     });
   }

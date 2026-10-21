@@ -18,14 +18,7 @@ const seedData = {
       password: 'Admin@1234',
       name: 'System Administrator',
       role: 'admin',
-      createdAt: '2026-10-01T00:00:00.000Z',
-    },
-    {
-      id: 'usr-regular-01',
-      email: 'user@nexnav.com',
-      password: 'User@1234',
-      name: 'NexNav Shopper',
-      role: 'user',
+      isVerified: true,
       createdAt: '2026-10-01T00:00:00.000Z',
     },
   ],
@@ -51,6 +44,7 @@ class DataStore {
     if (!Array.isArray(this.data.floorHeights)) this.data.floorHeights = [];
     if (!Array.isArray(this.data.destinations)) this.data.destinations = [];
     if (!Array.isArray(this.data.parkingSlots)) this.data.parkingSlots = [];
+    if (!Array.isArray(this.data.verificationCodes)) this.data.verificationCodes = [];
     if (!this.data.vehicleLocations || typeof this.data.vehicleLocations !== 'object') {
       this.data.vehicleLocations = {};
     }

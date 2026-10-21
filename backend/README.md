@@ -32,7 +32,7 @@ The server binds to `0.0.0.0:5000` (accessible from both localhost and mobile de
 
 **Default Pre-Seeded Accounts (Strong Passwords Enforced):**
 - **Admin**: `admin@nexnav.com` / `Admin@1234` (Admin Portal access)
-- **User**: `user@nexnav.com` / `User@1234` (Shopper AR Navigation access)
+- **Users**: Register and verify dynamically via OTP email verification.
 
 ### 🏬 Malls & Venues (`/api/malls`)
 - `GET /api/malls` — List all venues/malls

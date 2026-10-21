@@ -16,9 +16,64 @@ app.use(cors());
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ limit: '20mb', extended: true }));
 
-// Request logging in development
+// Micro-cache for idempotent GET endpoints to protect server from rapid repeat queries
+const microCache = new Map();
+const CACHE_TTL_MS = 6000; // 6 seconds
+
+// Invalidate cache immediately whenever any data modification occurs
 app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {
+    microCache.clear();
+  }
+  next();
+});
+
+// Request logging with health-check noise suppression
+app.use((req, res, next) => {
+  // Avoid flooding console on rapid health pings
+  if (req.url !== '/api/health' && req.url !== '/favicon.ico') {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  }
+  next();
+});
+
+// Server-side response micro-cache for high-frequency GET queries
+app.use((req, res, next) => {
+  if (req.method !== 'GET') return next();
+
+  const isCacheable =
+    req.path.startsWith('/api/parking/') ||
+    req.path.startsWith('/api/malls') ||
+    req.path.startsWith('/api/destinations') ||
+    req.path.startsWith('/api/floors');
+
+  if (!isCacheable) return next();
+
+  const cacheKey = req.originalUrl || req.url;
+  const cached = microCache.get(cacheKey);
+  const now = Date.now();
+
+  if (cached && now - cached.timestamp < CACHE_TTL_MS) {
+    res.setHeader('X-Cache', 'HIT');
+    res.setHeader('Cache-Control', 'public, max-age=5, stale-while-revalidate=5');
+    res.type(cached.contentType || 'application/json');
+    return res.send(cached.body);
+  }
+
+  const originalSend = res.send.bind(res);
+  res.send = (body) => {
+    if (res.statusCode === 200 && body) {
+      microCache.set(cacheKey, {
+        timestamp: Date.now(),
+        body,
+        contentType: res.getHeader('content-type'),
+      });
+      res.setHeader('X-Cache', 'MISS');
+      res.setHeader('Cache-Control', 'public, max-age=5, stale-while-revalidate=5');
+    }
+    return originalSend(body);
+  };
+
   next();
 });
 

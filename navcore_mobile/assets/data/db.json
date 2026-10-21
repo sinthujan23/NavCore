@@ -7,14 +7,6 @@
       "name": "System Administrator",
       "role": "admin",
       "createdAt": "2026-10-01T00:00:00.000Z"
-    },
-    {
-      "id": "usr-regular-01",
-      "email": "user@nexnav.com",
-      "password": "User@1234",
-      "name": "NexNav Shopper",
-      "role": "user",
-      "createdAt": "2026-10-01T00:00:00.000Z"
     }
   ],
   "malls": [

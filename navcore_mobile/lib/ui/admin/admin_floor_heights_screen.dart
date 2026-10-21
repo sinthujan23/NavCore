@@ -777,9 +777,9 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                           vertical: 6,
                         ),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFF0FDF4),
+                          color: const Color(0xFFEFF6FF),
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: const Color(0xFF86EFAC)),
+                          border: Border.all(color: const Color(0xFFBFDBFE)),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
@@ -787,7 +787,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                             const Icon(
                               LucideIcons.gauge,
                               size: 13,
-                              color: Color(0xFF15803D),
+                              color: Color(0xFF2563EB),
                             ),
                             const SizedBox(width: 5),
                             Text(
@@ -795,7 +795,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                               style: GoogleFonts.inter(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w600,
-                                color: const Color(0xFF15803D),
+                                color: const Color(0xFF2563EB),
                               ),
                             ),
                           ],
@@ -845,7 +845,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                 style: GoogleFonts.inter(color: const Color(0xFF0F172A)),
                 decoration: InputDecoration(
                   labelText: 'Height to Next Floor (m)',
-                  labelStyle: const TextStyle(color: Color(0xFF0D9488)),
+                  labelStyle: const TextStyle(color: Color(0xFF2563EB)),
                   suffixText: 'meters',
                   suffixStyle: const TextStyle(color: Color(0xFF64748B)),
                   enabledBorder: OutlineInputBorder(
@@ -854,7 +854,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderSide: const BorderSide(
-                      color: Color(0xFF0D9488),
+                      color: Color(0xFF2563EB),
                       width: 2,
                     ),
                     borderRadius: BorderRadius.circular(8),
@@ -941,9 +941,9 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                         vertical: 6,
                       ),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFF0FDF4),
+                        color: const Color(0xFFEFF6FF),
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: const Color(0xFF86EFAC)),
+                        border: Border.all(color: const Color(0xFFBFDBFE)),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
@@ -951,7 +951,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                           const Icon(
                             LucideIcons.gauge,
                             size: 13,
-                            color: Color(0xFF15803D),
+                            color: Color(0xFF2563EB),
                           ),
                           const SizedBox(width: 5),
                           Text(
@@ -959,7 +959,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                             style: GoogleFonts.inter(
                               fontSize: 11,
                               fontWeight: FontWeight.w600,
-                              color: const Color(0xFF15803D),
+                              color: const Color(0xFF2563EB),
                             ),
                           ),
                         ],
@@ -981,7 +981,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF0D9488),
+              backgroundColor: const Color(0xFF0F172A),
               foregroundColor: Colors.white,
               elevation: 0,
               shape: RoundedRectangleBorder(
@@ -1173,7 +1173,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
           children: [
             const Icon(
               LucideIcons.plusCircle,
-              color: Color(0xFF0D9488),
+              color: Color(0xFF2563EB),
               size: 20,
             ),
             const SizedBox(width: 8),
@@ -1208,7 +1208,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
               style: GoogleFonts.inter(color: const Color(0xFF0F172A)),
               decoration: InputDecoration(
                 labelText: 'Floor Number (e.g. 1, 2, 7)',
-                labelStyle: const TextStyle(color: Color(0xFF0D9488)),
+                labelStyle: const TextStyle(color: Color(0xFF2563EB)),
                 contentPadding: const EdgeInsets.symmetric(
                   horizontal: 12,
                   vertical: 10,
@@ -1227,7 +1227,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
               style: GoogleFonts.inter(color: const Color(0xFF0F172A)),
               decoration: InputDecoration(
                 labelText: 'Height to Next Floor (m)',
-                labelStyle: const TextStyle(color: Color(0xFF0D9488)),
+                labelStyle: const TextStyle(color: Color(0xFF2563EB)),
                 suffixText: 'meters',
                 contentPadding: const EdgeInsets.symmetric(
                   horizontal: 12,
@@ -1250,7 +1250,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF0D9488),
+              backgroundColor: const Color(0xFF0F172A),
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(8),
@@ -1322,7 +1322,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
       case 'barometer_gps':
       case 'gps_baro_fusion':
       case 'auto_calc':
-        return const Color(0xFF15803D);
+        return const Color(0xFF2563EB);
       case 'osm':
         return const Color(0xFF0284C7);
       case 'default':
@@ -1339,7 +1339,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
       case 'barometer_gps':
       case 'gps_baro_fusion':
       case 'auto_calc':
-        return const Color(0xFFDCFCE7);
+        return const Color(0xFFEFF6FF);
       case 'osm':
         return const Color(0xFFE0F2FE);
       case 'default':
@@ -1387,7 +1387,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
         iconTheme: const IconThemeData(color: Color(0xFF0F172A)),
         actions: [
           IconButton(
-            icon: const Icon(LucideIcons.refreshCw, color: Color(0xFF0D9488)),
+            icon: const Icon(LucideIcons.refreshCw, color: Color(0xFF2563EB)),
             tooltip: 'Refresh Table',
             onPressed: _loadFloorHeights,
           ),
@@ -1395,7 +1395,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
       ),
       body: _isLoading
           ? const Center(
-              child: CircularProgressIndicator(color: Color(0xFF0D9488)),
+              child: CircularProgressIndicator(color: Color(0xFF2563EB)),
             )
           : Padding(
               padding: const EdgeInsets.all(16.0),
@@ -1467,7 +1467,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                                           icon: const Icon(
                                             LucideIcons.chevronDown,
                                             size: 18,
-                                            color: Color(0xFF0D9488),
+                                            color: Color(0xFF64748B),
                                           ),
                                           style: GoogleFonts.outfit(
                                             fontSize: 14,
@@ -1506,7 +1506,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                         const SizedBox(width: 12),
                         ElevatedButton.icon(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF0D9488),
+                            backgroundColor: const Color(0xFF0F172A),
                             foregroundColor: Colors.white,
                             elevation: 0,
                             padding: const EdgeInsets.symmetric(
@@ -1544,85 +1544,28 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                     ),
                   ),
 
-                  // Live Barometer & Location Elevation Status Pill
-                  Container(
-                    margin: const EdgeInsets.only(top: 10),
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF0FDF4),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: const Color(0xFFBBF7D0)),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(LucideIcons.activity, size: 16, color: Color(0xFF16A34A)),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: RichText(
-                            text: TextSpan(
-                              style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF166534)),
-                              children: [
-                                const TextSpan(text: 'Ground Alt: '),
-                                TextSpan(
-                                  text: '${_computedRealWorldElevation.toStringAsFixed(2)} m',
-                                  style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF15803D)),
-                                ),
-                                const TextSpan(text: '  •  Gap: '),
-                                TextSpan(
-                                  text: '${_computedDynamicFloorGap.toStringAsFixed(2)} m',
-                                  style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF0D9488)),
-                                ),
-                                const TextSpan(text: '  •  Baro: '),
-                                TextSpan(
-                                  text: '${_currentPressureHpa.toStringAsFixed(1)} hPa',
-                                  style: const TextStyle(fontWeight: FontWeight.w600),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFDCFCE7),
-                            borderRadius: BorderRadius.circular(6),
-                            border: Border.all(color: const Color(0xFF86EFAC)),
-                          ),
-                          child: Text(
-                            _hasLocationFix ? 'GPS ACTIVE' : 'TERRAIN DATUM',
-                            style: GoogleFonts.inter(
-                              fontSize: 9.5,
-                              fontWeight: FontWeight.w700,
-                              color: const Color(0xFF15803D),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
                   if (_statusMessage != null) ...[
                     const SizedBox(height: 12),
                     Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFECFDF5),
+                        color: const Color(0xFFEFF6FF),
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: const Color(0xFFA7F3D0)),
+                        border: Border.all(color: const Color(0xFFBFDBFE)),
                       ),
                       child: Row(
                         children: [
                           const Icon(
                             LucideIcons.checkCircle,
                             size: 16,
-                            color: Color(0xFF047857),
+                            color: Color(0xFF2563EB),
                           ),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
                               _statusMessage!,
                               style: GoogleFonts.inter(
-                                color: const Color(0xFF047857),
+                                color: const Color(0xFF1E40AF),
                                 fontSize: 13,
                                 fontWeight: FontWeight.w500,
                               ),
@@ -1693,10 +1636,10 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                                           OutlinedButton.icon(
                                             style: OutlinedButton.styleFrom(
                                               foregroundColor: const Color(
-                                                0xFF0D9488,
+                                                0xFF2563EB,
                                               ),
                                               side: const BorderSide(
-                                                color: Color(0xFF0D9488),
+                                                color: Color(0xFF2563EB),
                                               ),
                                               padding:
                                                   const EdgeInsets.symmetric(
@@ -1718,7 +1661,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                                           ElevatedButton.icon(
                                             style: ElevatedButton.styleFrom(
                                               backgroundColor: const Color(
-                                                0xFF0D9488,
+                                                0xFF0F172A,
                                               ),
                                               foregroundColor: Colors.white,
                                               padding:
@@ -1851,7 +1794,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                                                   ? 'N/A (Top)'
                                                   : '${floor.heightToNextM.toStringAsFixed(2)} m',
                                               style: GoogleFonts.inter(
-                                                color: const Color(0xFF0D9488),
+                                                color: const Color(0xFF0F172A),
                                                 fontWeight: FontWeight.bold,
                                                 fontSize: 13,
                                               ),
@@ -1903,7 +1846,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                                                   icon: const Icon(
                                                     LucideIcons.edit3,
                                                     size: 18,
-                                                    color: Color(0xFF0D9488),
+                                                    color: Color(0xFF2563EB),
                                                   ),
                                                   tooltip:
                                                       'Edit / Override Height',
