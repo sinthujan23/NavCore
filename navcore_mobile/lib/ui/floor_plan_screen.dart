@@ -1239,14 +1239,21 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                           ),
                         ),
                         const SizedBox(width: 7),
-                        Text(
-                          widget.userEmail.isNotEmpty
-                              ? '${widget.userEmail.split('@').first[0].toUpperCase()}${widget.userEmail.split('@').first.substring(1)}'
-                              : 'User',
-                          style: GoogleFonts.plusJakartaSans(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: const Color(0xFF0F172A),
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: widget.isAdmin ? 65 : 85,
+                          ),
+                          child: Text(
+                            widget.userEmail.isNotEmpty
+                                ? '${widget.userEmail.split('@').first[0].toUpperCase()}${widget.userEmail.split('@').first.substring(1)}'
+                                : 'User',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: const Color(0xFF0F172A),
+                            ),
                           ),
                         ),
                         const SizedBox(width: 8),
