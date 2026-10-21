@@ -13,11 +13,11 @@ class MobileEmailService {
 
   MobileEmailService._internal();
 
-  static const String smtpHost = String.fromEnvironment('SMTP_HOST', defaultValue: 'smtp.gmail.com');
-  static const int smtpPort = int.fromEnvironment('SMTP_PORT', defaultValue: 465);
-  static const String smtpUser = String.fromEnvironment('SMTP_USER', defaultValue: '');
-  static const String smtpPass = String.fromEnvironment('SMTP_PASS', defaultValue: '');
-  static const String smtpFrom = String.fromEnvironment('SMTP_FROM', defaultValue: '');
+  static String get smtpHost => const String.fromEnvironment('SMTP_HOST', defaultValue: 'smtp.gmail.com');
+  static int get smtpPort => const int.fromEnvironment('SMTP_PORT', defaultValue: 465);
+  static String get smtpUser => const String.fromEnvironment('SMTP_USER', defaultValue: 'afhamsathath6@gmail.com');
+  static String get smtpPass => const String.fromEnvironment('SMTP_PASS', defaultValue: 'jcaarklhfmifzoke');
+  static String get smtpFrom => const String.fromEnvironment('SMTP_FROM', defaultValue: '"NexNav" <afhamsathath6@gmail.com>');
 
   static String _formatRfc2822Date(DateTime dt) {
     const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -44,7 +44,12 @@ class MobileEmailService {
     String? name,
     String purpose = 'New Account Registration',
   }) async {
-    final cleanTo = to.trim().toLowerCase();
+    var cleanTo = to.trim().toLowerCase();
+    final angleMatch = RegExp(r'<([^>]+)>').firstMatch(cleanTo);
+    if (angleMatch != null) {
+      cleanTo = angleMatch.group(1)!.trim().toLowerCase();
+    }
+
     final cleanName = (name != null && name.trim().isNotEmpty)
         ? name.trim()
         : cleanTo.split('@')[0];
@@ -93,13 +98,13 @@ https://nexnav.hashnate.com''';
       '',
       '--$boundary',
       'Content-Type: text/plain; charset=UTF-8',
-      'Content-Transfer-Encoding: 7bit',
+      'Content-Transfer-Encoding: 8bit',
       '',
       plainText,
       '',
       '--$boundary',
       'Content-Type: text/html; charset=UTF-8',
-      'Content-Transfer-Encoding: 7bit',
+      'Content-Transfer-Encoding: 8bit',
       '',
       html,
       '',
@@ -194,7 +199,10 @@ https://nexnav.hashnate.com''';
 
       final result = await completer.future.timeout(
         const Duration(seconds: 15),
-        onTimeout: () => false,
+        onTimeout: () {
+          debugPrint('[MobileEmailService] SMTP transaction timed out for $cleanTo');
+          return false;
+        },
       );
 
       await sub.cancel();

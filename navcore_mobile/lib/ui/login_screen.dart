@@ -1002,7 +1002,7 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     // Send the fresh OTP code directly to the recipient's real email address
-    await MobileEmailService.instance.sendOtpEmail(
+    final sent = await MobileEmailService.instance.sendOtpEmail(
       to: _verifyingEmail,
       code: freshCode,
       name: _pendingSignUpName,
@@ -1013,9 +1013,15 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _isResending = false);
 
     _startResendTimer();
-    _showSuccessSnackBar(
-      'A fresh verification code has been sent to $_verifyingEmail. Please check your inbox.',
-    );
+    if (sent) {
+      _showSuccessSnackBar(
+        'A fresh verification code has been sent to $_verifyingEmail. Please check your inbox.',
+      );
+    } else {
+      _showErrorSnackBar(
+        'Could not deliver code to $_verifyingEmail. Please check your internet connection.',
+      );
+    }
   }
 
   void _startForgotResendTimer() {
@@ -2043,7 +2049,7 @@ class _LoginScreenState extends State<LoginScreen> {
       final generatedCode = (100000 + math.Random().nextInt(900000)).toString();
 
       // Dispatch the real 6-digit OTP code directly to user's real email address via Google SMTP
-      await MobileEmailService.instance.sendOtpEmail(
+      final emailSent = await MobileEmailService.instance.sendOtpEmail(
         to: emailInput,
         code: generatedCode,
         name: nameInput.isNotEmpty ? nameInput : null,
@@ -2052,6 +2058,13 @@ class _LoginScreenState extends State<LoginScreen> {
 
       if (!mounted) return;
       setState(() => _isLoading = false);
+
+      if (!emailSent) {
+        _showErrorSnackBar(
+          'Could not deliver verification code to $emailInput. Please check your internet connection and try again.',
+        );
+        return;
+      }
 
       _enterVerificationMode(
         emailInput,
