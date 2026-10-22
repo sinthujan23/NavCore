@@ -90,13 +90,13 @@
 			<string>Editor</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>com.googleusercontent.apps.120287082166-5io846ej4iho3aho5o2pe25fnjtphrod</string>
+				<string>com.googleusercontent.apps.120287082166-ldseadfp9pf07t0lahjkpa0rhjkusg2h</string>
 				<string>com.navcore.app.navcoreMobile</string>
 			</array>
 		</dict>
 	</array>
 	<key>GIDClientID</key>
-	<string>120287082166-5io846ej4iho3aho5o2pe25fnjtphrod.apps.googleusercontent.com</string>
+	<string>120287082166-ldseadfp9pf07t0lahjkpa0rhjkusg2h.apps.googleusercontent.com</string>
 	<key>GIDServerClientID</key>
 	<string>120287082166-5io846ej4iho3aho5o2pe25fnjtphrod.apps.googleusercontent.com</string>
 </dict>

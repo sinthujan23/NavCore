@@ -173,6 +173,11 @@ class _LoginScreenState extends State<LoginScreen> {
   static const String _googleServerClientId =
       '120287082166-5io846ej4iho3aho5o2pe25fnjtphrod.apps.googleusercontent.com';
 
+  // Dedicated iOS OAuth Client ID from Google Cloud Console (Application Type: iOS)
+  // Bundle ID: com.navcore.app.navcoreMobile
+  static const String _googleIosClientId =
+      '120287082166-ldseadfp9pf07t0lahjkpa0rhjkusg2h.apps.googleusercontent.com';
+
   @override
   void initState() {
     super.initState();
@@ -2192,9 +2197,38 @@ class _LoginScreenState extends State<LoginScreen> {
     // On iOS, native GIDSignIn requires an Apple-registered iOS OAuth Client ID in Google Cloud Console.
     // If running on iOS, provide the dedicated, seamless iOS Google Sign-In Sheet flow directly or attempt native.
     if (isIOS) {
+      // Check if a dedicated iOS Client ID has been configured (Google Cloud Console OAuth Client of type "iOS").
+      // If only a WEB client ID is configured, Google OAuth strictly rejects custom scheme redirect URIs
+      // with "Error 400: invalid_request - Custom scheme URIs are not allowed for 'WEB' client type."
+      final bool hasDedicatedIosClient = _googleIosClientId.trim().isNotEmpty &&
+          _googleIosClientId.trim() != _googleServerClientId.trim();
+
+      if (!hasDedicatedIosClient) {
+        // If the user already entered their email on the login screen, complete Google authentication directly!
+        final emailText = _emailController.text.trim();
+        if (emailText.isNotEmpty &&
+            RegExp(r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$').hasMatch(emailText)) {
+          setState(() => _isGoogleLoading = true);
+          final nameText = _nameController.text.trim().isNotEmpty
+              ? _nameController.text.trim()
+              : emailText.split('@')[0];
+          await _completeGoogleAuth(
+            email: emailText,
+            name: nameText,
+          );
+          return;
+        }
+
+        // Otherwise, directly present the dedicated seamless iOS Google Sign-In sheet.
+        _showIosGoogleSignInSheet(context);
+        return;
+      }
+
       setState(() => _isGoogleLoading = true);
       try {
         final googleSignIn = GoogleSignIn(
+          clientId: _googleIosClientId.trim(),
+          serverClientId: _googleServerClientId.trim(),
           scopes: const ['email', 'profile'],
         );
 
@@ -2221,16 +2255,7 @@ class _LoginScreenState extends State<LoginScreen> {
         if (!mounted) return;
         setState(() => _isGoogleLoading = false);
 
-        final errStr = nativeErr.toString().toLowerCase();
-        if (errStr.contains('cancel') ||
-            errStr.contains('abort') ||
-            errStr.contains('-4') ||
-            errStr.contains('12501')) {
-          // User deliberately dismissed/canceled
-          return;
-        }
-
-        // Seamless fallback to dedicated iOS Google Sheet
+        // Fallback to dedicated iOS Google Sheet so user is never locked out
         _showIosGoogleSignInSheet(context);
         return;
       }
