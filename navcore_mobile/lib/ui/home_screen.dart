@@ -1207,10 +1207,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                             const SizedBox(width: 4),
                                             Text(
                                               isInside
-                                                  ? 'Inside Venue • Floor ${currentFloor.name}'
+                                                  ? 'Inside Venue'
                                                   : (isWithin500m
-                                                        ? 'Within 500m (${distM.toInt()}m) • Floor ${currentFloor.name}'
-                                                        : '${(distM / 1000).toStringAsFixed(1)}km away • Floor ${currentFloor.name}'),
+                                                        ? 'Within 500m (${distM.toInt()}m)'
+                                                        : '${(distM / 1000).toStringAsFixed(1)}km away'),
                                               style:
                                                   GoogleFonts.plusJakartaSans(
                                                     fontSize: 10.5,
