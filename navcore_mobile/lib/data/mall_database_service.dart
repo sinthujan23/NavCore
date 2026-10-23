@@ -128,7 +128,7 @@ class MallDatabaseService {
 
   String? get activeMallId {
     final active = _catalog
-        .where((m) => m.isActive || m.isSelected)
+        .where((m) => m.isSelected)
         .firstOrNull;
     return active?.id;
   }
@@ -160,8 +160,8 @@ class MallDatabaseService {
           (aStripped.isNotEmpty && mStripped == aStripped);
     });
     if (!catalogHasActiveId && _catalog.isNotEmpty) {
-      final serverActive = _catalog.where((m) => m.isActive).firstOrNull;
-      activeId = (serverActive ?? _catalog.first).id.trim().toLowerCase();
+      final selectedActive = _catalog.where((m) => m.isSelected).firstOrNull;
+      activeId = (selectedActive ?? _catalog.first).id.trim().toLowerCase();
       if (activeId.isNotEmpty) {
         await prefs.setString(roleKey, activeId);
         await prefs.setString(_activeMallKey, activeId);
@@ -181,7 +181,7 @@ class MallDatabaseService {
               (aStripped.isNotEmpty && mStripped == aStripped));
       return m.copyWith(
         isDownloaded: isDown,
-        isActive: isSel,
+        isActive: m.isActive,
         isSelected: isSel,
       );
     }).toList();
@@ -253,7 +253,7 @@ class MallDatabaseService {
           cleanLower.isNotEmpty &&
           (mLower == cleanLower ||
               (strippedClean.isNotEmpty && mStripped == strippedClean));
-      _catalog[i] = m.copyWith(isSelected: isTarget, isActive: isTarget);
+      _catalog[i] = m.copyWith(isSelected: isTarget);
     }
   }
 
@@ -571,8 +571,12 @@ class MallDatabaseService {
 
     MallMetadata? targetMetadata;
     final searchId = mallId.trim().toLowerCase();
+    final strippedSearch = searchId.replaceAll(RegExp(r'^0+'), '');
     for (final m in _catalog) {
-      if (m.id.trim().toLowerCase() == searchId ||
+      final mId = m.id.trim().toLowerCase();
+      final mStripped = mId.replaceAll(RegExp(r'^0+'), '');
+      if (mId == searchId ||
+          (strippedSearch.isNotEmpty && mStripped == strippedSearch) ||
           m.name.trim().toLowerCase() == searchId) {
         targetMetadata = m;
         break;
@@ -582,11 +586,22 @@ class MallDatabaseService {
     if (targetMetadata == null) {
       final fresh = await getMallsList(isAdmin: isAdmin);
       for (final m in fresh) {
-        if (m.id.trim().toLowerCase() == searchId ||
+        final mId = m.id.trim().toLowerCase();
+        final mStripped = mId.replaceAll(RegExp(r'^0+'), '');
+        if (mId == searchId ||
+            (strippedSearch.isNotEmpty && mStripped == strippedSearch) ||
             m.name.trim().toLowerCase() == searchId) {
           targetMetadata = m;
           break;
         }
+      }
+    }
+
+    if (targetMetadata != null && targetMetadata.id.isNotEmpty && targetMetadata.id != mallId) {
+      final retryPackage = await ApiService.instance.fetchMallPackage(targetMetadata.id);
+      if (retryPackage != null && retryPackage.metadata.id.isNotEmpty) {
+        await setActiveMall(retryPackage.metadata.id, isAdmin: isAdmin);
+        return retryPackage;
       }
     }
 

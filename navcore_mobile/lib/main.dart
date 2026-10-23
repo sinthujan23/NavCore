@@ -590,7 +590,23 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation>
             prefs.getString(roleKey) ??
             prefs.getString('NexNav_active_mall_id');
 
-        // For user: check if there's any mall within 500m of current GPS coords, prioritizing minimum distance
+        // 1. If an active venue was already selected, restore it first
+        if (savedActiveId != null && savedActiveId.isNotEmpty) {
+          final target = malls.where((m) {
+            final mId = m.id.trim().toLowerCase();
+            final sId = savedActiveId.trim().toLowerCase();
+            return mId == sId ||
+                mId.replaceAll(RegExp(r'^0+'), '') ==
+                    sId.replaceAll(RegExp(r'^0+'), '');
+          }).firstOrNull;
+          if (target != null) {
+            _lastAutoDetectedMallId = target.id;
+            await _loadActiveMallPackage(target.id, isAdmin: isAdmin);
+            return;
+          }
+        }
+
+        // 2. Otherwise for user: auto-detect nearest mall within 500m of current GPS coords
         if (!isAdmin &&
             _userCoords.latitude != 0.0 &&
             _userCoords.longitude != 0.0) {
@@ -613,22 +629,8 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation>
               return distA.compareTo(distB);
             });
             final nearest = mallsWithin500m.first;
+            _lastAutoDetectedMallId = nearest.id;
             await _loadActiveMallPackage(nearest.id, isAdmin: false);
-            return;
-          }
-        }
-
-        // If an active venue was already selected for this role, restore it
-        if (savedActiveId != null && savedActiveId.isNotEmpty) {
-          final target = malls.where((m) {
-            final mId = m.id.trim().toLowerCase();
-            final sId = savedActiveId.trim().toLowerCase();
-            return mId == sId ||
-                mId.replaceAll(RegExp(r'^0+'), '') ==
-                    sId.replaceAll(RegExp(r'^0+'), '');
-          }).firstOrNull;
-          if (target != null) {
-            await _loadActiveMallPackage(target.id, isAdmin: isAdmin);
             return;
           }
         }
@@ -964,8 +966,14 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation>
             ? _mallDatabaseService.calculateDistanceToMall(_userCoords, curMallMeta)
             : double.infinity;
 
-        // Automatically switch if the nearest mall has shorter distance (e.g. 0m vs 3m)
-        if (distNearest < distCurrent) {
+        // If user already has a valid mall loaded and is within 500m of it:
+        // Do NOT flip-flop between collocated venues (e.g. 3m vs 4m due to GPS noise)!
+        // Only switch if current mall is out of range (>500m) or user moved significantly closer (>100m)
+        final bool isCurrentWithinCoverage = distCurrent <= 500.0;
+        final bool isSignificantlyCloser = (distCurrent - distNearest) > 100.0;
+        final bool shouldSwitch = cleanCurrent.isEmpty || (!isCurrentWithinCoverage || isSignificantlyCloser);
+
+        if (shouldSwitch) {
           if (_lastAutoDetectedMallId != nearestMall.id) {
             _lastAutoDetectedMallId = nearestMall.id;
             await _mallDatabaseService.setActiveMall(
@@ -1636,7 +1644,10 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation>
         mallService: _mallDatabaseService,
         userCoords: _userCoords,
         destinations: _destinations,
+        activeMallId: _buildingProfile.buildingId,
+        isVisible: _currentIndex == 3,
         onSelectActiveMall: (mallId) async {
+          _lastAutoDetectedMallId = mallId;
           await _loadActiveMallPackage(mallId, isAdmin: false);
           _floorPlanKey.currentState?.clearSelection();
           setState(() => _currentIndex = 2);

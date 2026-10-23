@@ -1586,12 +1586,37 @@ class ApiService {
   Future<FullMallPackage?> fetchMallPackage(String mallId) async {
     try {
       final baseUrl = await getBaseUrl();
-      final response = await http
+      http.Response response = await http
           .get(
             Uri.parse('$baseUrl/malls/$mallId/package'),
             headers: await _headers(),
           )
           .timeout(const Duration(seconds: 5));
+
+      if (response.statusCode != 200) {
+        final stripped = mallId.trim().replaceAll(RegExp(r'^0+'), '');
+        final candidates = <String>[];
+        if (stripped.length == 1) {
+          candidates.add('0$stripped');
+        }
+        if (stripped != mallId.trim()) {
+          candidates.add(stripped);
+        }
+        for (final altId in candidates) {
+          try {
+            final altRes = await http
+                .get(
+                  Uri.parse('$baseUrl/malls/$altId/package'),
+                  headers: await _headers(),
+                )
+                .timeout(const Duration(seconds: 3));
+            if (altRes.statusCode == 200) {
+              response = altRes;
+              break;
+            }
+          } catch (_) {}
+        }
+      }
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);

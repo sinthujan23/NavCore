@@ -11,6 +11,8 @@ class MallExplorerScreen extends StatefulWidget {
   final MallDatabaseService mallService;
   final GeodeticCoords? userCoords;
   final Function(String mallId) onSelectActiveMall;
+  final String? activeMallId;
+  final bool isVisible;
   final VoidCallback? onBackClicked;
   final String userEmail;
   final VoidCallback? onLogout;
@@ -22,6 +24,8 @@ class MallExplorerScreen extends StatefulWidget {
     required this.mallService,
     required this.userCoords,
     required this.onSelectActiveMall,
+    this.activeMallId,
+    this.isVisible = false,
     this.onBackClicked,
     this.userEmail = '',
     this.onLogout,
@@ -47,18 +51,47 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
   }
 
   @override
+  void didUpdateWidget(covariant MallExplorerScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.activeMallId != widget.activeMallId ||
+        (widget.isVisible && !oldWidget.isVisible)) {
+      _loadMalls();
+    }
+  }
+
+  @override
   void dispose() {
     _searchController.dispose();
     super.dispose();
+  }
+
+  bool _isMallActive(MallMetadata mall) {
+    final effectiveActiveId = (widget.activeMallId ??
+            widget.mallService.activeMallId ??
+            '')
+        .trim()
+        .toLowerCase();
+    if (effectiveActiveId.isEmpty) {
+      return mall.isSelected;
+    }
+    final mId = mall.id.trim().toLowerCase();
+    final mStripped = mId.replaceAll(RegExp(r'^0+'), '');
+    final aStripped = effectiveActiveId.replaceAll(RegExp(r'^0+'), '');
+    return mId == effectiveActiveId ||
+        (aStripped.isNotEmpty && mStripped == aStripped);
   }
 
   Future<void> _loadMalls() async {
     setState(() => _isLoading = true);
     final list = await widget.mallService.getMallsList();
     if (mounted) {
+      final updatedList = list.map((m) {
+        final isAct = _isMallActive(m);
+        return m.copyWith(isSelected: isAct);
+      }).toList();
       setState(() {
         // All registered venue packages are visible in explorer, with active mall highlighted
-        _malls = list;
+        _malls = updatedList;
         _isLoading = false;
       });
     }
@@ -790,20 +823,22 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                       distKm = meters / 1000.0;
                     }
 
+                    final bool isMallSelected = _isMallActive(mall);
+
                     return Container(
                       clipBehavior: Clip.antiAlias,
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(
-                          color: mall.isSelected
+                          color: isMallSelected
                               ? const Color(0xFF2563EB)
                               : const Color(0xFFE2E8F0),
-                          width: mall.isSelected ? 2 : 1,
+                          width: isMallSelected ? 2 : 1,
                         ),
                         boxShadow: [
                           BoxShadow(
-                            color: mall.isSelected
+                            color: isMallSelected
                                 ? const Color(0x1F2563EB)
                                 : const Color(0x0A000000),
                             blurRadius: 12,
@@ -831,7 +866,7 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                                         ) => Container(
                                           decoration: BoxDecoration(
                                             gradient: LinearGradient(
-                                              colors: mall.isSelected
+                                              colors: isMallSelected
                                                   ? [
                                                       const Color(0xFF1E40AF),
                                                       const Color(0xFF3B82F6),
@@ -904,7 +939,7 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                                   ),
                                 ),
                                 // Top Right: Active Badge
-                                if (mall.isSelected)
+                                if (isMallSelected)
                                   Positioned(
                                     top: 8,
                                     right: 8,
@@ -1079,25 +1114,25 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                                         height: 32,
                                         child: ElevatedButton(
                                           style: ElevatedButton.styleFrom(
-                                            backgroundColor: mall.isSelected
+                                            backgroundColor: isMallSelected
                                                 ? const Color(0xFFDCFCE7)
                                                 : const Color(0xFF2563EB),
-                                            foregroundColor: mall.isSelected
+                                            foregroundColor: isMallSelected
                                                 ? const Color(0xFF15803D)
                                                 : Colors.white,
-                                            elevation: mall.isSelected ? 0 : 1,
+                                            elevation: isMallSelected ? 0 : 1,
                                             padding: EdgeInsets.zero,
                                             shape: RoundedRectangleBorder(
                                               borderRadius:
                                                   BorderRadius.circular(10),
                                               side: BorderSide(
-                                                color: mall.isSelected
+                                                color: isMallSelected
                                                     ? const Color(0xFF86EFAC)
                                                     : Colors.transparent,
                                               ),
                                             ),
                                           ),
-                                          onPressed: mall.isSelected
+                                          onPressed: isMallSelected
                                               ? null
                                               : () => _activateMall(mall),
                                           child: Row(
@@ -1105,14 +1140,14 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                                                 MainAxisAlignment.center,
                                             children: [
                                               Icon(
-                                                mall.isSelected
+                                                isMallSelected
                                                     ? LucideIcons.check
                                                     : LucideIcons.navigation,
                                                 size: 13,
                                               ),
                                               const SizedBox(width: 4),
                                               Text(
-                                                mall.isSelected
+                                                isMallSelected
                                                     ? 'Active'
                                                     : 'Use Map',
                                                 style: const TextStyle(

@@ -22,9 +22,11 @@ router.get('/', (req, res) => {
  */
 router.get('/:id', (req, res) => {
   const reqId = (req.params.id || '').trim().toLowerCase();
+  const reqClean = reqId.replace(/^mall-/, '').replace(/^0+/, '');
   const mall = db.find('malls', m => {
     const mId = (m.id || '').trim().toLowerCase();
-    return mId === reqId || mId === reqId.replace(/^mall-/, '') || reqId === mId.replace(/^mall-/, '');
+    const mClean = mId.replace(/^mall-/, '').replace(/^0+/, '');
+    return mId === reqId || (reqClean && mClean === reqClean) || mId === reqId.replace(/^mall-/, '') || reqId === mId.replace(/^mall-/, '');
   });
   if (!mall) {
     return res.status(404).json({ error: 'Mall not found' });
@@ -38,9 +40,11 @@ router.get('/:id', (req, res) => {
  */
 router.get('/:id/package', (req, res) => {
   const reqId = (req.params.id || '').trim().toLowerCase();
+  const reqClean = reqId.replace(/^mall-/, '').replace(/^0+/, '');
   const mall = db.find('malls', m => {
     const mId = (m.id || '').trim().toLowerCase();
-    return mId === reqId || mId === reqId.replace(/^mall-/, '') || reqId === mId.replace(/^mall-/, '');
+    const mClean = mId.replace(/^mall-/, '').replace(/^0+/, '');
+    return mId === reqId || (reqClean && mClean === reqClean) || mId === reqId.replace(/^mall-/, '') || reqId === mId.replace(/^mall-/, '');
   });
 
   if (!mall) {
@@ -48,17 +52,21 @@ router.get('/:id/package', (req, res) => {
   }
 
   const mallId = mall.id;
+  const mallClean = (mallId || '').trim().toLowerCase().replace(/^mall-/, '').replace(/^0+/, '');
   const allDestinations = db.filter('destinations', d => {
     const dMall = (d.mallId || '').trim().toLowerCase();
-    return dMall === reqId || dMall === mallId.toLowerCase() || dMall === reqId.replace(/^mall-/, '');
+    const dClean = dMall.replace(/^mall-/, '').replace(/^0+/, '');
+    return dMall === reqId || dMall === mallId.toLowerCase() || (reqClean && dClean === reqClean) || (mallClean && dClean === mallClean);
   });
   const floorHeights = db.filter('floorHeights', f => {
     const fMall = (f.mallId || '').trim().toLowerCase();
-    return fMall === reqId || fMall === mallId.toLowerCase() || fMall === reqId.replace(/^mall-/, '');
+    const fClean = fMall.replace(/^mall-/, '').replace(/^0+/, '');
+    return fMall === reqId || fMall === mallId.toLowerCase() || (reqClean && fClean === reqClean) || (mallClean && fClean === mallClean);
   });
   const entranceMarkers = db.filter('entranceMarkers', e => {
     const eMall = (e.buildingId || '').trim().toLowerCase();
-    return eMall === reqId || eMall === mallId.toLowerCase() || eMall === reqId.replace(/^mall-/, '');
+    const eClean = eMall.replace(/^mall-/, '').replace(/^0+/, '');
+    return eMall === reqId || eMall === mallId.toLowerCase() || (reqClean && eClean === reqClean) || (mallClean && eClean === mallClean);
   });
 
   // Generate dynamic floor levels from floor heights
