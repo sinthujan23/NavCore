@@ -40,17 +40,7 @@ class ParkingSlot {
   });
 
   DestinationPOI toDestinationPOI() {
-    int floorNum = 1;
-    final clean = floorId.trim().toUpperCase();
-    if (clean.startsWith('B')) {
-      final digits = int.tryParse(clean.replaceAll(RegExp(r'[^0-9]'), '')) ?? 1;
-      floorNum = -digits;
-    } else if (clean == 'GF' || clean == 'GROUND' || clean == 'G') {
-      floorNum = 0;
-    } else {
-      final digits = int.tryParse(clean.replaceAll(RegExp(r'[^0-9]'), ''));
-      if (digits != null) floorNum = digits;
-    }
+    final floorNum = ParkingService.parseFloorNumber(floorId);
     return DestinationPOI(
       id: id,
       name: 'Parking Stall $id',
@@ -139,16 +129,25 @@ class MyVehicleLocation {
   });
 
   DestinationPOI toDestinationPOI() {
-    final int floorNum = floorId.contains('B2') ? -2 : -1;
+    final realSlot = ParkingService.instance.findSlotById(slotId);
+    if (realSlot != null) {
+      return realSlot.toDestinationPOI();
+    }
+
+    final floorNum = ParkingService.parseFloorNumber(floorId);
+    final sec = slotId.contains('-') && slotId.split('-').length > 2
+        ? slotId.split('-')[2]
+        : 'A';
     return DestinationPOI(
       id: slotId,
-      name: 'My Parked Car ($slotId)',
+      name: 'Parking Stall $slotId',
       category: 'PARKING',
       floorNumber: floorNum,
-      rating: 5.0,
+      rating: 4.8,
       location: location,
-      description: 'Your saved vehicle location at $floorName ($slotId)',
-      openStatus: '24/7',
+      description:
+          'PARKING_META|floor:$floorId|sec:$sec|Your saved vehicle location ($slotId)',
+      openStatus: 'occupied',
       mallId: mallId.isNotEmpty ? mallId : null,
     );
   }
@@ -225,6 +224,24 @@ class ParkingService extends ChangeNotifier {
   static final ParkingService _instance = ParkingService._internal();
   factory ParkingService() => _instance;
   static ParkingService get instance => _instance;
+
+  /// Parses standard floor number integer from floorId string ('P' -> 1, 'B1' -> -1, 'GF' -> 0, etc.)
+  static int parseFloorNumber(String floorId) {
+    int floorNum = 1;
+    final clean = floorId.trim().toUpperCase();
+    if (clean.startsWith('B')) {
+      final digits = int.tryParse(clean.replaceAll(RegExp(r'[^0-9]'), '')) ?? 1;
+      floorNum = -digits;
+    } else if (clean == 'GF' || clean == 'GROUND' || clean == 'G') {
+      floorNum = 0;
+    } else if (clean == 'P' || clean == 'PARKING' || clean == 'P1') {
+      floorNum = 1;
+    } else {
+      final digits = int.tryParse(clean.replaceAll(RegExp(r'[^0-9]'), ''));
+      if (digits != null) floorNum = digits;
+    }
+    return floorNum;
+  }
 
   // Multi-mall slot store: normalized mallId -> (floorId -> List<ParkingSlot>)
   final Map<String, Map<String, List<ParkingSlot>>> _mallFloorSlots = {};
@@ -2032,7 +2049,7 @@ class ParkingService extends ChangeNotifier {
       effectiveUser,
       activeVehicle.location,
       userFloorNumber: 1,
-      targetFloorNumber: activeVehicle.floorId.contains('B2') ? -2 : -1,
+      targetFloorNumber: parseFloorNumber(activeVehicle.floorId),
     );
 
     if (dist > 500.0) {

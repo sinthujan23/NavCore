@@ -1722,19 +1722,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             ),
                           ),
                           onPressed: () {
-                            final int floorNum = vehicle.floorId.contains('B2')
-                                ? -2
-                                : -1;
-                            final poi = DestinationPOI(
-                              id: vehicle.slotId,
-                              name: 'My Parked Car (${vehicle.slotId})',
-                              category: 'PARKING',
-                              floorNumber: floorNum,
-                              rating: 5.0,
-                              location: vehicle.location,
-                              description: 'Your saved vehicle location',
-                              openStatus: '24/7',
-                            );
+                            final slot = ParkingService.instance.findSlotById(vehicle.slotId);
+                            final poi = slot?.toDestinationPOI() ?? vehicle.toDestinationPOI();
                             widget.onSelectDestination(poi);
                           },
                         ),

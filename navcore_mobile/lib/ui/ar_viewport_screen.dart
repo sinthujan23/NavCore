@@ -1556,7 +1556,7 @@ class _ARViewportScreenState extends State<ARViewportScreen>
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                '${activeSpatialMetrics?.euclidean3DDistanceMeters.toStringAsFixed(0) ?? activeDistM} M (3D)',
+                                '${activeSpatialMetrics?.euclidean3DDistanceMeters.toStringAsFixed(0) ?? activeDistM} M',
                                 style: GoogleFonts.plusJakartaSans(
                                   fontSize: 26,
                                   fontWeight: FontWeight.w900,

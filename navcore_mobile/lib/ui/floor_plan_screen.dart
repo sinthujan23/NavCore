@@ -1829,9 +1829,8 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                   ),
                   InkWell(
                     onTap: () {
-                      final targetFloorNumber = myVehicle.floorId.contains('B2')
-                          ? -2
-                          : -1;
+                      final targetFloorNumber =
+                          ParkingService.parseFloorNumber(myVehicle.floorId);
                       final targetFloorConfig = widget.buildingProfile.floors
                           .firstWhere(
                             (f) => f.floorNumber == targetFloorNumber,
