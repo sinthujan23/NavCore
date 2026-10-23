@@ -503,11 +503,11 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                                     vertical: 6,
                                   ),
                                   decoration: BoxDecoration(
-                                    color: const Color(0xFF059669),
+                                    color: const Color(0xFF0F172A),
                                     borderRadius: BorderRadius.circular(12),
                                     boxShadow: const [
                                       BoxShadow(
-                                        color: Color(0x33059669),
+                                        color: Color(0x280F172A),
                                         blurRadius: 8,
                                         offset: Offset(0, 2),
                                       ),
@@ -519,7 +519,7 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                                       const Icon(
                                         LucideIcons.radar,
                                         size: 13,
-                                        color: Colors.white,
+                                        color: Color(0xFF38BDF8),
                                       ),
                                       const SizedBox(width: 5),
                                       Text(
@@ -957,24 +957,20 @@ class _MallExplorerScreenState extends State<MallExplorerScreen> {
                                         vertical: 2,
                                       ),
                                       decoration: BoxDecoration(
-                                        color: (distKm * 1000 <= 500.0)
-                                            ? const Color(0xFF059669)
-                                            : const Color(
-                                                0xFF2563EB,
-                                              ).withValues(alpha: 0.85),
+                                        color: const Color(
+                                          0xFF2563EB,
+                                        ).withValues(alpha: 0.90),
                                         borderRadius: BorderRadius.circular(6),
                                       ),
                                       child: Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
-                                          if (distKm * 1000 <= 500.0) ...[
-                                            const Icon(
-                                              LucideIcons.check,
-                                              size: 9,
-                                              color: Colors.white,
-                                            ),
-                                            const SizedBox(width: 3),
-                                          ],
+                                          const Icon(
+                                            LucideIcons.navigation,
+                                            size: 9,
+                                            color: Colors.white,
+                                          ),
+                                          const SizedBox(width: 3),
                                           Text(
                                             distKm < 1.0
                                                 ? '${(distKm * 1000).toInt()}m away'

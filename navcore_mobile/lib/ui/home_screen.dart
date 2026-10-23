@@ -141,11 +141,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           : 'Floor F$_selectedFloorNumber';
     }
 
-    return PopupMenuButton<int?>(
-      initialValue: _selectedFloorNumber,
-      onSelected: (int? value) {
+    const int allFloorsSentinel = -999999;
+
+    return PopupMenuButton<int>(
+      initialValue: _selectedFloorNumber ?? allFloorsSentinel,
+      onSelected: (int value) {
         setState(() {
-          _selectedFloorNumber = value;
+          _selectedFloorNumber = value == allFloorsSentinel ? null : value;
         });
       },
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -213,9 +215,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ],
         ),
       ),
-      itemBuilder: (BuildContext context) => <PopupMenuEntry<int?>>[
-        PopupMenuItem<int?>(
-          value: null,
+      itemBuilder: (BuildContext context) => <PopupMenuEntry<int>>[
+        PopupMenuItem<int>(
+          value: allFloorsSentinel,
           child: Row(
             children: [
               Icon(
@@ -266,7 +268,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 : 'Floor F${floor.floorNumber}';
           }
 
-          return PopupMenuItem<int?>(
+          return PopupMenuItem<int>(
             value: floor.floorNumber,
             child: Row(
               children: [

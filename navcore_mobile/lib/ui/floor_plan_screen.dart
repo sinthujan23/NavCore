@@ -1530,51 +1530,39 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                           padding: const EdgeInsets.symmetric(horizontal: 12),
                           decoration: BoxDecoration(
                             gradient: isSelected
-                                ? (isParkingPill
-                                      ? const LinearGradient(
-                                          colors: [
-                                            Color(0xFF16A34A),
-                                            Color(0xFF15803D),
-                                          ],
-                                          begin: Alignment.topLeft,
-                                          end: Alignment.bottomRight,
-                                        )
-                                      : const LinearGradient(
-                                          colors: [
-                                            Color(0xFF2563EB),
-                                            Color(0xFF1D4ED8),
-                                          ],
-                                          begin: Alignment.topLeft,
-                                          end: Alignment.bottomRight,
-                                        ))
+                                ? const LinearGradient(
+                                    colors: [
+                                      Color(0xFF2563EB),
+                                      Color(0xFF1D4ED8),
+                                    ],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  )
                                 : null,
                             color: isSelected
                                 ? null
                                 : (isParkedFloor
-                                      ? const Color(0xFFDCFCE7)
+                                      ? const Color(0xFFEFF6FF)
                                       : (isParkingPill
-                                            ? const Color(0xFFF0FDF4)
+                                            ? const Color(0xFFF0F9FF)
                                             : const Color(0xFFF1F5F9))),
                             borderRadius: BorderRadius.circular(10),
                             border: isParkedFloor && !isSelected
                                 ? Border.all(
-                                    color: const Color(0xFF22C55E),
+                                    color: const Color(0xFF93C5FD),
                                     width: 1.5,
                                   )
                                 : (isParkingPill && !isSelected
                                       ? Border.all(
-                                          color: const Color(0xFF86EFAC),
+                                          color: const Color(0xFFBAE6FD),
                                           width: 1.2,
                                         )
                                       : null),
                             boxShadow: isSelected
                                 ? [
                                     BoxShadow(
-                                      color:
-                                          (isParkingPill
-                                                  ? const Color(0xFF16A34A)
-                                                  : const Color(0xFF2563EB))
-                                              .withValues(alpha: 0.35),
+                                      color: const Color(0xFF2563EB)
+                                          .withValues(alpha: 0.35),
                                       blurRadius: 6,
                                       offset: const Offset(0, 2),
                                     ),
@@ -1591,7 +1579,7 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                                   size: 13,
                                   color: isSelected
                                       ? Colors.white
-                                      : const Color(0xFF16A34A),
+                                      : const Color(0xFF2563EB),
                                 ),
                                 const SizedBox(width: 4),
                               ] else if (isParkingPill) ...[
@@ -1600,7 +1588,7 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                                   size: 13,
                                   color: isSelected
                                       ? Colors.white
-                                      : const Color(0xFF16A34A),
+                                      : const Color(0xFF0284C7),
                                 ),
                                 const SizedBox(width: 4),
                               ],
@@ -1612,9 +1600,9 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                                   color: isSelected
                                       ? Colors.white
                                       : (isParkedFloor
-                                            ? const Color(0xFF15803D)
+                                            ? const Color(0xFF1E40AF)
                                             : (isParkingPill
-                                                  ? const Color(0xFF166534)
+                                                  ? const Color(0xFF0369A1)
                                                   : const Color(0xFF334155))),
                                 ),
                               ),
@@ -1735,12 +1723,12 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                         ),
                         decoration: BoxDecoration(
                           color: myVehicle != null
-                              ? const Color(0xFF16A34A)
+                              ? const Color(0xFF0284C7)
                               : const Color(0xFF0F172A),
                           borderRadius: BorderRadius.circular(10),
                           border: Border.all(
                             color: myVehicle != null
-                                ? const Color(0xFF86EFAC)
+                                ? const Color(0xFF38BDF8)
                                 : const Color(0xFF334155),
                           ),
                         ),
@@ -1820,12 +1808,12 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-              color: const Color(0xFFDCFCE7),
+              color: const Color(0xFFEFF6FF),
               child: Row(
                 children: [
                   const Icon(
                     LucideIcons.car,
-                    color: Color(0xFF16A34A),
+                    color: Color(0xFF2563EB),
                     size: 14,
                   ),
                   const SizedBox(width: 6),
@@ -1835,7 +1823,7 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                       style: GoogleFonts.plusJakartaSans(
                         fontSize: 11,
                         fontWeight: FontWeight.w700,
-                        color: const Color(0xFF15803D),
+                        color: const Color(0xFF1E40AF),
                       ),
                     ),
                   ),
@@ -1862,7 +1850,7 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                         vertical: 3,
                       ),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF16A34A),
+                        color: const Color(0xFF2563EB),
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
@@ -2273,50 +2261,6 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                             ),
                           ),
 
-                        // Interactive Touch Target over '▼ Parking Entrance' on Retail Floor
-                        if (!isParkingFloor)
-                          Positioned(
-                            left: width * 0.35,
-                            top: height - 42,
-                            width: width * 0.30,
-                            height: 24,
-                            child: Material(
-                              color: Colors.transparent,
-                              child: InkWell(
-                                borderRadius: BorderRadius.circular(7),
-                                onTap: () {
-                                  final parkingFloor = _effectiveFloorLevels
-                                      .firstWhere(
-                                        (f) =>
-                                            ParkingService.normalizeFloorId(f.floorId) == 'P' ||
-                                            f.floorId.trim().toUpperCase() == 'P' ||
-                                            f.name.trim().toUpperCase().contains('(P)') ||
-                                            f.floorNumber < 0 ||
-                                            f.floorId.trim().toUpperCase().startsWith('B') ||
-                                            f.name.trim().toUpperCase().contains('PARK'),
-                                        orElse: () =>
-                                            _effectiveFloorLevels.first,
-                                      );
-                                  setState(() {
-                                    _selectedPOI = null;
-                                    _overrideFloor = parkingFloor;
-                                  });
-                                  widget.onSelectFloor(parkingFloor);
-                                },
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(7),
-                                    border: Border.all(
-                                      color: const Color(
-                                        0xFF2563EB,
-                                      ).withValues(alpha: 0.5),
-                                      width: 1.5,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
 
                         // Interactive Shortcuts on Parking Deck
                         if (isParkingFloor) ...[
@@ -2348,129 +2292,104 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                               ),
                             ),
                           ),
-                          // Bottom ramp: Entrance & Exit -> Jump back to Ground Floor (F1)
-                          Positioned(
-                            left: width * 0.35,
-                            top: height - 40,
-                            width: width * 0.30,
-                            height: 22,
-                            child: Material(
-                              color: Colors.transparent,
-                              child: InkWell(
-                                borderRadius: BorderRadius.circular(7),
-                                onTap: () {
-                                  final groundFloor = _effectiveFloorLevels
-                                      .firstWhere(
-                                        (f) =>
-                                            f.floorNumber == 1 ||
-                                            f.floorNumber == 0,
-                                        orElse: () =>
-                                            _effectiveFloorLevels.first,
-                                      );
-                                  setState(() {
-                                    _selectedPOI = null;
-                                    _overrideFloor = groundFloor;
-                                  });
-                                  widget.onSelectFloor(groundFloor);
-                                },
-                              ),
-                            ),
-                          ),
                         ],
 
-                        // Floating Quick Jump Badges
+                        // Floating Quick Jump Badges (Centered at bottom ramp with zero overlap)
                         if (!isParkingFloor && _selectedPOI == null)
                           Positioned(
-                            right: 12,
-                            bottom: 12,
-                            child: Material(
-                              color: Colors.transparent,
-                              child: InkWell(
-                                borderRadius: BorderRadius.circular(20),
-                                onTap: () {
-                                  final parkingFloor = _effectiveFloorLevels
-                                      .firstWhere(
-                                        (f) =>
-                                            ParkingService.normalizeFloorId(f.floorId) == 'P' ||
-                                            f.floorId.trim().toUpperCase() == 'P' ||
-                                            f.name.trim().toUpperCase().contains('(P)') ||
-                                            f.floorNumber < 0 ||
-                                            f.floorId.trim().toUpperCase().startsWith('B') ||
-                                            f.name.trim().toUpperCase().contains('PARK'),
-                                        orElse: () =>
-                                            _effectiveFloorLevels.first,
-                                      );
-                                  setState(() {
-                                    _selectedPOI = null;
-                                    _overrideFloor = parkingFloor;
-                                  });
-                                  widget.onSelectFloor(parkingFloor);
-                                },
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
-                                    vertical: 6,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    gradient: const LinearGradient(
-                                      colors: [
-                                        Color(0xFF16A34A),
-                                        Color(0xFF15803D),
+                            left: 0,
+                            right: 0,
+                            bottom: 10,
+                            child: Center(
+                              child: Material(
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(20),
+                                  onTap: () {
+                                    final parkingFloor = _effectiveFloorLevels
+                                        .firstWhere(
+                                          (f) =>
+                                              ParkingService.normalizeFloorId(f.floorId) == 'P' ||
+                                              f.floorId.trim().toUpperCase() == 'P' ||
+                                              f.name.trim().toUpperCase().contains('(P)') ||
+                                              f.floorNumber < 0 ||
+                                              f.floorId.trim().toUpperCase().startsWith('B') ||
+                                              f.name.trim().toUpperCase().contains('PARK'),
+                                          orElse: () =>
+                                              _effectiveFloorLevels.first,
+                                        );
+                                    setState(() {
+                                      _selectedPOI = null;
+                                      _overrideFloor = parkingFloor;
+                                    });
+                                    widget.onSelectFloor(parkingFloor);
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 14,
+                                      vertical: 6,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      gradient: const LinearGradient(
+                                        colors: [
+                                          Color(0xFF0284C7),
+                                          Color(0xFF0369A1),
+                                        ],
+                                      ),
+                                      borderRadius: BorderRadius.circular(20),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: const Color(
+                                            0xFF0284C7,
+                                          ).withValues(alpha: 0.35),
+                                          blurRadius: 8,
+                                          offset: const Offset(0, 3),
+                                        ),
                                       ],
                                     ),
-                                    borderRadius: BorderRadius.circular(20),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: const Color(
-                                          0xFF16A34A,
-                                        ).withValues(alpha: 0.35),
-                                        blurRadius: 8,
-                                        offset: const Offset(0, 3),
-                                      ),
-                                    ],
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      const Icon(
-                                        LucideIcons.parkingCircle,
-                                        size: 14,
-                                        color: Colors.white,
-                                      ),
-                                      const SizedBox(width: 5),
-                                      Builder(
-                                        builder: (context) {
-                                          final pkFloor = _effectiveFloorLevels
-                                              .where(
-                                                (f) =>
-                                                    ParkingService.normalizeFloorId(f.floorId) == 'P' ||
-                                                    f.floorId.trim().toUpperCase() == 'P' ||
-                                                    f.name.trim().toUpperCase().contains('(P)') ||
-                                                    f.floorNumber < 0 ||
-                                                    f.floorId.trim().toUpperCase().startsWith('B') ||
-                                                    f.name.trim().toUpperCase().contains('PARK'),
-                                              )
-                                              .firstOrNull;
-                                          final pill = pkFloor != null
-                                              ? _getFloorPillLabel(pkFloor)
-                                              : 'P';
-                                          return Text(
-                                            'View Parking ($pill)',
-                                            style: GoogleFonts.plusJakartaSans(
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.w800,
-                                              color: Colors.white,
-                                            ),
-                                          );
-                                        },
-                                      ),
-                                      const SizedBox(width: 4),
-                                      const Icon(
-                                        LucideIcons.arrowRight,
-                                        size: 12,
-                                        color: Colors.white,
-                                      ),
-                                    ],
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const Icon(
+                                          LucideIcons.parkingCircle,
+                                          size: 14,
+                                          color: Colors.white,
+                                        ),
+                                        const SizedBox(width: 5),
+                                        Builder(
+                                          builder: (context) {
+                                            final pkFloor = _effectiveFloorLevels
+                                                .where(
+                                                  (f) =>
+                                                      ParkingService.normalizeFloorId(f.floorId) == 'P' ||
+                                                      f.floorId.trim().toUpperCase() == 'P' ||
+                                                      f.name.trim().toUpperCase().contains('(P)') ||
+                                                      f.floorNumber < 0 ||
+                                                      f.floorId.trim().toUpperCase().startsWith('B') ||
+                                                      f.name.trim().toUpperCase().contains('PARK'),
+                                                )
+                                                .firstOrNull;
+                                            final pill = pkFloor != null
+                                                ? _getFloorPillLabel(pkFloor)
+                                                : 'P';
+                                            return Text(
+                                              'View Parking ($pill)',
+                                              style: GoogleFonts.plusJakartaSans(
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.w800,
+                                                color: Colors.white,
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                        const SizedBox(width: 4),
+                                        const Icon(
+                                          LucideIcons.arrowRight,
+                                          size: 12,
+                                          color: Colors.white,
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ),
@@ -2542,74 +2461,77 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
 
                         if (isParkingFloor)
                           Positioned(
-                            right: 12,
-                            bottom: 12,
-                            child: Material(
-                              color: Colors.transparent,
-                              child: InkWell(
-                                borderRadius: BorderRadius.circular(20),
-                                onTap: () {
-                                  final groundFloor = _effectiveFloorLevels
-                                      .firstWhere(
-                                        (f) =>
-                                            f.floorNumber == 1 ||
-                                            f.floorNumber == 0,
-                                        orElse: () =>
-                                            _effectiveFloorLevels.first,
-                                      );
-                                  setState(() {
-                                    _selectedPOI = null;
-                                    _overrideFloor = groundFloor;
-                                  });
-                                  widget.onSelectFloor(groundFloor);
-                                },
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
-                                    vertical: 6,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    gradient: const LinearGradient(
-                                      colors: [
-                                        Color(0xFF2563EB),
-                                        Color(0xFF1D4ED8),
+                            left: 0,
+                            right: 0,
+                            bottom: 10,
+                            child: Center(
+                              child: Material(
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(20),
+                                  onTap: () {
+                                    final groundFloor = _effectiveFloorLevels
+                                        .firstWhere(
+                                          (f) =>
+                                              f.floorNumber == 1 ||
+                                              f.floorNumber == 0,
+                                          orElse: () =>
+                                              _effectiveFloorLevels.first,
+                                        );
+                                    setState(() {
+                                      _selectedPOI = null;
+                                      _overrideFloor = groundFloor;
+                                    });
+                                    widget.onSelectFloor(groundFloor);
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 14,
+                                      vertical: 6,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      gradient: const LinearGradient(
+                                        colors: [
+                                          Color(0xFF2563EB),
+                                          Color(0xFF1D4ED8),
+                                        ],
+                                      ),
+                                      borderRadius: BorderRadius.circular(20),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: const Color(
+                                            0xFF2563EB,
+                                          ).withValues(alpha: 0.35),
+                                          blurRadius: 8,
+                                          offset: const Offset(0, 3),
+                                        ),
                                       ],
                                     ),
-                                    borderRadius: BorderRadius.circular(20),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: const Color(
-                                          0xFF2563EB,
-                                        ).withValues(alpha: 0.35),
-                                        blurRadius: 8,
-                                        offset: const Offset(0, 3),
-                                      ),
-                                    ],
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      const Icon(
-                                        LucideIcons.store,
-                                        size: 14,
-                                        color: Colors.white,
-                                      ),
-                                      const SizedBox(width: 5),
-                                      Text(
-                                        'Back to Shops (F1)',
-                                        style: GoogleFonts.plusJakartaSans(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w800,
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const Icon(
+                                          LucideIcons.store,
+                                          size: 14,
                                           color: Colors.white,
                                         ),
-                                      ),
-                                      const SizedBox(width: 4),
-                                      const Icon(
-                                        LucideIcons.arrowUp,
-                                        size: 12,
-                                        color: Colors.white,
-                                      ),
-                                    ],
+                                        const SizedBox(width: 5),
+                                        Text(
+                                          'Back to Shops (F1)',
+                                          style: GoogleFonts.plusJakartaSans(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w800,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        const Icon(
+                                          LucideIcons.arrowUp,
+                                          size: 12,
+                                          color: Colors.white,
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ),
@@ -4225,46 +4147,6 @@ class ArchitecturalFloorPainter extends CustomPainter {
       textAlign: TextAlign.center,
     );
 
-    // Bottom Parking Ramp Banner
-    final rampRect = Rect.fromLTWH(
-      size.width * 0.35,
-      size.height - 40,
-      size.width * 0.30,
-      22,
-    );
-    final rampPaint = Paint()
-      ..color = isParkingFloor
-          ? const Color(0xFF0F172A)
-          : const Color(0xFFDBEAFE);
-    final rampBorder = Paint()
-      ..color = isParkingFloor
-          ? const Color(0xFF38BDF8)
-          : const Color(0xFF2563EB)
-      ..strokeWidth = 1.2
-      ..style = PaintingStyle.stroke;
-
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(rampRect, const Radius.circular(7)),
-      rampPaint,
-    );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(rampRect, const Radius.circular(7)),
-      rampBorder,
-    );
-
-    final String rampLabel = isParkingFloor
-        ? '▼ Entrance & Exit'
-        : '▼ Parking Entrance';
-    _drawText(
-      canvas,
-      rampLabel,
-      Offset(rampRect.left + 2, rampRect.top + 5),
-      isParkingFloor ? const Color(0xFF38BDF8) : const Color(0xFF1E40AF),
-      fontSize: 7.0,
-      fontWeight: FontWeight.w800,
-      maxWidth: rampRect.width - 4,
-      textAlign: TextAlign.center,
-    );
   }
 
   void _paintRetailPlan(Canvas canvas, Size size, double roomTopPadding) {
