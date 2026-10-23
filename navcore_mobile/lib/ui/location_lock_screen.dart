@@ -78,6 +78,19 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
     );
 
     if (mallsWithin500m.isNotEmpty) {
+      // Find the mall with the minimum distance to user's coordinates
+      mallsWithin500m.sort((a, b) {
+        final distA = widget.mallService.calculateDistanceToMall(
+          _acquiredCoords!,
+          a,
+        );
+        final distB = widget.mallService.calculateDistanceToMall(
+          _acquiredCoords!,
+          b,
+        );
+        return distA.compareTo(distB);
+      });
+
       _detectedMall = mallsWithin500m.first;
       final distM = widget.mallService.calculateDistanceToMall(
         _acquiredCoords!,
@@ -101,6 +114,7 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
         _acquiredCoords!,
         maxRadiusMeters: 500.0,
         isAdmin: false,
+        preferredMallId: _detectedMall?.id,
         onProgress: (progress) {
           if (mounted) {
             setState(() {
@@ -109,6 +123,10 @@ class _LocationLockScreenState extends State<LocationLockScreen> {
           }
         },
       );
+
+      if (_loadedPackage != null && _loadedPackage!.metadata.id.isNotEmpty) {
+        _detectedMall = _loadedPackage!.metadata;
+      }
 
       // Step 4: Completed
       setState(() {

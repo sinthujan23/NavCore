@@ -668,43 +668,45 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               // Top App Bar & Live Location Display Bar
               SliverToBoxAdapter(
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       // Top Bar Header
                       Row(
                         children: [
-                          const NexNavLogoWidget(size: 38),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              'NexNav',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: GoogleFonts.plusJakartaSans(
-                                fontSize: 20,
-                                fontWeight: FontWeight.w800,
-                                color: const Color(0xFF0F172A),
-                              ),
+                          const NexNavLogoWidget(size: 34),
+                          const SizedBox(width: 8),
+                          Text(
+                            'NexNav',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 19,
+                              fontWeight: FontWeight.w800,
+                              color: const Color(0xFF0F172A),
+                              letterSpacing: -0.3,
                             ),
                           ),
+                          const Spacer(),
                           if (widget.isAdmin && widget.onOpenAdminDashboard != null) ...[
-                            const SizedBox(width: 8),
+                            const SizedBox(width: 6),
                             GestureDetector(
                               onTap: widget.onOpenAdminDashboard,
                               child: Container(
-                                height: 34,
+                                height: 32,
                                 padding: const EdgeInsets.symmetric(
-                                  horizontal: 9,
-                                  vertical: 5,
+                                  horizontal: 8,
+                                  vertical: 4,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFF059669),
-                                  borderRadius: BorderRadius.circular(18),
+                                  color: const Color(0xFF0F172A),
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: const Color(0xFF1E293B),
+                                    width: 1,
+                                  ),
                                   boxShadow: const [
                                     BoxShadow(
-                                      color: Color(0x33059669),
+                                      color: Color(0x240F172A),
                                       blurRadius: 6,
                                       offset: Offset(0, 2),
                                     ),
@@ -716,13 +718,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                     const Icon(
                                       LucideIcons.shieldCheck,
                                       size: 13,
-                                      color: Colors.white,
+                                      color: Color(0xFF38BDF8),
                                     ),
                                     const SizedBox(width: 4),
                                     Text(
                                       'ADMIN PORTAL',
                                       style: GoogleFonts.plusJakartaSans(
-                                        fontSize: 10,
+                                        fontSize: 9.5,
                                         fontWeight: FontWeight.w800,
                                         color: Colors.white,
                                         letterSpacing: 0.2,
@@ -734,14 +736,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             ),
                           ],
                           if (widget.onSignIn != null) ...[
-                            const SizedBox(width: 8),
+                            const SizedBox(width: 6),
                             GestureDetector(
                               onTap: widget.onSignIn,
                               child: Container(
-                                height: 34,
+                                height: 32,
                                 padding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 6,
+                                  horizontal: 9,
+                                  vertical: 5,
                                 ),
                                 decoration: BoxDecoration(
                                   color: Colors.white,
@@ -779,23 +781,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             ),
                           ],
                           if (widget.onLogout != null) ...[
-                            const SizedBox(width: 8),
+                            const SizedBox(width: 6),
                             Material(
                               color: Colors.transparent,
                               child: InkWell(
                                 onTap: widget.onLogout,
-                                borderRadius: BorderRadius.circular(20),
+                                borderRadius: BorderRadius.circular(18),
                                 child: Container(
-                                  height: 34,
+                                  height: 32,
                                   padding: const EdgeInsets.fromLTRB(
                                     4,
                                     3,
-                                    7,
+                                    6,
                                     3,
                                   ),
                                   decoration: BoxDecoration(
                                     color: Colors.white,
-                                    borderRadius: BorderRadius.circular(20),
+                                    borderRadius: BorderRadius.circular(18),
                                     border: Border.all(
                                       color: const Color(0xFFE2E8F0),
                                       width: 1.2,
@@ -812,8 +814,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
                                       Container(
-                                        width: 26,
-                                        height: 26,
+                                        width: 24,
+                                        height: 24,
                                         decoration: const BoxDecoration(
                                           gradient: LinearGradient(
                                             colors: [
@@ -834,17 +836,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                                     : 'U')
                                                 .toUpperCase(),
                                             style: GoogleFonts.plusJakartaSans(
-                                              fontSize: 11,
+                                              fontSize: 10.5,
                                               fontWeight: FontWeight.w800,
                                               color: Colors.white,
                                             ),
                                           ),
                                         ),
                                       ),
-                                      const SizedBox(width: 6),
+                                      const SizedBox(width: 5),
                                       ConstrainedBox(
                                         constraints: BoxConstraints(
-                                          maxWidth: widget.isAdmin ? 55 : 95,
+                                          maxWidth: widget.isAdmin ? 48 : 80,
                                         ),
                                         child: Text(
                                           widget.userEmail.isNotEmpty
@@ -853,16 +855,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                           style: GoogleFonts.plusJakartaSans(
-                                            fontSize: 12,
+                                            fontSize: 11.5,
                                             fontWeight: FontWeight.w700,
                                             color: const Color(0xFF0F172A),
                                           ),
                                         ),
                                       ),
-                                      const SizedBox(width: 8),
+                                      const SizedBox(width: 6),
                                       Container(
-                                        width: 22,
-                                        height: 22,
+                                        width: 20,
+                                        height: 20,
                                         decoration: BoxDecoration(
                                           color: const Color(0xFFFEF2F2),
                                           shape: BoxShape.circle,
@@ -941,8 +943,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                 0xFF3B82F6,
                               ).withValues(alpha: 0.15),
                               accentColor: const Color(
-                                0xFF10B981,
-                              ).withValues(alpha: 0.12),
+                                0xFF0284C7,
+                              ).withValues(alpha: 0.15),
                             ),
                           ),
                         ),
@@ -1153,16 +1155,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                         decoration: BoxDecoration(
                                           color: isInside
                                               ? const Color(
-                                                  0xFF10B981,
-                                                ).withValues(alpha: 0.25)
+                                                  0xFF0284C7,
+                                                ).withValues(alpha: 0.28)
                                               : (isWithin500m
                                                     ? const Color(
-                                                        0xFF059669,
+                                                        0xFF1D4ED8,
                                                       ).withValues(alpha: 0.25)
                                                     : const Color(
                                                         0xFF3B82F6,
                                                       ).withValues(
-                                                        alpha: 0.25,
+                                                        alpha: 0.15,
                                                       )),
                                           borderRadius: BorderRadius.circular(
                                             8,
@@ -1170,16 +1172,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                           border: Border.all(
                                             color: isInside
                                                 ? const Color(
-                                                    0xFF34D399,
-                                                  ).withValues(alpha: 0.5)
+                                                    0xFF38BDF8,
+                                                  ).withValues(alpha: 0.6)
                                                 : (isWithin500m
                                                       ? const Color(
-                                                          0xFF10B981,
+                                                          0xFF60A5FA,
                                                         ).withValues(alpha: 0.5)
                                                       : const Color(
                                                           0xFF60A5FA,
                                                         ).withValues(
-                                                          alpha: 0.5,
+                                                          alpha: 0.35,
                                                         )),
                                           ),
                                         ),
@@ -1195,10 +1197,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                                               .navigation),
                                               size: 11,
                                               color: isInside
-                                                  ? const Color(0xFF34D399)
+                                                  ? const Color(0xFF38BDF8)
                                                   : (isWithin500m
                                                         ? const Color(
-                                                            0xFF34D399,
+                                                            0xFF93C5FD,
                                                           )
                                                         : const Color(
                                                             0xFF93C5FD,

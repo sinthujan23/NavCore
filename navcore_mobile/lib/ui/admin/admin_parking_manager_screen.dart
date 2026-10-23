@@ -11,7 +11,6 @@ import '../../data/floor_height_model.dart';
 import '../../data/parking_service.dart';
 import '../../data/mall_database_service.dart';
 import '../../engine/ecef_engine.dart';
-import '../../engine/bearing_engine.dart';
 
 class AdminParkingManagerScreen extends StatefulWidget {
   final MallMetadata? activeMall;
@@ -54,6 +53,24 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
   @override
   void initState() {
     super.initState();
+
+    // Fast instant initialization from passed widget params
+    if (widget.activeMall != null) {
+      _activeMall = widget.activeMall;
+      _malls = [widget.activeMall!];
+      final validFloors = _getFloorOptionsForMall(_activeMall, _mallFloorHeights);
+      _selectedFloorId = validFloors.isNotEmpty ? validFloors.first : 'P';
+      _isLoading = false;
+    } else if (widget.mallService != null && widget.mallService!.catalog.isNotEmpty) {
+      _malls = List.from(widget.mallService!.catalog);
+      _activeMall = _malls.where((m) => m.isActive || m.isSelected).firstOrNull ?? _malls.firstOrNull;
+      if (_activeMall != null) {
+        final validFloors = _getFloorOptionsForMall(_activeMall, _mallFloorHeights);
+        _selectedFloorId = validFloors.isNotEmpty ? validFloors.first : 'P';
+        _isLoading = false;
+      }
+    }
+
     _parkingService.addListener(_onParkingChanged);
     _loadMallsAndLayout();
     _checkServerHealth();
@@ -63,7 +80,6 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
         _parkingService.syncSlotsSilently(_activeMall!.id);
       }
     });
-    _checkServerHealth();
     // Optimized: Refresh every 20s instead of every 1s to prevent server overload
     _adminRefreshTimer = Timer.periodic(const Duration(seconds: 20), (_) {
       if (mounted && _activeMall != null && !_isLoading) {
@@ -317,144 +333,153 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
   }
 
   Future<void> _loadMallsAndLayout() async {
-    setState(() => _isLoading = true);
-    final malls = await _mallService.getMallsList();
-    if (malls.isEmpty) {
-      if (widget.activeMall != null) {
-        malls.add(widget.activeMall!);
-      } else {
-        if (mounted) {
-          setState(() {
-            _malls = [];
-            _activeMall = null;
-            _mallFloorHeights = [];
-            _isLoading = false;
-          });
-        }
-        return;
-      }
+    // Only display blocking full-page spinner if we don't already have an active mall loaded
+    if (_activeMall == null) {
+      setState(() => _isLoading = true);
     }
-
-    final prefs = await SharedPreferences.getInstance();
-    final savedActiveId =
-        (prefs.getString('NexNav_active_mall_id') ??
-                prefs.getString('active_mall_id') ??
-                '')
-            .trim()
-            .toLowerCase();
-
-    // Priority 1: explicitly passed activeMall from caller
-    MallMetadata? active = widget.activeMall;
-
-    // Priority 2: refresh active with full copy from malls list if present
-    if (active != null) {
-      final updated = malls
-          .where(
-            (m) => m.id.trim().toLowerCase() == active!.id.trim().toLowerCase(),
-          )
-          .firstOrNull;
-      if (updated != null) {
-        active = updated;
-      }
-    }
-
-    // Priority 3: check for mall matching saved active_mall_id
-    if (active == null && savedActiveId.isNotEmpty) {
-      active = malls.where((m) {
-        final mId = m.id.trim().toLowerCase();
-        final sId = savedActiveId.trim().toLowerCase();
-        return mId == sId ||
-            mId.replaceAll(RegExp(r'^0+'), '') ==
-                sId.replaceAll(RegExp(r'^0+'), '');
-      }).firstOrNull;
-    }
-
-    // Priority 4: check for mall that is selected or active
-    active ??= malls.where((m) => m.isSelected || m.isActive).firstOrNull;
-
-    // Priority 5: fallback to first active mall in list
-    active ??= malls.where((m) => m.isActive).firstOrNull;
-
-    // Priority 6: fallback to first mall
-    active ??= malls.first;
 
     try {
-      _mallFloorHeights = await ApiService.instance.fetchFloorHeights(
-        active.id,
-      );
-    } catch (_) {
-      _mallFloorHeights = [];
-    }
+      final results = await Future.wait([
+        _mallService.getMallsList().timeout(
+          const Duration(seconds: 3),
+          onTimeout: () => _malls.isNotEmpty ? _malls : <MallMetadata>[],
+        ),
+        SharedPreferences.getInstance(),
+      ]);
 
-    await _parkingService.loadLayoutForMallMetadata(
-      mallId: active.id,
-      baseLat: active.latitude,
-      baseLon: active.longitude,
-    );
+      final malls = results[0] as List<MallMetadata>;
+      final prefs = results[1] as SharedPreferences;
 
-    // Load any explicitly designated parking floors for this venue package
-    final savedParkingFloors = prefs.getStringList(
-      'venue_parking_floors_${active.id}',
-    );
-    if (savedParkingFloors != null && savedParkingFloors.isNotEmpty) {
-      final cleanSaved = savedParkingFloors
-          .where(
-            (f) =>
-                !RegExp(r'^F\d+$', caseSensitive: false).hasMatch(f.trim()),
-          )
-          .toList();
-      if (cleanSaved.isNotEmpty) {
-        active = active.copyWith(parkingFloors: cleanSaved);
-        await prefs.setStringList(
-          'venue_parking_floors_${active.id}',
-          cleanSaved,
-        );
-      }
-    }
-
-    // Prune legacy dummy slots from cache/memory that do not belong to this mall
-    final validFloors = _getFloorOptionsForMall(active, _mallFloorHeights);
-    await _parkingService.pruneSlotsToValidFloors(active.id, validFloors);
-
-    // Auto-fix any floors with overlapping duplicate coordinates so each stall has distinct coordinates
-    for (final f in validFloors) {
-      final floorSlots = _parkingService.fetchFloorMap(f, active.id);
-      final seen = <String>{};
-      bool hasDupes = false;
-      for (final s in floorSlots) {
-        final key =
-            '${s.location.latitude.toStringAsFixed(5)},${s.location.longitude.toStringAsFixed(5)}';
-        if (!seen.add(key)) {
-          hasDupes = true;
-          break;
-        }
-      }
-      if (hasDupes) {
-        await _autoSeparateFloorSlots(f, showToast: false);
-      }
-    }
-
-    if (mounted) {
-      setState(() {
+      if (malls.isNotEmpty) {
         _malls = malls;
-        _activeMall = active;
-        if (validFloors.isNotEmpty) {
-          if (!validFloors.contains(_selectedFloorId)) {
-            String bestFloor = validFloors.first;
-            for (final f in validFloors) {
-              final slots = _parkingService.fetchFloorMap(f, active?.id);
-              if (slots.isNotEmpty) {
-                bestFloor = f;
-                break;
-              }
-            }
-            _selectedFloorId = bestFloor;
-          }
+      }
+
+      if (_malls.isEmpty) {
+        if (widget.activeMall != null) {
+          _malls = [widget.activeMall!];
         } else {
-          _selectedFloorId = 'P';
+          if (mounted) {
+            setState(() {
+              _malls = [];
+              _activeMall = null;
+              _mallFloorHeights = [];
+              _isLoading = false;
+            });
+          }
+          return;
         }
-        _isLoading = false;
-      });
+      }
+
+      final savedActiveId =
+          (prefs.getString('NexNav_active_mall_id') ??
+                  prefs.getString('active_mall_id') ??
+                  '')
+              .trim()
+              .toLowerCase();
+
+      // Priority 1: explicitly passed activeMall from caller or current
+      MallMetadata? active = widget.activeMall ?? _activeMall;
+
+      // Priority 2: refresh active with full copy from malls list if present
+      if (active != null) {
+        final updated = _malls
+            .where(
+              (m) => m.id.trim().toLowerCase() == active!.id.trim().toLowerCase(),
+            )
+            .firstOrNull;
+        if (updated != null) {
+          active = updated;
+        }
+      }
+
+      // Priority 3: check for mall matching saved active_mall_id
+      if (active == null && savedActiveId.isNotEmpty) {
+        active = _malls.where((m) {
+          final mId = m.id.trim().toLowerCase();
+          final sId = savedActiveId.trim().toLowerCase();
+          return mId == sId ||
+              mId.replaceAll(RegExp(r'^0+'), '') ==
+                  sId.replaceAll(RegExp(r'^0+'), '');
+        }).firstOrNull;
+      }
+
+      // Priority 4: check for mall that is selected or active
+      active ??= _malls.where((m) => m.isSelected || m.isActive).firstOrNull;
+      active ??= _malls.firstOrNull;
+
+      if (active == null) {
+        if (mounted) setState(() => _isLoading = false);
+        return;
+      }
+
+      // Concurrent parallel fetch: floor heights and parking layout simultaneously
+      await Future.wait([
+        ApiService.instance
+            .fetchFloorHeights(active.id)
+            .then((heights) {
+              if (mounted) _mallFloorHeights = heights;
+            })
+            .catchError((_) {})
+            .timeout(const Duration(seconds: 3), onTimeout: () {}),
+        _parkingService
+            .loadLayoutForMallMetadata(
+              mallId: active.id,
+              baseLat: active.latitude,
+              baseLon: active.longitude,
+            )
+            .timeout(const Duration(seconds: 3), onTimeout: () {}),
+      ]);
+
+      // Load any explicitly designated parking floors for this venue package
+      final savedParkingFloors = prefs.getStringList(
+        'venue_parking_floors_${active.id}',
+      );
+      if (savedParkingFloors != null && savedParkingFloors.isNotEmpty) {
+        final cleanSaved = savedParkingFloors
+            .where(
+              (f) =>
+                  !RegExp(r'^F\d+$', caseSensitive: false).hasMatch(f.trim()),
+            )
+            .toList();
+        if (cleanSaved.isNotEmpty) {
+          active = active.copyWith(parkingFloors: cleanSaved);
+          await prefs.setStringList(
+            'venue_parking_floors_${active.id}',
+            cleanSaved,
+          );
+        }
+      }
+
+      // Prune legacy dummy slots from cache/memory that do not belong to this mall
+      final validFloors = _getFloorOptionsForMall(active, _mallFloorHeights);
+      await _parkingService.pruneSlotsToValidFloors(active.id, validFloors);
+
+      if (mounted) {
+        setState(() {
+          _activeMall = active;
+          if (validFloors.isNotEmpty) {
+            if (!validFloors.contains(_selectedFloorId)) {
+              String bestFloor = validFloors.first;
+              for (final f in validFloors) {
+                final slots = _parkingService.fetchFloorMap(f, active?.id);
+                if (slots.isNotEmpty) {
+                  bestFloor = f;
+                  break;
+                }
+              }
+              _selectedFloorId = bestFloor;
+            }
+          } else {
+            _selectedFloorId = 'P';
+          }
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('[AdminParkingManager] Error loading malls & layout: $e');
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -922,55 +947,10 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
     final numberController = TextEditingController(text: '$nextNum');
     final latController = TextEditingController();
     final lonController = TextEditingController();
+    final altController = TextEditingController();
     ParkingSlotStatus chosenStatus = ParkingSlotStatus.free;
     bool isHandicap = false;
     bool isManualEdit = false;
-
-    // Checks if the surveyor's current phone GPS is at the same spot as an existing stall (< 4.5m).
-    // If so, the phone has NOT moved to a new stall yet.
-    ParkingSlot? findConflictingSlot(GeodeticCoords coords, String floor) {
-      final slots = _parkingService.fetchFloorMap(floor, _activeMall?.id);
-      ParkingSlot? nearest;
-      double minD = double.infinity;
-      for (final s in slots) {
-        final d = haversineDistance(coords, s.location);
-        if (d < 4.5 && d < minD) {
-          minD = d;
-          nearest = s;
-        }
-      }
-      return nearest;
-    }
-
-    // Resolves coordinates:
-    // - If phone has NOT moved from an existing stall (d < 4.5m), auto-separates (+2.5m per col, +5m per row)
-    //   so each stall is at a separate, non-overlapping point.
-    // - If phone HAS moved to a new spot (d >= 4.5m), locks directly to the exact live phone GPS (0m).
-    GeodeticCoords calculateStallCoords({
-      required GeodeticCoords baseGps,
-      required String floor,
-      required String sec,
-      required int stallNum,
-    }) {
-      final conflict = findConflictingSlot(baseGps, floor);
-      if (conflict == null) {
-        return baseGps;
-      }
-      final cleanSec = sec.trim().toUpperCase();
-      final int secIdx = (cleanSec.isNotEmpty &&
-              cleanSec.codeUnitAt(0) >= 65 &&
-              cleanSec.codeUnitAt(0) <= 90)
-          ? (cleanSec.codeUnitAt(0) - 65)
-          : 0;
-      final int offsetIndex = (stallNum - 1).clamp(0, 9999);
-      final int row = offsetIndex ~/ 4;
-      final int col = offsetIndex % 4;
-      return GeodeticCoords(
-        latitude: baseGps.latitude + (row * 0.000045),
-        longitude: baseGps.longitude + (secIdx * 0.000150) + (col * 0.000025),
-        height: baseGps.height,
-      );
-    }
 
     final bool hasFreshFix = _liveSurveyorCoords != null &&
         _liveSurveyorFixTime != null &&
@@ -978,17 +958,13 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
         (_liveSurveyorAccuracy ?? 99) <= 8.0;
 
     GeodeticCoords? rawBaseCoords = _liveSurveyorCoords ?? widget.userCoords;
-    GeodeticCoords? spotCoords;
+    GeodeticCoords? spotCoords = rawBaseCoords;
     if (rawBaseCoords != null) {
-      final curNum = int.tryParse(numberController.text.trim()) ?? nextNum;
-      spotCoords = calculateStallCoords(
-        baseGps: rawBaseCoords,
-        floor: chosenFloor,
-        sec: sectionController.text,
-        stallNum: curNum,
-      );
-      latController.text = spotCoords.latitude.toStringAsFixed(6);
-      lonController.text = spotCoords.longitude.toStringAsFixed(6);
+      latController.text = rawBaseCoords.latitude.toStringAsFixed(6);
+      lonController.text = rawBaseCoords.longitude.toStringAsFixed(6);
+      if (rawBaseCoords.height != 0.0) {
+        altController.text = rawBaseCoords.height.toStringAsFixed(1);
+      }
     }
 
     bool useCurrentLocation = true;
@@ -1017,57 +993,41 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                   height: pos.altitude,
                 );
 
-                // Stationary filter: ignore small GPS sensor jitter (< 3.0m).
-                // ONLY update coordinates if the phone actually moved to a new position.
-                if (rawBaseCoords != null) {
-                  final distanceMoved = haversineDistance(rawBaseCoords!, newGps);
-                  if (distanceMoved < 3.0) {
-                    return; // Phone is stationary: keep point locked
-                  }
-                }
-
                 setDialogState(() {
                   rawBaseCoords = newGps;
                   isCapturingGps = false;
-                  if (!isManualEdit && rawBaseCoords != null) {
-                    final curNum = int.tryParse(numberController.text.trim()) ?? nextNum;
-                    spotCoords = calculateStallCoords(
-                      baseGps: rawBaseCoords!,
-                      floor: chosenFloor,
-                      sec: sectionController.text,
-                      stallNum: curNum,
-                    );
-                    latController.text = spotCoords!.latitude.toStringAsFixed(6);
-                    lonController.text = spotCoords!.longitude.toStringAsFixed(6);
+                  if (!isManualEdit) {
+                    spotCoords = newGps;
+                    latController.text = newGps.latitude.toStringAsFixed(6);
+                    lonController.text = newGps.longitude.toStringAsFixed(6);
+                    if (newGps.height != 0.0) {
+                      altController.text = newGps.height.toStringAsFixed(1);
+                    }
                   }
                 });
               }
             });
 
-            if (!hasFreshFix) {
-              WidgetsBinding.instance.addPostFrameCallback((_) async {
-                final fresh = await _captureLiveCoordinates(forceFresh: true);
-                if (ctx.mounted && useCurrentLocation) {
-                  setDialogState(() {
-                    if (fresh != null) {
-                      rawBaseCoords = fresh;
-                      if (!isManualEdit) {
-                        final curNum = int.tryParse(numberController.text.trim()) ?? nextNum;
-                        spotCoords = calculateStallCoords(
-                          baseGps: fresh,
-                          floor: chosenFloor,
-                          sec: sectionController.text,
-                          stallNum: curNum,
-                        );
-                        latController.text = spotCoords!.latitude.toStringAsFixed(6);
-                        lonController.text = spotCoords!.longitude.toStringAsFixed(6);
+            // Automatically lock onto high-accuracy phone GPS right upon opening
+            WidgetsBinding.instance.addPostFrameCallback((_) async {
+              final fresh = await _captureLiveCoordinates(forceFresh: true);
+              if (ctx.mounted && useCurrentLocation) {
+                setDialogState(() {
+                  if (fresh != null) {
+                    rawBaseCoords = fresh;
+                    if (!isManualEdit) {
+                      spotCoords = fresh;
+                      latController.text = fresh.latitude.toStringAsFixed(6);
+                      lonController.text = fresh.longitude.toStringAsFixed(6);
+                      if (fresh.height != 0.0) {
+                        altController.text = fresh.height.toStringAsFixed(1);
                       }
                     }
-                    isCapturingGps = false;
-                  });
-                }
-              });
-            }
+                  }
+                  isCapturingGps = false;
+                });
+              }
+            });
           }
           return AlertDialog(
           shape: RoundedRectangleBorder(
@@ -1136,17 +1096,6 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                           sectionController.text,
                           numberController,
                         );
-                        if (!isManualEdit && rawBaseCoords != null) {
-                          final curNum = int.tryParse(numberController.text.trim()) ?? nextNum;
-                          spotCoords = calculateStallCoords(
-                            baseGps: rawBaseCoords!,
-                            floor: chosenFloor,
-                            sec: sectionController.text,
-                            stallNum: curNum,
-                          );
-                          latController.text = spotCoords!.latitude.toStringAsFixed(6);
-                          lonController.text = spotCoords!.longitude.toStringAsFixed(6);
-                        }
                       });
                     }
                   },
@@ -1180,17 +1129,6 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                               sectionController.text,
                               numberController,
                             );
-                            if (!isManualEdit && rawBaseCoords != null) {
-                              final curNum = int.tryParse(numberController.text.trim()) ?? nextNum;
-                              spotCoords = calculateStallCoords(
-                                baseGps: rawBaseCoords!,
-                                floor: chosenFloor,
-                                sec: sectionController.text,
-                                stallNum: curNum,
-                              );
-                              latController.text = spotCoords!.latitude.toStringAsFixed(6);
-                              lonController.text = spotCoords!.longitude.toStringAsFixed(6);
-                            }
                           });
                         }
                       },
@@ -1253,17 +1191,6 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                                   val,
                                   numberController,
                                 );
-                                if (!isManualEdit && rawBaseCoords != null) {
-                                  final curNum = int.tryParse(numberController.text.trim()) ?? nextNum;
-                                  spotCoords = calculateStallCoords(
-                                    baseGps: rawBaseCoords!,
-                                    floor: chosenFloor,
-                                    sec: val,
-                                    stallNum: curNum,
-                                  );
-                                  latController.text = spotCoords!.latitude.toStringAsFixed(6);
-                                  lonController.text = spotCoords!.longitude.toStringAsFixed(6);
-                                }
                               });
                             },
                             decoration: InputDecoration(
@@ -1299,19 +1226,7 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                             controller: numberController,
                             keyboardType: TextInputType.number,
                             onChanged: (val) {
-                              setDialogState(() {
-                                if (!isManualEdit && rawBaseCoords != null) {
-                                  final curNum = int.tryParse(val.trim()) ?? nextNum;
-                                  spotCoords = calculateStallCoords(
-                                    baseGps: rawBaseCoords!,
-                                    floor: chosenFloor,
-                                    sec: sectionController.text,
-                                    stallNum: curNum,
-                                  );
-                                  latController.text = spotCoords!.latitude.toStringAsFixed(6);
-                                  lonController.text = spotCoords!.longitude.toStringAsFixed(6);
-                                }
-                              });
+                              setDialogState(() {});
                             },
                             decoration: InputDecoration(
                               hintText: 'e.g. 1',
@@ -1357,17 +1272,6 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                                 sec,
                                 numberController,
                               );
-                              if (!isManualEdit && rawBaseCoords != null) {
-                                final curNum = int.tryParse(numberController.text.trim()) ?? nextNum;
-                                spotCoords = calculateStallCoords(
-                                  baseGps: rawBaseCoords!,
-                                  floor: chosenFloor,
-                                  sec: sec,
-                                  stallNum: curNum,
-                                );
-                                latController.text = spotCoords!.latitude.toStringAsFixed(6);
-                                lonController.text = spotCoords!.longitude.toStringAsFixed(6);
-                              }
                             });
                           },
                           child: Container(
@@ -1416,17 +1320,6 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                                 cleanSec,
                                 numberController,
                               );
-                              if (!isManualEdit && rawBaseCoords != null) {
-                                final curNum = int.tryParse(numberController.text.trim()) ?? nextNum;
-                                spotCoords = calculateStallCoords(
-                                  baseGps: rawBaseCoords!,
-                                  floor: chosenFloor,
-                                  sec: cleanSec,
-                                  stallNum: curNum,
-                                );
-                                latController.text = spotCoords!.latitude.toStringAsFixed(6);
-                                lonController.text = spotCoords!.longitude.toStringAsFixed(6);
-                              }
                             });
                           }
                         },
@@ -1492,14 +1385,6 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                       value: ParkingSlotStatus.free,
                       child: Text('Free / Available'),
                     ),
-                    DropdownMenuItem(
-                      value: ParkingSlotStatus.occupied,
-                      child: Text('Occupied'),
-                    ),
-                    DropdownMenuItem(
-                      value: ParkingSlotStatus.reserved,
-                      child: Text('Reserved / VIP'),
-                    ),
                   ],
                   onChanged: (val) =>
                       setDialogState(() => chosenStatus = val ?? chosenStatus),
@@ -1560,26 +1445,16 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                                       height: pos.altitude,
                                     );
 
-                                    // Stationary deadband filter: ignore small GPS jitter (< 3.0m)
-                                    if (rawBaseCoords != null) {
-                                      final moved = haversineDistance(rawBaseCoords!, curGps);
-                                      if (moved < 3.0) return;
-                                    }
-
                                     setDialogState(() {
                                       rawBaseCoords = curGps;
                                       isCapturingGps = false;
                                       if (!isManualEdit) {
-                                        final curNum = int.tryParse(numberController.text.trim()) ?? 1;
-                                        final computed = calculateStallCoords(
-                                          baseGps: curGps,
-                                          floor: chosenFloor,
-                                          sec: sectionController.text.trim(),
-                                          stallNum: curNum,
-                                        );
-                                        spotCoords = computed;
-                                        latController.text = computed.latitude.toStringAsFixed(6);
-                                        lonController.text = computed.longitude.toStringAsFixed(6);
+                                        spotCoords = curGps;
+                                        latController.text = curGps.latitude.toStringAsFixed(6);
+                                        lonController.text = curGps.longitude.toStringAsFixed(6);
+                                        if (curGps.height != 0.0) {
+                                          altController.text = curGps.height.toStringAsFixed(1);
+                                        }
                                       }
                                     });
                                   }
@@ -1593,16 +1468,12 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                                     if (live != null) {
                                       rawBaseCoords = live;
                                       if (!isManualEdit) {
-                                        final curNum = int.tryParse(numberController.text.trim()) ?? 1;
-                                        final computed = calculateStallCoords(
-                                          baseGps: live,
-                                          floor: chosenFloor,
-                                          sec: sectionController.text.trim(),
-                                          stallNum: curNum,
-                                        );
-                                        spotCoords = computed;
-                                        latController.text = computed.latitude.toStringAsFixed(6);
-                                        lonController.text = computed.longitude.toStringAsFixed(6);
+                                        spotCoords = live;
+                                        latController.text = live.latitude.toStringAsFixed(6);
+                                        lonController.text = live.longitude.toStringAsFixed(6);
+                                        if (live.height != 0.0) {
+                                          altController.text = live.height.toStringAsFixed(1);
+                                        }
                                       }
                                     }
                                   });
@@ -1646,13 +1517,9 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                             ],
                           )
                         else ...[
-                          // Status indicator: Auto-Separated vs Manual Custom vs Exact Spot Point Locked
+                          // Status indicator: Custom coordinates vs Phone Live GPS Locked
                           Builder(
                             builder: (context) {
-                              final conflict = rawBaseCoords != null
-                                  ? findConflictingSlot(rawBaseCoords!, chosenFloor)
-                                  : null;
-
                               final Color bgColor;
                               final Color borderColor;
                               final Color textColor;
@@ -1664,19 +1531,22 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                                 borderColor = const Color(0xFFFDE68A);
                                 textColor = const Color(0xFF92400E);
                                 iconData = LucideIcons.pencil;
-                                statusText = 'Custom coordinates set';
-                              } else if (conflict != null) {
-                                bgColor = const Color(0xFFEFF6FF);
-                                borderColor = const Color(0xFFBFDBFE);
-                                textColor = const Color(0xFF1E40AF);
-                                iconData = LucideIcons.split;
-                                statusText = 'Auto-Separated (+2.5m) • Same spot as ${conflict.id} (Move phone to lock 0m)';
-                              } else {
+                                statusText = 'Custom coordinates entered';
+                              } else if (rawBaseCoords != null) {
                                 bgColor = const Color(0xFFF0FDF4);
                                 borderColor = const Color(0xFFBBF7D0);
                                 textColor = const Color(0xFF15803D);
                                 iconData = LucideIcons.checkCircle2;
-                                statusText = 'Exact Spot Point Locked • Distance: 0m (Exact Point)';
+                                final acc = _liveSurveyorAccuracy != null
+                                    ? ' (±${_liveSurveyorAccuracy!.toStringAsFixed(1)}m accuracy)'
+                                    : '';
+                                statusText = 'Phone Live GPS Locked$acc';
+                              } else {
+                                bgColor = const Color(0xFFEFF6FF);
+                                borderColor = const Color(0xFFBFDBFE);
+                                textColor = const Color(0xFF1E40AF);
+                                iconData = LucideIcons.mapPin;
+                                statusText = 'Acquiring phone GPS...';
                               }
 
                               return Container(
@@ -1709,20 +1579,16 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                                         onTap: () {
                                           setDialogState(() {
                                             isManualEdit = false;
-                                            final curNum = int.tryParse(numberController.text.trim()) ?? 1;
-                                            final computed = calculateStallCoords(
-                                              baseGps: rawBaseCoords!,
-                                              floor: chosenFloor,
-                                              sec: sectionController.text.trim(),
-                                              stallNum: curNum,
-                                            );
-                                            spotCoords = computed;
-                                            latController.text = computed.latitude.toStringAsFixed(6);
-                                            lonController.text = computed.longitude.toStringAsFixed(6);
+                                            spotCoords = rawBaseCoords;
+                                            latController.text = rawBaseCoords!.latitude.toStringAsFixed(6);
+                                            lonController.text = rawBaseCoords!.longitude.toStringAsFixed(6);
+                                            if (rawBaseCoords!.height != 0.0) {
+                                              altController.text = rawBaseCoords!.height.toStringAsFixed(1);
+                                            }
                                           });
                                         },
                                         child: Text(
-                                          'Reset GPS',
+                                          'Reset to Phone GPS',
                                           style: GoogleFonts.plusJakartaSans(
                                             fontSize: 10.5,
                                             fontWeight: FontWeight.w800,
@@ -1868,6 +1734,69 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                               ),
                             ],
                           ),
+                          const SizedBox(height: 8),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Altitude / Height (m)',
+                                style: GoogleFonts.plusJakartaSans(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: const Color(0xFF475569),
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              TextField(
+                                controller: altController,
+                                keyboardType: const TextInputType.numberWithOptions(
+                                  decimal: true,
+                                  signed: true,
+                                ),
+                                style: GoogleFonts.jetBrainsMono(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: const Color(0xFF0F172A),
+                                ),
+                                decoration: InputDecoration(
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 8,
+                                  ),
+                                  hintText: 'e.g. 6.2',
+                                  filled: true,
+                                  fillColor: Colors.white,
+                                  isDense: true,
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                    borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
+                                  ),
+                                  focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                    borderSide: const BorderSide(
+                                      color: Color(0xFF2563EB),
+                                      width: 1.5,
+                                    ),
+                                  ),
+                                ),
+                                onChanged: (val) {
+                                  final p = double.tryParse(val.trim());
+                                  if (p != null) {
+                                    setDialogState(() {
+                                      isManualEdit = true;
+                                      spotCoords = GeodeticCoords(
+                                        latitude: double.tryParse(latController.text.trim()) ??
+                                            (spotCoords?.latitude ?? 0.0),
+                                        longitude: double.tryParse(lonController.text.trim()) ??
+                                            (spotCoords?.longitude ?? 0.0),
+                                        height: p,
+                                      );
+                                    });
+                                  }
+                                },
+                              ),
+                            ],
+                          ),
                           const SizedBox(height: 10),
                           Align(
                             alignment: Alignment.centerLeft,
@@ -1884,16 +1813,12 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                                           isCapturingGps = false;
                                           if (live != null) {
                                             rawBaseCoords = live;
-                                            final curNum = int.tryParse(numberController.text.trim()) ?? 1;
-                                            final computed = calculateStallCoords(
-                                              baseGps: live,
-                                              floor: chosenFloor,
-                                              sec: sectionController.text.trim(),
-                                              stallNum: curNum,
-                                            );
-                                            spotCoords = computed;
-                                            latController.text = computed.latitude.toStringAsFixed(6);
-                                            lonController.text = computed.longitude.toStringAsFixed(6);
+                                            spotCoords = live;
+                                            latController.text = live.latitude.toStringAsFixed(6);
+                                            lonController.text = live.longitude.toStringAsFixed(6);
+                                            if (live.height != 0.0) {
+                                              altController.text = live.height.toStringAsFixed(1);
+                                            }
                                             isManualEdit = false;
                                           }
                                         });
@@ -1990,42 +1915,50 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                 final floorAlt = _resolveFloorAltitude(chosenFloor);
                 final enteredLat = double.tryParse(latController.text.trim());
                 final enteredLon = double.tryParse(lonController.text.trim());
-                var targetCoords = (useCurrentLocation && enteredLat != null && enteredLon != null)
-                    ? GeodeticCoords(
-                        latitude: enteredLat,
-                        longitude: enteredLon,
-                        height: floorAlt,
-                      )
-                    : (useCurrentLocation && spotCoords != null)
-                        ? spotCoords!
-                        : GeodeticCoords(
-                            latitude: _activeMall!.latitude,
-                            longitude: _activeMall!.longitude,
-                            height: floorAlt,
-                          );
+                final enteredAlt = double.tryParse(altController.text.trim());
+                final double targetLat;
+                final double targetLon;
+                final double targetAlt;
+
+                if (useCurrentLocation) {
+                  if (enteredLat != null && enteredLon != null) {
+                    targetLat = enteredLat;
+                    targetLon = enteredLon;
+                    targetAlt = enteredAlt ??
+                        ((spotCoords != null && spotCoords!.height != 0.0)
+                            ? spotCoords!.height
+                            : (_liveSurveyorCoords?.height != null &&
+                                    _liveSurveyorCoords!.height != 0.0
+                                ? _liveSurveyorCoords!.height
+                                : floorAlt));
+                  } else if (spotCoords != null) {
+                    targetLat = spotCoords!.latitude;
+                    targetLon = spotCoords!.longitude;
+                    targetAlt = enteredAlt ??
+                        (spotCoords!.height != 0.0
+                            ? spotCoords!.height
+                            : floorAlt);
+                  } else if (_liveSurveyorCoords != null) {
+                    targetLat = _liveSurveyorCoords!.latitude;
+                    targetLon = _liveSurveyorCoords!.longitude;
+                    targetAlt = enteredAlt ??
+                        (_liveSurveyorCoords!.height != 0.0
+                            ? _liveSurveyorCoords!.height
+                            : floorAlt);
+                  } else {
+                    targetLat = _activeMall!.latitude;
+                    targetLon = _activeMall!.longitude;
+                    targetAlt = enteredAlt ?? floorAlt;
+                  }
+                } else {
+                  targetLat = enteredLat ?? _activeMall!.latitude;
+                  targetLon = enteredLon ?? _activeMall!.longitude;
+                  targetAlt = enteredAlt ?? floorAlt;
+                }
 
                 final int offsetIdx = (slotNum - 1).clamp(0, 9999);
                 final int r = offsetIdx ~/ 4;
                 final int c = offsetIdx % 4;
-
-                // Ensure no two stalls ever occupy the identical coordinate on the same floor
-                final floorSlots = _parkingService
-                    .fetchFloorMap(chosenFloor, _activeMall?.id)
-                    .where((s) => s.id != slotId)
-                    .toList();
-                final bool hasExactDuplicate = floorSlots.any((s) =>
-                    (s.location.latitude - targetCoords.latitude).abs() < 0.000005 &&
-                    (s.location.longitude - targetCoords.longitude).abs() < 0.000005);
-
-                if (hasExactDuplicate && !isManualEdit) {
-                  final double dLat = (r * 0.000045) + 0.000025;
-                  final double dLon = (c * 0.000025) + 0.000025;
-                  targetCoords = GeodeticCoords(
-                    latitude: targetCoords.latitude + dLat,
-                    longitude: targetCoords.longitude + dLon,
-                    height: floorAlt,
-                  );
-                }
 
                 final newSlot = ParkingSlot(
                   id: slotId,
@@ -2035,9 +1968,9 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                   slotNumber: slotNum,
                   status: chosenStatus,
                   location: GeodeticCoords(
-                    latitude: targetCoords.latitude,
-                    longitude: targetCoords.longitude,
-                    height: floorAlt,
+                    latitude: targetLat,
+                    longitude: targetLon,
+                    height: targetAlt,
                   ),
                   gridRow: r,
                   gridCol: c,
@@ -2113,8 +2046,6 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
     }
     final isOccupied =
         slot.status == ParkingSlotStatus.occupied || parkedVehicle != null;
-    final isReserved = slot.status == ParkingSlotStatus.reserved && !isOccupied;
-    final isFree = !isOccupied && !isReserved;
 
     showModalBottomSheet(
       context: context,
@@ -2228,61 +2159,19 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Row(
-                        children: [
-                          const Icon(
-                            LucideIcons.mapPin,
-                            size: 14,
-                            color: Color(0xFF2563EB),
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            'Bay Coordinates',
-                            style: GoogleFonts.plusJakartaSans(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              color: const Color(0xFF0F172A),
-                            ),
-                          ),
-                        ],
+                      const Icon(
+                        LucideIcons.mapPin,
+                        size: 14,
+                        color: Color(0xFF2563EB),
                       ),
-                      InkWell(
-                        onTap: () {
-                          Navigator.pop(ctx);
-                          _showEditSlotCoordsDialog(slot);
-                        },
-                        borderRadius: BorderRadius.circular(6),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 3.5,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFEFF6FF),
-                            borderRadius: BorderRadius.circular(6),
-                            border: Border.all(color: const Color(0xFFBFDBFE)),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(
-                                LucideIcons.pencil,
-                                size: 11,
-                                color: Color(0xFF2563EB),
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                'Change / Separate',
-                                style: GoogleFonts.plusJakartaSans(
-                                  fontSize: 10.5,
-                                  fontWeight: FontWeight.w700,
-                                  color: const Color(0xFF2563EB),
-                                ),
-                              ),
-                            ],
-                          ),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Bay Coordinates',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: const Color(0xFF0F172A),
                         ),
                       ),
                     ],
@@ -2296,12 +2185,136 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                       color: const Color(0xFF475569),
                     ),
                   ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: InkWell(
+                          onTap: () async {
+                            Navigator.pop(ctx);
+                            final live = await _captureLiveCoordinates(forceFresh: true);
+                            if (live != null) {
+                              final offsetIdx = (slot.slotNumber - 1).clamp(0, 9999);
+                              final updatedSlot = ParkingSlot(
+                                id: slot.id,
+                                mallId: slot.mallId,
+                                floorId: slot.floorId,
+                                section: slot.section,
+                                slotNumber: slot.slotNumber,
+                                status: slot.status,
+                                location: GeodeticCoords(
+                                  latitude: live.latitude,
+                                  longitude: live.longitude,
+                                  height: live.height != 0.0 ? live.height : slot.location.height,
+                                ),
+                                gridRow: offsetIdx ~/ 4,
+                                gridCol: offsetIdx % 4,
+                                isEVCharging: slot.isEVCharging,
+                                isHandicapAccessible: slot.isHandicapAccessible,
+                                sensorId: slot.sensorId,
+                              );
+                              await _parkingService.addParkingSlot(_activeMall!.id, updatedSlot);
+                              if (mounted) {
+                                setState(() {});
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      'Stall ${slot.id} snapped to phone GPS: Lat: ${live.latitude.toStringAsFixed(6)}, Lon: ${live.longitude.toStringAsFixed(6)}',
+                                    ),
+                                    backgroundColor: const Color(0xFF10B981),
+                                    duration: const Duration(milliseconds: 2000),
+                                  ),
+                                );
+                              }
+                            }
+                          },
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 7,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF0FDF4),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: const Color(0xFFBBF7D0)),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(
+                                  LucideIcons.locateFixed,
+                                  size: 13,
+                                  color: Color(0xFF15803D),
+                                ),
+                                const SizedBox(width: 5),
+                                Flexible(
+                                  child: Text(
+                                    'Snap to Phone GPS',
+                                    overflow: TextOverflow.ellipsis,
+                                    style: GoogleFonts.plusJakartaSans(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                      color: const Color(0xFF15803D),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: InkWell(
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            _showEditSlotCoordsDialog(slot);
+                          },
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 7,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFEFF6FF),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: const Color(0xFFBFDBFE)),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(
+                                  LucideIcons.pencil,
+                                  size: 13,
+                                  color: Color(0xFF2563EB),
+                                ),
+                                const SizedBox(width: 5),
+                                Flexible(
+                                  child: Text(
+                                    'Change / Separate',
+                                    overflow: TextOverflow.ellipsis,
+                                    style: GoogleFonts.plusJakartaSans(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                      color: const Color(0xFF2563EB),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),
-            const Divider(),
-            const SizedBox(height: 10),
-            if (isOccupied)
+            if (isOccupied) ...[
+              const Divider(),
+              const SizedBox(height: 10),
               Container(
                 margin: const EdgeInsets.only(bottom: 14),
                 padding: const EdgeInsets.all(12),
@@ -2481,7 +2494,6 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                   ],
                 ),
               ),
-            if (isOccupied) ...[
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
@@ -2530,156 +2542,8 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                   },
                 ),
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 10),
             ],
-            Text(
-              'UPDATE OCCUPANCY STATUS',
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
-                color: const Color(0xFF94A3B8),
-                letterSpacing: 0.8,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      slot.status = ParkingSlotStatus.free;
-                      if (mounted) {
-                        setState(() {});
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              'Stall ${slot.id} unlocked and marked Free',
-                            ),
-                            backgroundColor: const Color(0xFF10B981),
-                            duration: const Duration(milliseconds: 1400),
-                          ),
-                        );
-                      }
-                      _parkingService.updateSlotStatus(
-                        _activeMall!.id,
-                        slot.id,
-                        ParkingSlotStatus.free,
-                      );
-                    },
-                    style: OutlinedButton.styleFrom(
-                      backgroundColor: isFree
-                          ? const Color(0xFFECFDF5)
-                          : Colors.white,
-                      side: BorderSide(
-                        color: isFree
-                            ? const Color(0xFF10B981)
-                            : const Color(0xFFCBD5E1),
-                      ),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                    child: const Text(
-                      'Free / Vacant',
-                      style: TextStyle(
-                        color: Color(0xFF059669),
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      slot.status = ParkingSlotStatus.occupied;
-                      if (mounted) {
-                        setState(() {});
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              'Stall ${slot.id} locked and marked Occupied',
-                            ),
-                            backgroundColor: const Color(0xFF0F172A),
-                            duration: const Duration(milliseconds: 1400),
-                          ),
-                        );
-                      }
-                      _parkingService.updateSlotStatus(
-                        _activeMall!.id,
-                        slot.id,
-                        ParkingSlotStatus.occupied,
-                      );
-                    },
-                    style: OutlinedButton.styleFrom(
-                      backgroundColor: isOccupied
-                          ? const Color(0xFF0F172A)
-                          : Colors.white,
-                      side: BorderSide(
-                        color: isOccupied
-                            ? const Color(0xFF0F172A)
-                            : const Color(0xFFCBD5E1),
-                      ),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                    child: Text(
-                      'Occupied',
-                      style: TextStyle(
-                        color: isOccupied
-                            ? Colors.white
-                            : const Color(0xFF0F172A),
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      slot.status = ParkingSlotStatus.reserved;
-                      if (mounted) {
-                        setState(() {});
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              'Stall ${slot.id} marked as Reserved',
-                            ),
-                            backgroundColor: const Color(0xFFD97706),
-                            duration: const Duration(milliseconds: 1400),
-                          ),
-                        );
-                      }
-                      _parkingService.updateSlotStatus(
-                        _activeMall!.id,
-                        slot.id,
-                        ParkingSlotStatus.reserved,
-                      );
-                    },
-                    style: OutlinedButton.styleFrom(
-                      backgroundColor: isReserved
-                          ? const Color(0xFFFEF3C7)
-                          : Colors.white,
-                      side: BorderSide(
-                        color: isReserved
-                            ? const Color(0xFFF59E0B)
-                            : const Color(0xFFCBD5E1),
-                      ),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                    child: const Text(
-                      'Reserved',
-                      style: TextStyle(
-                        color: Color(0xFFD97706),
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
           ],
         ),
       ),
@@ -2697,6 +2561,11 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
     final lonCtrl = TextEditingController(
       text: slot.location.longitude.toStringAsFixed(6),
     );
+    final altCtrl = TextEditingController(
+      text: slot.location.height.toStringAsFixed(1),
+    );
+    bool isCapturingGps = false;
+    String? statusMsg;
 
     showDialog(
       context: context,
@@ -2750,12 +2619,92 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Fine-tune or change the exact GPS location of this bay:',
+                  'Fine-tune or snap the GPS coordinates to where your phone is standing:',
                   style: GoogleFonts.plusJakartaSans(
                     fontSize: 12,
                     color: const Color(0xFF475569),
                   ),
                 ),
+                const SizedBox(height: 10),
+                // Snap to Live Phone GPS Button
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: isCapturingGps
+                        ? null
+                        : () async {
+                            setDlgState(() => isCapturingGps = true);
+                            final live = await _captureLiveCoordinates(forceFresh: true);
+                            if (dlgCtx.mounted) {
+                              setDlgState(() {
+                                isCapturingGps = false;
+                                if (live != null) {
+                                  latCtrl.text = live.latitude.toStringAsFixed(6);
+                                  lonCtrl.text = live.longitude.toStringAsFixed(6);
+                                  if (live.height != 0.0) {
+                                    altCtrl.text = live.height.toStringAsFixed(1);
+                                  }
+                                  final acc = _liveSurveyorAccuracy != null
+                                      ? ' (±${_liveSurveyorAccuracy!.toStringAsFixed(1)}m)'
+                                      : '';
+                                  statusMsg = 'Snapped to phone GPS$acc';
+                                }
+                              });
+                            }
+                          },
+                    icon: isCapturingGps
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Color(0xFF2563EB),
+                            ),
+                          )
+                        : const Icon(LucideIcons.locateFixed, size: 16, color: Color(0xFF2563EB)),
+                    label: Text(
+                      isCapturingGps ? 'Capturing High-Accuracy GPS...' : 'Snap to Current Phone Location',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: const Color(0xFF2563EB),
+                      ),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 10),
+                      side: const BorderSide(color: Color(0xFFBFDBFE)),
+                      backgroundColor: const Color(0xFFEFF6FF),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ),
+                if (statusMsg != null) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF0FDF4),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFFBBF7D0)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(LucideIcons.checkCircle2, size: 13, color: Color(0xFF15803D)),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            statusMsg!,
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: const Color(0xFF15803D),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 12),
                 Row(
                   children: [
@@ -2838,6 +2787,43 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 10),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Altitude (m)',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFF475569),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    TextField(
+                      controller: altCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                        signed: true,
+                      ),
+                      style: GoogleFonts.jetBrainsMono(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      decoration: InputDecoration(
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
+                        ),
+                        filled: true,
+                        fillColor: const Color(0xFFF8FAFC),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -2857,6 +2843,7 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
               onPressed: () async {
                 final newLat = double.tryParse(latCtrl.text.trim()) ?? slot.location.latitude;
                 final newLon = double.tryParse(lonCtrl.text.trim()) ?? slot.location.longitude;
+                final newAlt = double.tryParse(altCtrl.text.trim()) ?? slot.location.height;
                 final offsetIdx = (slot.slotNumber - 1).clamp(0, 9999);
                 final updatedSlot = ParkingSlot(
                   id: slot.id,
@@ -2868,7 +2855,7 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                   location: GeodeticCoords(
                     latitude: newLat,
                     longitude: newLon,
-                    height: slot.location.height,
+                    height: newAlt,
                   ),
                   gridRow: offsetIdx ~/ 4,
                   gridCol: offsetIdx % 4,
@@ -2898,81 +2885,6 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
         ),
       ),
     );
-  }
-
-  Future<void> _autoSeparateFloorSlots(String floorId, {bool showToast = true}) async {
-    if (_activeMall == null) return;
-    final slots = _parkingService.fetchFloorMap(floorId, _activeMall!.id);
-    if (slots.isEmpty) return;
-
-    final baseLat = _liveSurveyorCoords?.latitude ?? _activeMall!.latitude;
-    final baseLon = _liveSurveyorCoords?.longitude ?? _activeMall!.longitude;
-    final base = GeodeticCoords(
-      latitude: baseLat,
-      longitude: baseLon,
-      height: _resolveFloorAltitude(floorId),
-    );
-
-    // Group by section and sort
-    final bySection = <String, List<ParkingSlot>>{};
-    for (final s in slots) {
-      final sec = s.section.trim().toUpperCase().isEmpty ? 'A' : s.section.trim().toUpperCase();
-      bySection.putIfAbsent(sec, () => []).add(s);
-    }
-
-    int updatedCount = 0;
-    for (final entry in bySection.entries) {
-      final sec = entry.key;
-      final secSlots = entry.value..sort((a, b) => a.slotNumber.compareTo(b.slotNumber));
-      final int secIdx = (sec.isNotEmpty && sec.codeUnitAt(0) >= 65 && sec.codeUnitAt(0) <= 90)
-          ? (sec.codeUnitAt(0) - 65)
-          : 0;
-
-      for (int i = 0; i < secSlots.length; i++) {
-        final s = secSlots[i];
-        final num = s.slotNumber > 0 ? s.slotNumber : (i + 1);
-        final int offsetIndex = (num - 1).clamp(0, 9999);
-        final int row = offsetIndex ~/ 4;
-        final int col = offsetIndex % 4;
-        final newCoords = GeodeticCoords(
-          latitude: base.latitude + (row * 0.000045),
-          longitude: base.longitude + (secIdx * 0.000150) + (col * 0.000025),
-          height: base.height,
-        );
-
-        final updatedSlot = ParkingSlot(
-          id: s.id,
-          mallId: s.mallId,
-          floorId: s.floorId,
-          section: s.section,
-          slotNumber: s.slotNumber,
-          status: s.status,
-          location: newCoords,
-          gridRow: row,
-          gridCol: col,
-          isEVCharging: s.isEVCharging,
-          isHandicapAccessible: s.isHandicapAccessible,
-          sensorId: s.sensorId,
-        );
-        await _parkingService.addParkingSlot(_activeMall!.id, updatedSlot);
-        updatedCount++;
-      }
-    }
-
-    if (mounted) {
-      setState(() {});
-      if (showToast) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Auto-separated $updatedCount parking bays into distinct coordinates!',
-            ),
-            backgroundColor: const Color(0xFF10B981),
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      }
-    }
   }
 
   @override
@@ -3301,39 +3213,11 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
                                         const SizedBox(width: 8),
                                         Expanded(
                                           child: Text(
-                                            'Multiple bays on this floor share identical coordinates.',
+                                            'Multiple bays on this floor share identical coordinates. Tap any bay below and tap "Snap to Phone GPS" when standing at that stall.',
                                             style: GoogleFonts.plusJakartaSans(
                                               fontSize: 11,
                                               fontWeight: FontWeight.w600,
                                               color: const Color(0xFF92400E),
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 6),
-                                        InkWell(
-                                          onTap: () => _autoSeparateFloorSlots(
-                                            _selectedFloorId,
-                                          ),
-                                          borderRadius:
-                                              BorderRadius.circular(6),
-                                          child: Container(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 8,
-                                              vertical: 4,
-                                            ),
-                                            decoration: BoxDecoration(
-                                              color: const Color(0xFFD97706),
-                                              borderRadius:
-                                                  BorderRadius.circular(6),
-                                            ),
-                                            child: Text(
-                                              'Auto-Separate All',
-                                              style:
-                                                  GoogleFonts.plusJakartaSans(
-                                                fontSize: 10.5,
-                                                fontWeight: FontWeight.w800,
-                                                color: Colors.white,
-                                              ),
                                             ),
                                           ),
                                         ),

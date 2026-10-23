@@ -11,6 +11,7 @@ import '../../data/mall_api_service.dart';
 import '../../data/mall_database_service.dart';
 import '../../engine/ar_sensor_engine.dart';
 import '../../engine/real_sensor_service.dart';
+import '../../engine/phone_motion_floor_tracker.dart';
 
 class AdminFloorHeightsScreen extends StatefulWidget {
   final String mallId;
@@ -52,14 +53,17 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
 
   // Current User Location & Elevation Fusion State
   StreamSubscription<Position>? _positionSubscription;
+  StreamSubscription<double>? _motionSubscription;
+  double? _lastMeasuredMotionGap;
   Position? _currentUserPosition;
   double _userLocationAltitudeM = 0.0;
   bool _hasLocationFix = false;
 
-  final BarometricElevationEngine _elevationEngine = BarometricElevationEngine();
+  final BarometricElevationEngine _elevationEngine =
+      BarometricElevationEngine();
 
-  /// Real-world ground elevation computed dynamically using the phone's barometer
-  /// and the user's location (GNSS Geodetic Datum + Barometric Hypsometric Model fusion)
+  /// Real-world ground elevation computed dynamically using geoid-compensated GNSS,
+  /// regional digital terrain model, and the smartphone barometer hypsometric model
   double get _computedRealWorldElevation {
     double lat = _currentUserPosition?.latitude ?? 0.0;
     double lon = _currentUserPosition?.longitude ?? 0.0;
@@ -72,54 +76,71 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
       lon = mall.longitude;
     }
 
-    // 1. Resolve base anchor elevation from user's location or mall anchor
-    double baseAnchor = 0.0;
-    if (lat != 0.0 && lon != 0.0) {
-      baseAnchor = GeocodingService.resolveTerrainAltitudeFromCoords(
-        lat,
-        lon,
-      );
-    }
-    if (baseAnchor <= 0.0 && mall != null && mall.entranceBaseAnchorHeight > 0) {
-      baseAnchor = mall.entranceBaseAnchorHeight;
-    }
-    if (baseAnchor <= 0.0) {
-      baseAnchor = 8.5; // Sri Lanka / Trincomalee ground anchor
-    }
+    // 1. Resolve base terrain elevation for this specific geographical coordinate
+    final double terrainAlt = (lat != 0.0 && lon != 0.0)
+        ? GeocodingService.resolveTerrainAltitudeFromCoords(
+            lat,
+            lon,
+            rawGpsAltitude: rawGpsAlt,
+            gpsAccuracy: gpsAccuracy,
+          )
+        : 11.4;
 
-    // 2. Calibrate baseline pressure if uncalibrated
-    final effectivePressure =
-        _currentPressureHpa > 300.0 ? _currentPressureHpa : 1013.25;
+    // 2. Resolve base anchor elevation: if venue has a custom anchor (not old legacy 10.0 / 8.5 default)
+    // use it; otherwise dynamically resolve from real regional terrain & geoid-corrected GPS!
+    final bool isLegacyDefault =
+        mall != null &&
+        (mall.entranceBaseAnchorHeight == 10.0 ||
+            mall.entranceBaseAnchorHeight == 8.5 ||
+            mall.entranceBaseAnchorHeight <= 0.0);
+
+    final double baseAnchor =
+        (mall != null && mall.entranceBaseAnchorHeight > 0 && !isLegacyDefault)
+        ? mall.entranceBaseAnchorHeight
+        : terrainAlt;
+
+    // 3. Calibrate baseline pressure if uncalibrated
+    final effectivePressure = _currentPressureHpa > 300.0
+        ? _currentPressureHpa
+        : 1013.25;
     if (!_elevationEngine.isCalibrated ||
         _elevationEngine.baselineAnchorHeight == 0.0) {
       _elevationEngine.calibrateBaseline(effectivePressure, baseAnchor);
     }
 
-    // 3. Compute dynamic altitude from barometer hypsometric model
+    // 4. Compute dynamic altitude from barometer hypsometric model
     final baroHeight = _elevationEngine.calculateAbsoluteHeight(
       effectivePressure,
     );
 
-    // 4. Fuse with GPS altitude if positive and within reasonable limits (< 4000m)
-    // with good accuracy (< 25m). Negative GPS (like Indian Ocean geoid -84.6m) is filtered.
-    if (rawGpsAlt > 0.0 && rawGpsAlt < 4000.0) {
+    // 5. Compensate GPS geoid undulation: if GPS fix is good (< 25m), fuse with barometer/terrain
+    final correctedGps = GeocodingService.correctGpsAltitude(
+      rawGpsAlt,
+      lat,
+      lon,
+    );
+    if (correctedGps > 0.0) {
       if (gpsAccuracy > 0 && gpsAccuracy < 25.0) {
-        return _elevationEngine.computeFusedLocationHeight(
-          currentPressureHpa: effectivePressure,
-          gpsAltitude: rawGpsAlt,
-          gpsAccuracy: gpsAccuracy,
-        );
+        if (_isBarometerActive && _currentPressureHpa > 300.0) {
+          return _elevationEngine.computeFusedLocationHeight(
+            currentPressureHpa: effectivePressure,
+            gpsAltitude: correctedGps,
+            gpsAccuracy: gpsAccuracy,
+          );
+        }
+        return double.parse(correctedGps.toStringAsFixed(2));
       }
-      return double.parse(rawGpsAlt.toStringAsFixed(2));
+      return double.parse(correctedGps.toStringAsFixed(2));
     }
 
     return double.parse(
-      (baroHeight > 0.0 ? baroHeight : baseAnchor).toStringAsFixed(2),
+      (baroHeight > 0.0 && _isBarometerActive ? baroHeight : baseAnchor)
+          .toStringAsFixed(2),
     );
   }
 
-  /// Dynamic height gap between floors computed using the phone's barometer
-  /// and the user's location (architectural typology & micro-atmospheric pressure delta)
+  /// Dynamic height gap between floors computed using physical phone movement,
+  /// building category typology, and micro-atmospheric pressure changes
   double get _computedDynamicFloorGap {
     double lat = _currentUserPosition?.latitude ?? 0.0;
     double lon = _currentUserPosition?.longitude ?? 0.0;
@@ -134,15 +155,21 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
     if (_elevationEngine.isCalibrated &&
         _elevationEngine.baselinePressure != null &&
         _currentPressureHpa > 300.0) {
-      deltaHpa = (_elevationEngine.baselinePressure! - _currentPressureHpa).abs();
+      deltaHpa = (_elevationEngine.baselinePressure! - _currentPressureHpa)
+          .abs();
     }
 
     final gap = GeocodingService.resolveDynamicFloorGapFromCoords(
       latitude: lat,
       longitude: lon,
-      measuredBarometerDeltaHpa: (deltaHpa != null && deltaHpa > 0.08) ? deltaHpa : null,
+      measuredBarometerDeltaHpa: (deltaHpa != null && deltaHpa > 0.08)
+          ? deltaHpa
+          : null,
+      measuredMotionGapMeters: _lastMeasuredMotionGap,
       livePressureHpa: _currentPressureHpa,
       basePressureHpa: _elevationEngine.baselinePressure,
+      category: mall?.category,
+      venueName: mall?.name,
     );
 
     return double.parse(gap.toStringAsFixed(2));
@@ -201,6 +228,26 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
       }
     }
 
+    // Start physical phone motion vertical tracking & stairs cadence analyzer
+    PhoneMotionFloorTracker().startTracking(
+      onEstimate: (motionGap) {
+        if (!mounted) return;
+        setState(() {
+          _lastMeasuredMotionGap = motionGap;
+        });
+        _autoSyncDefaultFloorsToLocation();
+      },
+    );
+    _motionSubscription = PhoneMotionFloorTracker().onFloorGapEstimated.listen((
+      gap,
+    ) {
+      if (!mounted) return;
+      setState(() {
+        _lastMeasuredMotionGap = gap;
+      });
+      _autoSyncDefaultFloorsToLocation();
+    });
+
     _initBarometer();
     _initLocation();
     _initMalls();
@@ -208,6 +255,9 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
 
   @override
   void dispose() {
+    _motionSubscription?.cancel();
+    _motionSubscription = null;
+    PhoneMotionFloorTracker().stopTracking();
     _barometerSubscription?.cancel();
     _positionSubscription?.cancel();
     super.dispose();
@@ -302,10 +352,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
       if (f.isLocked && f.heightToNextM > 0.0) {
         return f;
       }
-      return f.copyWith(
-        heightToNextM: targetGap,
-        source: 'barometer_gps',
-      );
+      return f.copyWith(heightToNextM: targetGap, source: 'barometer_gps');
     }).toList();
 
     final recomputed = _recalculateCumulativeAltitudes(
@@ -319,8 +366,10 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
       hasChanged = true;
     } else {
       for (int i = 0; i < _floors.length; i++) {
-        if ((_floors[i].baseAltitudeM - recomputed[i].baseAltitudeM).abs() > 0.05 ||
-            (_floors[i].heightToNextM - recomputed[i].heightToNextM).abs() > 0.05) {
+        if ((_floors[i].baseAltitudeM - recomputed[i].baseAltitudeM).abs() >
+                0.05 ||
+            (_floors[i].heightToNextM - recomputed[i].heightToNextM).abs() >
+                0.05) {
           hasChanged = true;
           break;
         }
@@ -338,7 +387,7 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
   }
 
   /// Recalculates cumulative base altitudes sequentially based on floor gaps:
-  /// Floor 1 Base Altitude = venue anchor / ground baseline height from phone barometer & location
+  /// Floor 1 Base Altitude = venue anchor / ground baseline height from location & phone sensors
   /// Floor N Base Altitude = Floor N-1 Base Altitude + Floor N-1 Height To Next
   List<FloorHeightData> _recalculateCumulativeAltitudes(
     List<FloorHeightData> list, {
@@ -352,11 +401,16 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
     final firstFloor = sorted.first;
     double currentAlt;
 
+    final bool isLegacyGroundAlt =
+        firstFloor.baseAltitudeM == 10.0 ||
+        firstFloor.baseAltitudeM == 8.5 ||
+        firstFloor.baseAltitudeM == 15.0;
+
     if (groundBaselineAlt != null && groundBaselineAlt > 0) {
       currentAlt = groundBaselineAlt;
     } else if (firstFloor.baseAltitudeM > 0 &&
         firstFloor.isLocked &&
-        firstFloor.baseAltitudeM != 15.0) {
+        !isLegacyGroundAlt) {
       currentAlt = firstFloor.baseAltitudeM;
     } else {
       currentAlt = _computedRealWorldElevation;
@@ -530,12 +584,18 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
         // Automatically compute unlocked floors using phone barometer & user location
         filtered = filtered.map((f) {
           final isExplicitlyLocked =
-              f.isLocked && f.heightToNextM != 4.5 && f.heightToNextM > 0.0;
+              f.isLocked &&
+              f.heightToNextM != 4.5 &&
+              f.heightToNextM != 3.8 &&
+              f.heightToNextM != 3.80 &&
+              f.heightToNextM > 0.0;
           final gap = isExplicitlyLocked ? f.heightToNextM : configuredGap;
           final isGroundLocked =
               f.floorNo == 1 &&
               f.isLocked &&
               f.baseAltitudeM != 15.0 &&
+              f.baseAltitudeM != 10.0 &&
+              f.baseAltitudeM != 8.5 &&
               f.baseAltitudeM > 0.0;
           final baseAlt = (f.floorNo == 1 && !isGroundLocked)
               ? configuredGroundAlt
@@ -605,13 +665,20 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
           (old) => old.floorNo == f.floorNo,
           orElse: () => f,
         );
-        if (existing.isLocked &&
-            existing.heightToNextM != 4.5 &&
-            existing.heightToNextM > 0.0) {
+        final bool isLegacyLocked =
+            existing.heightToNextM == 3.8 ||
+            existing.heightToNextM == 3.80 ||
+            existing.heightToNextM == 4.5 ||
+            existing.heightToNextM <= 0.0;
+        if (existing.isLocked && !isLegacyLocked) {
           preserved.add(existing);
         } else {
-          final gap =
-              (f.isLocked && f.heightToNextM != 4.5 && f.heightToNextM > 0.0)
+          final isBackendLegacyLocked =
+              f.heightToNextM == 3.8 ||
+              f.heightToNextM == 3.80 ||
+              f.heightToNextM == 4.5 ||
+              f.heightToNextM <= 0.0;
+          final gap = (f.isLocked && !isBackendLegacyLocked)
               ? f.heightToNextM
               : targetGap;
           preserved.add(
@@ -1376,13 +1443,12 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
           bottom: BorderSide(color: Color(0xFFE2E8F0), width: 1),
         ),
         title: Text(
-          'Automatic Height Between Floors',
+          'Automatic Floor Heights',
           style: GoogleFonts.outfit(
             fontWeight: FontWeight.bold,
-            fontSize: 17,
+            fontSize: 16,
             color: const Color(0xFF0F172A),
           ),
-          overflow: TextOverflow.ellipsis,
         ),
         iconTheme: const IconThemeData(color: Color(0xFF0F172A)),
         actions: [
@@ -1693,78 +1759,101 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                               )
                             : SingleChildScrollView(
                                 scrollDirection: Axis.vertical,
-                                child: SingleChildScrollView(
-                                  scrollDirection: Axis.horizontal,
-                                  child: DataTable(
-                                    columnSpacing: 28,
-                                    headingRowHeight: 48,
-                                    dataRowMinHeight: 52,
-                                    dataRowMaxHeight: 56,
-                                    headingRowColor: WidgetStateProperty.all(
-                                      const Color(0xFFF1F5F9),
-                                    ),
-                                    dataRowColor: WidgetStateProperty.all(
-                                      Colors.white,
-                                    ),
-                                    border: const TableBorder(
-                                      horizontalInside: BorderSide(
+                                child: Table(
+                                  defaultVerticalAlignment:
+                                      TableCellVerticalAlignment.middle,
+                                  columnWidths: const {
+                                    0: FlexColumnWidth(1.25), // Floor
+                                    1: FlexColumnWidth(1.20), // Height
+                                    2: FlexColumnWidth(1.40), // Altitude
+                                    3: FlexColumnWidth(2.05), // Source
+                                    4: FixedColumnWidth(52), // Actions
+                                  },
+                                  children: [
+                                    // Header Row
+                                    TableRow(
+                                      decoration: const BoxDecoration(
                                         color: Color(0xFFF1F5F9),
-                                        width: 1,
                                       ),
+                                      children: [
+                                        Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 12,
+                                          ),
+                                          child: Text(
+                                            'Floor',
+                                            style: GoogleFonts.outfit(
+                                              color: const Color(0xFF1E293B),
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ),
+                                        Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 4,
+                                            vertical: 12,
+                                          ),
+                                          child: Text(
+                                            'Height',
+                                            style: GoogleFonts.outfit(
+                                              color: const Color(0xFF1E293B),
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ),
+                                        Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 4,
+                                            vertical: 12,
+                                          ),
+                                          child: Text(
+                                            'Altitude',
+                                            style: GoogleFonts.outfit(
+                                              color: const Color(0xFF1E293B),
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ),
+                                        Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 4,
+                                            vertical: 12,
+                                          ),
+                                          child: Center(
+                                            child: Text(
+                                              'Source',
+                                              style: GoogleFonts.outfit(
+                                                color: const Color(0xFF1E293B),
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                        Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 2,
+                                            vertical: 12,
+                                          ),
+                                          child: Center(
+                                            child: Text(
+                                              'Actions',
+                                              style: GoogleFonts.outfit(
+                                                color: const Color(0xFF1E293B),
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                    columns: [
-                                      DataColumn(
-                                        label: Text(
-                                          'Floor',
-                                          style: GoogleFonts.outfit(
-                                            color: const Color(0xFF1E293B),
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 13,
-                                          ),
-                                        ),
-                                      ),
-                                      DataColumn(
-                                        label: Text(
-                                          'Height to Next (m)',
-                                          style: GoogleFonts.outfit(
-                                            color: const Color(0xFF1E293B),
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 13,
-                                          ),
-                                        ),
-                                      ),
-                                      DataColumn(
-                                        label: Text(
-                                          'Base Altitude (m)',
-                                          style: GoogleFonts.outfit(
-                                            color: const Color(0xFF1E293B),
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 13,
-                                          ),
-                                        ),
-                                      ),
-                                      DataColumn(
-                                        label: Text(
-                                          'Source',
-                                          style: GoogleFonts.outfit(
-                                            color: const Color(0xFF1E293B),
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 13,
-                                          ),
-                                        ),
-                                      ),
-                                      DataColumn(
-                                        label: Text(
-                                          'Actions',
-                                          style: GoogleFonts.outfit(
-                                            color: const Color(0xFF1E293B),
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 13,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                    rows: _floors.map((floor) {
+                                    // Data Rows
+                                    ..._floors.map((floor) {
                                       final badgeTextColor =
                                           _getSourceBadgeColor(floor.source);
                                       final badgeBgColor =
@@ -1773,105 +1862,185 @@ class _AdminFloorHeightsScreenState extends State<AdminFloorHeightsScreen> {
                                           floor.heightToNextM == 0.0 &&
                                           floor.floorNo == _floors.last.floorNo;
 
-                                      return DataRow(
-                                        cells: [
-                                          DataCell(
-                                            Text(
+                                      return TableRow(
+                                        decoration: const BoxDecoration(
+                                          color: Colors.white,
+                                          border: Border(
+                                            bottom: BorderSide(
+                                              color: Color(0xFFF1F5F9),
+                                              width: 1,
+                                            ),
+                                          ),
+                                        ),
+                                        children: [
+                                          // 1. Floor
+                                          Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 8,
+                                              vertical: 10,
+                                            ),
+                                            child: Text(
                                               floor.floorNo < 0
                                                   ? 'B${floor.floorNo.abs()}'
                                                   : 'Floor ${floor.floorNo}',
                                               style: GoogleFonts.inter(
                                                 color: const Color(0xFF0F172A),
                                                 fontWeight: FontWeight.w600,
-                                                fontSize: 13,
+                                                fontSize: 12,
                                               ),
+                                              maxLines: 1,
                                               softWrap: false,
                                             ),
                                           ),
-                                          DataCell(
-                                            Text(
+                                          // 2. Height
+                                          Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 4,
+                                              vertical: 10,
+                                            ),
+                                            child: Text(
                                               isTopFloor
-                                                  ? 'N/A (Top)'
-                                                  : '${floor.heightToNextM.toStringAsFixed(2)} m',
+                                                  ? 'Top'
+                                                  : '${floor.heightToNextM.toStringAsFixed(2)}m',
                                               style: GoogleFonts.inter(
                                                 color: const Color(0xFF0F172A),
                                                 fontWeight: FontWeight.bold,
-                                                fontSize: 13,
+                                                fontSize: 12,
                                               ),
+                                              maxLines: 1,
                                               softWrap: false,
                                             ),
                                           ),
-                                          DataCell(
-                                            Text(
-                                              '${floor.baseAltitudeM.toStringAsFixed(2)} m',
+                                          // 3. Base Altitude
+                                          Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 4,
+                                              vertical: 10,
+                                            ),
+                                            child: Text(
+                                              '${floor.baseAltitudeM.toStringAsFixed(2)}m',
                                               style: GoogleFonts.inter(
                                                 color: const Color(0xFF475569),
-                                                fontSize: 13,
+                                                fontWeight: FontWeight.w500,
+                                                fontSize: 12,
                                               ),
+                                              maxLines: 1,
                                               softWrap: false,
                                             ),
                                           ),
-                                          DataCell(
-                                            Container(
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                    horizontal: 8,
-                                                    vertical: 4,
+                                          // 4. Source Badge (Centered, single-line, fully visible)
+                                          Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 4,
+                                              vertical: 10,
+                                            ),
+                                            child: Center(
+                                              child: Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 5,
+                                                      vertical: 3.5,
+                                                    ),
+                                                decoration: BoxDecoration(
+                                                  color: badgeBgColor,
+                                                  border: Border.all(
+                                                    color: badgeTextColor
+                                                        .withValues(
+                                                          alpha: 0.35,
+                                                        ),
+                                                    width: 1,
                                                   ),
-                                              decoration: BoxDecoration(
-                                                color: badgeBgColor,
-                                                border: Border.all(
-                                                  color: badgeTextColor
-                                                      .withValues(alpha: 0.4),
-                                                  width: 1,
+                                                  borderRadius:
+                                                      BorderRadius.circular(5),
                                                 ),
-                                                borderRadius:
-                                                    BorderRadius.circular(6),
-                                              ),
-                                              child: Text(
-                                                _formatSourceBadgeLabel(floor.source),
-                                                style: GoogleFonts.inter(
-                                                  color: badgeTextColor,
-                                                  fontSize: 11,
-                                                  fontWeight: FontWeight.bold,
+                                                child: Text(
+                                                  _formatSourceBadgeLabel(
+                                                    floor.source,
+                                                  ),
+                                                  style: GoogleFonts.inter(
+                                                    color: badgeTextColor,
+                                                    fontSize: 9.5,
+                                                    fontWeight: FontWeight.w700,
+                                                    letterSpacing: 0.1,
+                                                  ),
+                                                  maxLines: 1,
+                                                  softWrap: false,
                                                 ),
                                               ),
                                             ),
                                           ),
-                                          DataCell(
-                                            Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                IconButton(
-                                                  icon: const Icon(
-                                                    LucideIcons.edit3,
-                                                    size: 18,
-                                                    color: Color(0xFF2563EB),
-                                                  ),
-                                                  tooltip:
-                                                      'Edit / Override Height',
-                                                  onPressed: () =>
-                                                      _showEditDialog(floor),
-                                                ),
-                                                IconButton(
-                                                  icon: const Icon(
-                                                    LucideIcons.trash2,
-                                                    size: 18,
-                                                    color: Color(0xFFEF4444),
-                                                  ),
-                                                  tooltip: 'Delete Floor',
-                                                  onPressed: () =>
-                                                      _confirmAndDeleteFloor(
-                                                        floor,
+                                          // 5. Actions (Both Edit and Delete, fully visible)
+                                          Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 2,
+                                              vertical: 10,
+                                            ),
+                                            child: Center(
+                                              child: Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                mainAxisAlignment:
+                                                    MainAxisAlignment.center,
+                                                children: [
+                                                  Tooltip(
+                                                    message:
+                                                        'Edit / Override Height',
+                                                    child: InkWell(
+                                                      onTap: () =>
+                                                          _showEditDialog(
+                                                            floor,
+                                                          ),
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            4,
+                                                          ),
+                                                      child: const Padding(
+                                                        padding: EdgeInsets.all(
+                                                          3.5,
+                                                        ),
+                                                        child: Icon(
+                                                          LucideIcons.edit3,
+                                                          size: 15,
+                                                          color: Color(
+                                                            0xFF2563EB,
+                                                          ),
+                                                        ),
                                                       ),
-                                                ),
-                                              ],
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 3),
+                                                  Tooltip(
+                                                    message: 'Delete Floor',
+                                                    child: InkWell(
+                                                      onTap: () =>
+                                                          _confirmAndDeleteFloor(
+                                                            floor,
+                                                          ),
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            4,
+                                                          ),
+                                                      child: const Padding(
+                                                        padding: EdgeInsets.all(
+                                                          3.5,
+                                                        ),
+                                                        child: Icon(
+                                                          LucideIcons.trash2,
+                                                          size: 15,
+                                                          color: Color(
+                                                            0xFFEF4444,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
                                             ),
                                           ),
                                         ],
                                       );
-                                    }).toList(),
-                                  ),
+                                    }),
+                                  ],
                                 ),
                               ),
                       ),

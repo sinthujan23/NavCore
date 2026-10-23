@@ -27,7 +27,6 @@ import 'ui/login_screen.dart';
 import 'ui/admin_dashboard_screen.dart';
 import 'ui/location_lock_screen.dart';
 
-
 import 'ui/home_screen.dart';
 import 'ui/ar_viewport_screen.dart';
 import 'ui/floor_plan_screen.dart';
@@ -155,8 +154,9 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation>
     });
 
     // Listen to device GPS hardware toggle in real-time: auto-redirect to phone settings if turned off
-    _gpsServiceSubscription =
-        Geolocator.getServiceStatusStream().listen((status) async {
+    _gpsServiceSubscription = Geolocator.getServiceStatusStream().listen((
+      status,
+    ) async {
       if (status == ServiceStatus.disabled) {
         await _redirectToLocationSettingsIfNeeded();
       }
@@ -218,7 +218,8 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation>
     try {
       final isServiceEnabled = await Geolocator.isLocationServiceEnabled();
       final perm = await Geolocator.checkPermission();
-      final isPermGranted = perm == LocationPermission.always ||
+      final isPermGranted =
+          perm == LocationPermission.always ||
           perm == LocationPermission.whileInUse;
 
       if (!mounted) return;
@@ -228,7 +229,8 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation>
         _redirectToLocationSettingsIfNeeded();
       }
 
-      final bool changed = (_isLocationServiceEnabled != isServiceEnabled) ||
+      final bool changed =
+          (_isLocationServiceEnabled != isServiceEnabled) ||
           (_isLocationPermissionGranted != isPermGranted);
 
       if (changed || triggerRebuild) {
@@ -264,8 +266,9 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation>
     if (!_isHardwareInitialized) {
       await _initializeRealHardware();
     } else {
-      final realPos =
-          await _sensorService.getCurrentPosition(promptAccuracy: false);
+      final realPos = await _sensorService.getCurrentPosition(
+        promptAccuracy: false,
+      );
       if (realPos != null && realPos.latitude != 0.0 && mounted) {
         setState(() {
           _userCoords = realPos;
@@ -283,8 +286,9 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation>
     }
 
     // 2. Fetch current real GPS position (cached or live)
-    final realPos =
-        await _sensorService.getLastKnownOrCurrentPosition(promptAccuracy: true);
+    final realPos = await _sensorService.getLastKnownOrCurrentPosition(
+      promptAccuracy: true,
+    );
     if (realPos != null && mounted) {
       double resolvedInitialHeight = realPos.height;
       if (resolvedInitialHeight <= 0.0 || resolvedInitialHeight > 4000.0) {
@@ -350,9 +354,8 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation>
         final double moveDist = haversineDistance(_userCoords, coords);
         final bool floorChanged =
             resolvedFloor.floorNumber != _activeFloorNumber;
-        final bool shouldRebuild = floorChanged ||
-            moveDist >= 0.5 ||
-            _userCoords.latitude == 0.0;
+        final bool shouldRebuild =
+            floorChanged || moveDist >= 0.5 || _userCoords.latitude == 0.0;
 
         _userCoords = GeodeticCoords(
           latitude: coords.latitude,
@@ -587,6 +590,34 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation>
             prefs.getString(roleKey) ??
             prefs.getString('NexNav_active_mall_id');
 
+        // For user: check if there's any mall within 500m of current GPS coords, prioritizing minimum distance
+        if (!isAdmin &&
+            _userCoords.latitude != 0.0 &&
+            _userCoords.longitude != 0.0) {
+          final mallsWithin500m = await _mallDatabaseService
+              .getMallsWithinRadius(
+                _userCoords,
+                radiusMeters: 500.0,
+                activeOnly: false,
+              );
+          if (mallsWithin500m.isNotEmpty) {
+            mallsWithin500m.sort((a, b) {
+              final distA = _mallDatabaseService.calculateDistanceToMall(
+                _userCoords,
+                a,
+              );
+              final distB = _mallDatabaseService.calculateDistanceToMall(
+                _userCoords,
+                b,
+              );
+              return distA.compareTo(distB);
+            });
+            final nearest = mallsWithin500m.first;
+            await _loadActiveMallPackage(nearest.id, isAdmin: false);
+            return;
+          }
+        }
+
         // If an active venue was already selected for this role, restore it
         if (savedActiveId != null && savedActiveId.isNotEmpty) {
           final target = malls.where((m) {
@@ -598,23 +629,6 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation>
           }).firstOrNull;
           if (target != null) {
             await _loadActiveMallPackage(target.id, isAdmin: isAdmin);
-            return;
-          }
-        }
-
-        // For user: check if there's any mall within 500m of current GPS coords
-        if (!isAdmin &&
-            _userCoords.latitude != 0.0 &&
-            _userCoords.longitude != 0.0) {
-          final mallsWithin500m = await _mallDatabaseService
-              .getMallsWithinRadius(
-                _userCoords,
-                radiusMeters: 500.0,
-                activeOnly: false,
-              );
-          if (mallsWithin500m.isNotEmpty) {
-            final nearest = mallsWithin500m.first;
-            await _loadActiveMallPackage(nearest.id, isAdmin: false);
             return;
           }
         }
@@ -917,35 +931,49 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation>
     );
 
     if (mallsWithin500m.isNotEmpty) {
-      final currentMallId = _buildingProfile.buildingId.trim().toLowerCase();
-      final isCurrentMallWithin500m = mallsWithin500m.any((m) {
-        final mId = m.id.trim().toLowerCase();
-        return mId == currentMallId ||
-            mId.replaceAll(RegExp(r'^0+'), '') ==
-                currentMallId.replaceAll(RegExp(r'^0+'), '');
+      // Sort in ascending order of distance so the minimum distance mall is at index 0
+      mallsWithin500m.sort((a, b) {
+        final distA = _mallDatabaseService.calculateDistanceToMall(
+          _userCoords,
+          a,
+        );
+        final distB = _mallDatabaseService.calculateDistanceToMall(
+          _userCoords,
+          b,
+        );
+        return distA.compareTo(distB);
       });
+      final nearestMall = mallsWithin500m.first;
 
-      // If the user's selected mall is already within 500m, keep user's selection
-      if (!isCurrentMallWithin500m) {
-        mallsWithin500m.sort((a, b) {
-          final distA = _mallDatabaseService.calculateDistanceToMall(
-            _userCoords,
-            a,
-          );
-          final distB = _mallDatabaseService.calculateDistanceToMall(
-            _userCoords,
-            b,
-          );
-          return distA.compareTo(distB);
-        });
-        final nearestMall = mallsWithin500m.first;
-        if (_lastAutoDetectedMallId != nearestMall.id) {
-          _lastAutoDetectedMallId = nearestMall.id;
-          await _mallDatabaseService.setActiveMall(
-            nearestMall.id,
-            isAdmin: false,
-          );
-          await _loadActiveMallPackage(nearestMall.id, isAdmin: false);
+      final currentMallId = _buildingProfile.buildingId.trim().toLowerCase();
+      final cleanCurrent = currentMallId.replaceAll(RegExp(r'^0+'), '');
+      final cleanNearest = nearestMall.id.trim().toLowerCase().replaceAll(RegExp(r'^0+'), '');
+
+      // Check if nearest mall is different from the currently loaded mall
+      if (cleanCurrent != cleanNearest) {
+        final curMallMeta = _mallDatabaseService.catalog.where((m) {
+          final mId = m.id.trim().toLowerCase().replaceAll(RegExp(r'^0+'), '');
+          return mId == cleanCurrent;
+        }).firstOrNull;
+
+        final double distNearest = _mallDatabaseService.calculateDistanceToMall(
+          _userCoords,
+          nearestMall,
+        );
+        final double distCurrent = curMallMeta != null
+            ? _mallDatabaseService.calculateDistanceToMall(_userCoords, curMallMeta)
+            : double.infinity;
+
+        // Automatically switch if the nearest mall has shorter distance (e.g. 0m vs 3m)
+        if (distNearest < distCurrent) {
+          if (_lastAutoDetectedMallId != nearestMall.id) {
+            _lastAutoDetectedMallId = nearestMall.id;
+            await _mallDatabaseService.setActiveMall(
+              nearestMall.id,
+              isAdmin: false,
+            );
+            await _loadActiveMallPackage(nearestMall.id, isAdmin: false);
+          }
         }
       }
     } else {
@@ -1221,16 +1249,19 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation>
                   ),
                   onPressed: () {
                     // 1. Immediately dismiss dialog and pop any modal/sub-routes back to root
-                    Navigator.of(dialogCtx, rootNavigator: true)
-                        .popUntil((route) => route.isFirst);
+                    Navigator.of(
+                      dialogCtx,
+                      rootNavigator: true,
+                    ).popUntil((route) => route.isFirst);
 
                     // 2. Instantly switch to the Login screen with 0ms delay
                     if (mounted) {
                       setState(() {
                         _currentRole = UserRole.guest;
                         _userEmail = '';
-                        _requestedLoginRole =
-                            isAdmin ? UserRole.admin : UserRole.user;
+                        _requestedLoginRole = isAdmin
+                            ? UserRole.admin
+                            : UserRole.user;
                         _authScreenState = AuthScreenState.login;
                         _currentIndex = 0;
                         _arTargetDestination = null;
@@ -1397,7 +1428,9 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation>
     // 3. Admin Dashboard Screen State
     if (_authScreenState == AuthScreenState.adminDashboard) {
       return AdminDashboardScreen(
-        adminEmail: _userEmail.isNotEmpty ? _userEmail : 'administrator@nexnav.io',
+        adminEmail: _userEmail.isNotEmpty
+            ? _userEmail
+            : 'administrator@nexnav.io',
         userCoords: _userCoords,
         buildingProfile: _buildingProfile,
         destinations: _destinations,
@@ -1463,7 +1496,10 @@ class _NexNavMainNavigationState extends State<NexNavMainNavigation>
               if (mall != null) {
                 await prefs.setString('NexNav_user_active_mall_id', mall.id);
                 await prefs.setString('NexNav_active_mall_id', mall.id);
-                await _mallDatabaseService.setActiveMall(mall.id, isAdmin: false);
+                await _mallDatabaseService.setActiveMall(
+                  mall.id,
+                  isAdmin: false,
+                );
                 await ParkingService.instance.loadSlotsForMall(mall.id);
               } else {
                 await prefs.remove('NexNav_user_active_mall_id');

@@ -231,10 +231,12 @@ class ParkingService extends ChangeNotifier {
   final Map<String, List<ParkingSlot>> _floorSlots = {};
   final Set<String> _deletedSlotIds = {};
   final Set<String> _pendingCreationSlotIds = {};
+  final Map<String, DateTime> _pendingCreationSlotTimes = {};
   final Map<String, DateTime> _recentlyUpdatedSlots = {};
   final Map<String, ParkingSlotStatus> _optimisticStatuses = {};
   bool _isSyncing = false;
   String _activeMallId = '';
+  String get activeMallId => _activeMallId;
 
   ParkingSlot? findSlotById(String slotId) {
     final target = slotId.trim().toLowerCase();
@@ -337,9 +339,35 @@ class ParkingService extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       final list = prefs.getStringList('NexNav_deleted_slot_ids');
       if (list != null) {
-        _deletedSlotIds.addAll(list.map((e) => e.trim().toLowerCase()));
+        for (final item in list) {
+          final lower = item.trim().toLowerCase();
+          _deletedSlotIds.add(lower);
+          final clean = lower.replaceFirst(RegExp(r'^parking-'), '');
+          _deletedSlotIds.add(clean);
+          _deletedSlotIds.add(normalizeSlotId(clean));
+        }
       }
     } catch (_) {}
+  }
+
+  /// Authoritative check if slot was tombstoned/deleted
+  bool isSlotDeleted(String slotId) {
+    if (_deletedSlotIds.isEmpty) return false;
+
+    final lower = slotId.trim().toLowerCase();
+    if (_deletedSlotIds.contains(lower)) return true;
+    final clean = lower.replaceFirst(RegExp(r'^parking-'), '');
+    if (_deletedSlotIds.contains(clean)) return true;
+    final norm = normalizeSlotId(clean);
+    if (_deletedSlotIds.contains(norm)) return true;
+    if (clean.startsWith('0')) {
+      final stripped = clean.replaceFirst(RegExp(r'^0+'), '');
+      if (_deletedSlotIds.contains(stripped)) return true;
+    }
+    for (final del in _deletedSlotIds) {
+      if (isMatchingSlotId(slotId, del)) return true;
+    }
+    return false;
   }
 
   String get currentUserId => _currentUserId;
@@ -380,8 +408,8 @@ class ParkingService extends ChangeNotifier {
 
   DateTime? _lastSyncTime;
 
-  /// Starts periodic background synchronization with backend server (optimized to 25s to prevent server overload)
-  void startLiveSync({int intervalSeconds = 25}) {
+  /// Starts periodic background synchronization with backend server (3s for multi-device sync)
+  void startLiveSync({int intervalSeconds = 3}) {
     _liveSyncTimer?.cancel();
     _liveSyncTimer = Timer.periodic(Duration(seconds: intervalSeconds), (_) {
       if (_activeMallId.isNotEmpty) {
@@ -401,9 +429,11 @@ class ParkingService extends ChangeNotifier {
     final cleanId = mallId.trim();
     if (cleanId.isEmpty || _isSyncing) return;
 
-    // Minimum 10-second cooldown between network syncs unless forced
+    // Minimum 3-second cooldown between network syncs unless forced
     final now = DateTime.now();
-    if (!force && _lastSyncTime != null && now.difference(_lastSyncTime!).inSeconds < 10) {
+    if (!force &&
+        _lastSyncTime != null &&
+        now.difference(_lastSyncTime!).inSeconds < 3) {
       return;
     }
     _lastSyncTime = now;
@@ -415,11 +445,13 @@ class ParkingService extends ChangeNotifier {
       final remoteVehicles = await ApiService.instance.fetchAllParkedVehicles(
         cleanId,
       );
+      final serverResponded = ApiService.instance.lastParkingFetchSucceeded;
       _applyServerSlots(
         cleanId,
         normId,
         liveSlots,
         remoteVehicles: remoteVehicles,
+        serverResponded: serverResponded,
       );
     } catch (e) {
       debugPrint('[ParkingService] Silent sync warning: $e');
@@ -441,7 +473,13 @@ class ParkingService extends ChangeNotifier {
     String normId,
     List<ParkingSlot> liveSlots, {
     List<MyVehicleLocation> remoteVehicles = const [],
+    bool serverResponded = true,
   }) {
+    // If server was unreachable (offline/timeout) and liveSlots is empty, keep cached slots
+    if (!serverResponded && liveSlots.isEmpty) {
+      return;
+    }
+
     // 0. Update _allParkedVehicles with remoteVehicles & local records
     for (final v in remoteVehicles) {
       if (v.status == 'parked' && v.slotId.isNotEmpty) {
@@ -470,11 +508,12 @@ class ParkingService extends ChangeNotifier {
     final seenIds = <String>{};
     final seenPositions = <String>{};
 
-    // 1. Authoritative server slots
+    // 1. Authoritative server slots (created/updated by admin)
     for (final slot in liveSlots) {
       if (isLegacyMockSlot(slot.id)) continue;
+      if (isSlotDeleted(slot.id)) continue;
+
       final idLower = slot.id.trim().toLowerCase();
-      if (_deletedSlotIds.contains(idLower)) continue;
       final cleanSlotId = idLower.replaceFirst(RegExp(r'^parking-'), '');
       final normSlotId = normalizeSlotId(cleanSlotId);
 
@@ -484,8 +523,15 @@ class ParkingService extends ChangeNotifier {
         continue;
       }
       seenIds.add(idLower);
+      seenIds.add(cleanSlotId);
+      seenIds.add(normSlotId);
       seenPositions.add(posKey);
       _pendingCreationSlotIds.remove(idLower);
+      _pendingCreationSlotIds.remove(cleanSlotId);
+      _pendingCreationSlotIds.remove(normSlotId);
+      _pendingCreationSlotTimes.remove(idLower);
+      _pendingCreationSlotTimes.remove(cleanSlotId);
+      _pendingCreationSlotTimes.remove(normSlotId);
 
       // Preserve recent optimistic status during grace period
       final optStatus =
@@ -509,21 +555,49 @@ class ParkingService extends ChangeNotifier {
       newMap[slot.floorId]!.add(slot);
     }
 
-    // 2. Preserve all locally existing/added stalls that were not deleted
-    final localMap = _mallFloorSlots[normId] ?? _mallFloorSlots[cleanId] ?? {};
-    for (final entry in localMap.entries) {
-      for (final localSlot in entry.value) {
-        if (isLegacyMockSlot(localSlot.id)) continue;
-        final idLower = localSlot.id.trim().toLowerCase();
-        if (_deletedSlotIds.contains(idLower)) continue;
+    // 2. Preserve ONLY recently created local stalls on THIS device that are still pending upload!
+    final now = DateTime.now();
+    _pendingCreationSlotTimes.removeWhere(
+      (id, time) => now.difference(time).inSeconds > 15,
+    );
+    _pendingCreationSlotIds.removeWhere(
+      (id) => !_pendingCreationSlotTimes.containsKey(id),
+    );
 
-        final posKey =
-            '${normalizeFloorId(localSlot.floorId)}#${localSlot.section.trim().toUpperCase()}#${localSlot.slotNumber}';
-        if (!seenIds.contains(idLower) && !seenPositions.contains(posKey)) {
-          seenIds.add(idLower);
-          seenPositions.add(posKey);
-          newMap.putIfAbsent(localSlot.floorId, () => []);
-          newMap[localSlot.floorId]!.add(localSlot);
+    if (_pendingCreationSlotIds.isNotEmpty) {
+      final localMap = _mallFloorSlots[normId] ?? _mallFloorSlots[cleanId] ?? {};
+      for (final entry in localMap.entries) {
+        for (final localSlot in entry.value) {
+          if (isLegacyMockSlot(localSlot.id)) continue;
+          if (isSlotDeleted(localSlot.id)) continue;
+
+          final idLower = localSlot.id.trim().toLowerCase();
+          final cleanSlotId = idLower.replaceFirst(RegExp(r'^parking-'), '');
+          final normSlotId = normalizeSlotId(cleanSlotId);
+
+          final isPending =
+              _pendingCreationSlotIds.contains(idLower) ||
+              _pendingCreationSlotIds.contains(cleanSlotId) ||
+              _pendingCreationSlotIds.contains(normSlotId);
+
+          if (!isPending) continue;
+
+          final posKey =
+              '${normalizeFloorId(localSlot.floorId)}#${localSlot.section.trim().toUpperCase()}#${localSlot.slotNumber}';
+
+          if (!seenIds.contains(idLower) &&
+              !seenIds.contains(cleanSlotId) &&
+              !seenIds.contains(normSlotId) &&
+              !seenPositions.contains(posKey)) {
+            seenIds.add(idLower);
+            seenIds.add(cleanSlotId);
+            seenIds.add(normSlotId);
+            seenPositions.add(posKey);
+            newMap.putIfAbsent(localSlot.floorId, () => []);
+            newMap[localSlot.floorId]!.add(localSlot);
+
+            unawaited(ApiService.instance.createParkingSlot(cleanId, localSlot));
+          }
         }
       }
     }
@@ -651,22 +725,22 @@ class ParkingService extends ChangeNotifier {
       if (_mallFloorSlots.containsKey(norm)) {
         return _mallFloorSlots[norm]!;
       }
-    }
-    if (_mallFloorSlots.isNotEmpty) {
-      return _mallFloorSlots.values.first;
+      if (_mallFloorSlots.containsKey(_activeMallId)) {
+        return _mallFloorSlots[_activeMallId]!;
+      }
     }
     return _floorSlots;
   }
 
   Map<String, List<ParkingSlot>> getFloorSlotsForMall(String? mallId) {
-    Map<String, List<ParkingSlot>> rawMap = allFloorSlots;
     if (mallId != null && mallId.trim().isNotEmpty) {
       final clean = mallId.trim().toLowerCase();
       final norm = normalizeMallId(clean);
+      Map<String, List<ParkingSlot>>? rawMap;
       if (_mallFloorSlots.containsKey(norm)) {
-        rawMap = _mallFloorSlots[norm]!;
+        rawMap = _mallFloorSlots[norm];
       } else if (_mallFloorSlots.containsKey(clean)) {
-        rawMap = _mallFloorSlots[clean]!;
+        rawMap = _mallFloorSlots[clean];
       } else {
         for (final entry in _mallFloorSlots.entries) {
           if (normalizeMallId(entry.key) == norm) {
@@ -675,8 +749,16 @@ class ParkingService extends ChangeNotifier {
           }
         }
       }
+      // If mall was found in map, use its slots; otherwise return empty map (do NOT leak another mall's slots!)
+      final targetMap = rawMap ?? <String, List<ParkingSlot>>{};
+      final cleanResult = <String, List<ParkingSlot>>{};
+      for (final entry in targetMap.entries) {
+        cleanResult[entry.key] = deduplicateSlots(entry.value);
+      }
+      return cleanResult;
     }
 
+    final rawMap = allFloorSlots;
     final cleanResult = <String, List<ParkingSlot>>{};
     for (final entry in rawMap.entries) {
       cleanResult[entry.key] = deduplicateSlots(entry.value);
@@ -703,7 +785,7 @@ class ParkingService extends ChangeNotifier {
     return;
   }
 
-  /// Completely clears all slots for a mall venue
+  /// Completely clears all slots for a mall venue immediately (0ms local delay)
   Future<void> clearAllSlotsForMall(String mallId) async {
     final cleanId = mallId.trim();
     if (cleanId.isEmpty) return;
@@ -722,12 +804,24 @@ class ParkingService extends ChangeNotifier {
       return !isOccupied;
     }).toList();
 
+    final idsToDelete = <String>[];
     for (final s in slotsToDelete) {
-      _deletedSlotIds.add(s.id.trim().toLowerCase());
-      unawaited(ApiService.instance.deleteParkingSlot(s.id, mallId: cleanId));
+      final tId = s.id.trim().toLowerCase();
+      final cId = tId.replaceFirst(RegExp(r'^parking-'), '');
+      final nId = normalizeSlotId(cId);
+      _deletedSlotIds.add(tId);
+      _deletedSlotIds.add(cId);
+      _deletedSlotIds.add(nId);
+      _pendingCreationSlotIds.remove(tId);
+      _pendingCreationSlotIds.remove(cId);
+      _pendingCreationSlotIds.remove(nId);
+      _pendingCreationSlotTimes.remove(tId);
+      _pendingCreationSlotTimes.remove(cId);
+      _pendingCreationSlotTimes.remove(nId);
+      idsToDelete.add(s.id);
     }
 
-    // Remove deleted slots from memory while preserving any occupied slots
+    // 1. SYNCHRONOUS IN-MEMORY PURGE & BROADCAST (0ms DELAY)
     if (_mallFloorSlots.containsKey(normId)) {
       for (final list in _mallFloorSlots[normId]!.values) {
         list.removeWhere(
@@ -751,23 +845,47 @@ class ParkingService extends ChangeNotifier {
     }
     _floorSlots.removeWhere((key, value) => value.isEmpty);
 
+    // If all free stalls were deleted and no occupied stalls remain, completely reset mall map to {}
+    final remainingForMall =
+        (_mallFloorSlots[normId]?.values.expand((s) => s).toList()) ??
+        (_mallFloorSlots[cleanId]?.values.expand((s) => s).toList()) ??
+        [];
+    if (remainingForMall.isEmpty) {
+      _mallFloorSlots[normId] = {};
+      _mallFloorSlots[cleanId] = {};
+      if (_activeMallId.isEmpty ||
+          _activeMallId == normId ||
+          _activeMallId == cleanId) {
+        _floorSlots.clear();
+      }
+      _pendingCreationSlotIds.clear();
+      _pendingCreationSlotTimes.clear();
+    }
+
     _slotStreamController.add(_floorSlots);
     notifyListeners();
 
-    final prefs = await SharedPreferences.getInstance();
-    final remaining =
-        (_mallFloorSlots[normId]?.values.expand((s) => s).toList()) ??
-        _floorSlots.values.expand((s) => s).toList();
-    final encoded = jsonEncode(remaining.map((s) => s.toJson()).toList());
-    await prefs.setString('cache_parking_slots_$cleanId', encoded);
-    await prefs.setString('cache_parking_slots_$normId', encoded);
-    await prefs.setStringList(
-      'NexNav_deleted_slot_ids',
-      _deletedSlotIds.toList(),
-    );
+    // 2. DISK CACHE UPDATE (synchronous await to guarantee clean state)
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final remaining =
+          (_mallFloorSlots[normId]?.values.expand((s) => s).toList()) ??
+          (_mallFloorSlots[cleanId]?.values.expand((s) => s).toList()) ??
+          [];
+      final encoded = jsonEncode(remaining.map((s) => s.toJson()).toList());
+      await prefs.setString('cache_parking_slots_$cleanId', encoded);
+      await prefs.setString('cache_parking_slots_$normId', encoded);
+      await prefs.setStringList(
+        'NexNav_deleted_slot_ids',
+        _deletedSlotIds.toList(),
+      );
+    } catch (_) {}
 
-    ApiService.instance.notifyDataSynced('parking');
-    ApiService.instance.notifyDataSynced('destinations');
+    // 3. BATCH BACKEND CLOUD DELETION
+    await ApiService.instance.clearAllParkingSlots(cleanId);
+    if (idsToDelete.isNotEmpty) {
+      await ApiService.instance.deleteParkingSlotsBulk(idsToDelete, mallId: cleanId);
+    }
   }
 
   /// Reset all slots across all floors for active mall map to FREE status immediately
@@ -870,8 +988,8 @@ class ParkingService extends ChangeNotifier {
     final normId = normalizeMallId(cleanId);
     _activeMallId = normId;
 
-    // Ensure live background sync is active whenever venue slots are loaded (25s polling to avoid server overload)
-    startLiveSync(intervalSeconds: 25);
+    // Ensure live background sync is active whenever venue slots are loaded (3s polling for real-time multi-device sync)
+    startLiveSync(intervalSeconds: 3);
 
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -888,8 +1006,8 @@ class ParkingService extends ChangeNotifier {
           for (final item in list) {
             final slot = ParkingSlot.fromJson(item);
             if (isLegacyMockSlot(slot.id)) continue;
+            if (isSlotDeleted(slot.id)) continue;
             final idLower = slot.id.trim().toLowerCase();
-            if (_deletedSlotIds.contains(idLower)) continue;
             final key =
                 '$idLower#${normalizeFloorId(slot.floorId)}#${slot.section.trim().toUpperCase()}#${slot.slotNumber}';
             if (seenKeys.contains(key)) continue;
@@ -912,43 +1030,64 @@ class ParkingService extends ChangeNotifier {
         } catch (_) {}
       }
       _mallFloorSlots[cleanId] = _mallFloorSlots[normId]!;
+      // Immediately hydrate cached slots so the UI displays existing bays with 0ms delay!
+      _syncLegacyFloorSlots(normId);
+      _slotStreamController.add(_floorSlots);
+      notifyListeners();
 
-      List<ParkingSlot> liveSlots = [];
-      bool serverContacted = false;
+      // Concurrently query live slots and remote parked vehicles in parallel
       try {
-        liveSlots = await ApiService.instance.fetchParkingSlots(cleanId);
-        serverContacted = true;
-        if (liveSlots.isEmpty && cleanId != normId) {
-          final altSlots = await ApiService.instance.fetchParkingSlots(normId);
-          if (altSlots.isNotEmpty) {
-            liveSlots = altSlots;
-          }
-        }
-      } catch (e) {
-        debugPrint('[ParkingService] Error fetching parking slots: $e');
-      }
+        final results = await Future.wait([
+          ApiService.instance
+              .fetchParkingSlots(cleanId)
+              .timeout(
+                const Duration(seconds: 6),
+                onTimeout: () => <ParkingSlot>[],
+              ),
+          ApiService.instance
+              .fetchAllParkedVehicles(cleanId)
+              .timeout(
+                const Duration(seconds: 6),
+                onTimeout: () => <MyVehicleLocation>[],
+              ),
+        ]);
+        var liveSlots = results[0] as List<ParkingSlot>;
+        final remoteVehicles = results[1] as List<MyVehicleLocation>;
 
-      if (serverContacted) {
-        final remoteVehicles = await ApiService.instance.fetchAllParkedVehicles(
-          cleanId,
-        );
+        final serverResponded = ApiService.instance.lastParkingFetchSucceeded;
+
+        if (liveSlots.isEmpty && cleanId != normId) {
+          try {
+            final altSlots = await ApiService.instance
+                .fetchParkingSlots(normId)
+                .timeout(
+                  const Duration(seconds: 5),
+                  onTimeout: () => <ParkingSlot>[],
+                );
+            if (altSlots.isNotEmpty) {
+              liveSlots = altSlots;
+            }
+          } catch (_) {}
+        }
+
+        // Authoritatively apply server slots (whether populated or completely cleared to 0)
         _applyServerSlots(
           cleanId,
           normId,
           liveSlots,
           remoteVehicles: remoteVehicles,
+          serverResponded: serverResponded || ApiService.instance.lastParkingFetchSucceeded,
         );
 
-        final all = _mallFloorSlots[normId]!.values.expand((s) => s).toList();
+        final all =
+            (_mallFloorSlots[normId]?.values.expand((s) => s).toList()) ??
+            (_mallFloorSlots[cleanId]?.values.expand((s) => s).toList()) ??
+            [];
         final encoded = jsonEncode(all.map((s) => s.toJson()).toList());
         await prefs.setString('cache_parking_slots_$cleanId', encoded);
         await prefs.setString('cache_parking_slots_$normId', encoded);
-      } else {
-        // Backend returned error or is offline: keep existing cached slots
-        _mallFloorSlots[cleanId] = _mallFloorSlots[normId] ?? {};
-        _syncLegacyFloorSlots(normId);
-        _slotStreamController.add(_floorSlots);
-        notifyListeners();
+      } catch (e) {
+        debugPrint('[ParkingService] Error syncing live slots: $e');
       }
     } catch (e) {
       debugPrint('Error loading parking slots for $cleanId: $e');
@@ -978,8 +1117,15 @@ class ParkingService extends ChangeNotifier {
           )
         : slot;
 
-    _deletedSlotIds.remove(resolvedSlot.id.trim().toLowerCase());
-    _pendingCreationSlotIds.add(resolvedSlot.id.trim().toLowerCase());
+    final idLower = resolvedSlot.id.trim().toLowerCase();
+    final cleanIdLower = idLower.replaceFirst(RegExp(r'^parking-'), '');
+    final normIdLower = normalizeSlotId(cleanIdLower);
+    _deletedSlotIds.removeWhere((del) => isMatchingSlotId(del, resolvedSlot.id));
+    _deletedSlotIds.remove(idLower);
+    _deletedSlotIds.remove(cleanIdLower);
+    _deletedSlotIds.remove(normIdLower);
+    _pendingCreationSlotIds.add(idLower);
+    _pendingCreationSlotTimes[idLower] = DateTime.now();
 
     if (!_mallFloorSlots.containsKey(normId)) {
       _mallFloorSlots[normId] = {};
@@ -1020,6 +1166,9 @@ class ParkingService extends ChangeNotifier {
       cleanId,
       resolvedSlot,
     );
+    if (ok) {
+      syncSlotsSilently(cleanId, force: true);
+    }
     ApiService.instance.notifyDataSynced('parking');
     return ok;
   }
@@ -1066,8 +1215,11 @@ class ParkingService extends ChangeNotifier {
         isHandicapAccessible: isHandicap,
         sensorId: 'SNS-$cleanId-$floorId-$section$numStr',
       );
-      _deletedSlotIds.remove(slotId.trim().toLowerCase());
-      _pendingCreationSlotIds.add(slotId.trim().toLowerCase());
+      final sIdLower = slotId.trim().toLowerCase();
+      _deletedSlotIds.removeWhere((del) => isMatchingSlotId(del, slotId));
+      _deletedSlotIds.remove(sIdLower);
+      _pendingCreationSlotIds.add(sIdLower);
+      _pendingCreationSlotTimes[sIdLower] = DateTime.now();
       newSlots.add(newSlot);
     }
 
@@ -1106,6 +1258,9 @@ class ParkingService extends ChangeNotifier {
       cleanId,
       newSlots,
     );
+    if (ok) {
+      syncSlotsSilently(cleanId, force: true);
+    }
     ApiService.instance.notifyDataSynced('parking');
     return ok;
   }
@@ -1115,6 +1270,8 @@ class ParkingService extends ChangeNotifier {
     final cleanId = mallId.trim();
     final normId = normalizeMallId(cleanId);
     final targetId = slotId.trim().toLowerCase();
+    final cleanTarget = targetId.replaceFirst(RegExp(r'^parking-'), '');
+    final normTarget = normalizeSlotId(cleanTarget);
 
     // 0. OCCUPIED VEHICLE PROTECTION: Reject deletion if slot is occupied or has a parked vehicle!
     final existingSlot = findSlotById(slotId);
@@ -1128,14 +1285,19 @@ class ParkingService extends ChangeNotifier {
       return false;
     }
 
+    // 1. SYNCHRONOUS IN-MEMORY PURGE & NOTIFICATION (0ms DELAY)
     _deletedSlotIds.add(targetId);
+    _deletedSlotIds.add(cleanTarget);
+    _deletedSlotIds.add(normTarget);
+    if (cleanTarget.startsWith('0')) {
+      _deletedSlotIds.add(cleanTarget.replaceFirst(RegExp(r'^0+'), ''));
+    }
     _pendingCreationSlotIds.remove(targetId);
-
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(
-      'NexNav_deleted_slot_ids',
-      _deletedSlotIds.toList(),
-    );
+    _pendingCreationSlotIds.remove(cleanTarget);
+    _pendingCreationSlotIds.remove(normTarget);
+    _pendingCreationSlotTimes.remove(targetId);
+    _pendingCreationSlotTimes.remove(cleanTarget);
+    _pendingCreationSlotTimes.remove(normTarget);
 
     if (_mallFloorSlots.containsKey(normId)) {
       for (final list in _mallFloorSlots[normId]!.values) {
@@ -1154,23 +1316,32 @@ class ParkingService extends ChangeNotifier {
     }
     _floorSlots.removeWhere((key, value) => value.isEmpty);
 
-    // Notify listeners immediately (0ms)
+    // Notify listeners immediately (0ms) so all screens reflect deletion without any delay
     _slotStreamController.add(_floorSlots);
     notifyListeners();
 
-    final all =
-        (_mallFloorSlots[normId]?.values.expand((s) => s).toList()) ??
-        _floorSlots.values.expand((s) => s).toList();
-    final encoded = jsonEncode(all.map((s) => s.toJson()).toList());
-    await prefs.setString('cache_parking_slots_$cleanId', encoded);
-    await prefs.setString('cache_parking_slots_$normId', encoded);
+    // 2. DISK CACHE UPDATE (in background)
+    unawaited(() async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setStringList(
+          'NexNav_deleted_slot_ids',
+          _deletedSlotIds.toList(),
+        );
+        final all =
+            (_mallFloorSlots[normId]?.values.expand((s) => s).toList()) ??
+            _floorSlots.values.expand((s) => s).toList();
+        final encoded = jsonEncode(all.map((s) => s.toJson()).toList());
+        await prefs.setString('cache_parking_slots_$cleanId', encoded);
+        await prefs.setString('cache_parking_slots_$normId', encoded);
+      } catch (_) {}
+    }());
 
+    // 3. AUTHORITATIVE CLOUD BACKEND DELETION
     final ok = await ApiService.instance.deleteParkingSlot(
       slotId,
       mallId: cleanId,
     );
-    ApiService.instance.notifyDataSynced('parking');
-    syncSlotsSilently(cleanId);
     return ok;
   }
 

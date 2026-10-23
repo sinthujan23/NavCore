@@ -296,6 +296,48 @@ const handleDeleteSlot = (req, res) => {
   return res.json({ message: 'Parking slot deleted successfully' });
 };
 
+/**
+ * DELETE /api/parking/:mallId/slots
+ * DELETE /api/parking/slots
+ * Clears parking slots for a mall
+ */
+const handleClearAllSlots = (req, res) => {
+  const reqMall = (req.params.mallId || (req.body && req.body.mallId) || (req.query && req.query.mallId) || '').trim().toLowerCase().replace(/^mall-/, '');
+  const normReqMall = reqMall.replace(/^0+/, '') || reqMall;
+
+  const vehicles = db.get('vehicleLocations') || {};
+  const occupiedSlotIds = new Set(
+    Object.values(vehicles).filter(v => v.status === 'parked' && v.slotId).map(v => v.slotId.trim().toLowerCase())
+  );
+
+  db.remove('parkingSlots', s => {
+    const sMall = (s.mallId || '').trim().toLowerCase().replace(/^mall-/, '');
+    const normSMall = sMall.replace(/^0+/, '') || sMall;
+    const sId = (s.id || '').trim().toLowerCase();
+    const matchesMall = !reqMall || reqMall === 'all' || sMall === reqMall || sMall === normReqMall || normSMall === reqMall || normSMall === normReqMall || sId.startsWith(`${reqMall}-`) || sId.startsWith(`${normReqMall}-`);
+    if (!matchesMall) return false;
+    const isOccupied = s.status === 'occupied' || occupiedSlotIds.has(sId) || Array.from(occupiedSlotIds).some(occ => isMatchingSlotId(s, occ));
+    return !isOccupied;
+  });
+
+  db.remove('destinations', d => {
+    const isPark = d.category === 'PARKING' || d.category === 'PARKING_SLOT' || d.category === 'PARKING_BAY' || (d.description || '').includes('PARKING_META|') || (d.id || '').startsWith('parking-');
+    if (!isPark) return false;
+    const dMall = (d.mallId || '').trim().toLowerCase().replace(/^mall-/, '');
+    const normDMall = dMall.replace(/^0+/, '') || dMall;
+    const dId = (d.id || '').trim().toLowerCase();
+    const matchesMall = !reqMall || reqMall === 'all' || dMall === reqMall || dMall === normReqMall || normDMall === reqMall || normDMall === normReqMall || dId.startsWith(`${reqMall}-`) || dId.startsWith(`${normReqMall}-`);
+    if (!matchesMall) return false;
+    const isOccupied = (d.openStatus || '').toLowerCase() === 'occupied' || occupiedSlotIds.has(dId) || Array.from(occupiedSlotIds).some(occ => isMatchingSlotId(d, occ));
+    return !isOccupied;
+  });
+
+  console.log(`[Parking] Cleared parking slots for mall ${reqMall || 'all'}`);
+  return res.json({ message: `Cleared parking slots for mall ${reqMall || 'all'}` });
+};
+
+router.delete('/slots', handleClearAllSlots);
+router.delete('/:mallId/slots', handleClearAllSlots);
 router.delete('/slots/:id', handleDeleteSlot);
 router.delete('/:mallId/slots/:id', handleDeleteSlot);
 

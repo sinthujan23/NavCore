@@ -127,8 +127,9 @@ class MallDatabaseService {
   List<MallMetadata> get catalog => _catalog;
 
   String? get activeMallId {
-    final active =
-        _catalog.where((m) => m.isActive || m.isSelected).firstOrNull;
+    final active = _catalog
+        .where((m) => m.isActive || m.isSelected)
+        .firstOrNull;
     return active?.id;
   }
 
@@ -155,7 +156,8 @@ class MallDatabaseService {
       final mId = m.id.trim().toLowerCase();
       final mStripped = mId.replaceAll(RegExp(r'^0+'), '');
       final aStripped = activeId.replaceAll(RegExp(r'^0+'), '');
-      return mId == activeId || (aStripped.isNotEmpty && mStripped == aStripped);
+      return mId == activeId ||
+          (aStripped.isNotEmpty && mStripped == aStripped);
     });
     if (!catalogHasActiveId && _catalog.isNotEmpty) {
       final serverActive = _catalog.where((m) => m.isActive).firstOrNull;
@@ -173,7 +175,8 @@ class MallDatabaseService {
       final bool isDown = downloadedIds.any(
         (id) => id.trim().toLowerCase() == mIdLower,
       );
-      final bool isSel = activeId.isNotEmpty &&
+      final bool isSel =
+          activeId.isNotEmpty &&
           (mIdLower == activeId ||
               (aStripped.isNotEmpty && mStripped == aStripped));
       return m.copyWith(
@@ -246,13 +249,11 @@ class MallDatabaseService {
       final m = _catalog[i];
       final mLower = m.id.trim().toLowerCase();
       final mStripped = mLower.replaceAll(RegExp(r'^0+'), '');
-      final isTarget = cleanLower.isNotEmpty &&
+      final isTarget =
+          cleanLower.isNotEmpty &&
           (mLower == cleanLower ||
               (strippedClean.isNotEmpty && mStripped == strippedClean));
-      _catalog[i] = m.copyWith(
-        isSelected: isTarget,
-        isActive: isTarget,
-      );
+      _catalog[i] = m.copyWith(isSelected: isTarget, isActive: isTarget);
     }
   }
 
@@ -266,6 +267,7 @@ class MallDatabaseService {
 
   /// Returns only malls situated within the specified radius (default 500 meters) of the user's current GPS location.
   /// If [activeOnly] is true, strictly excludes any inactive venues.
+  /// Always returns malls sorted in ascending order of distance (minimum distance mall first).
   Future<List<MallMetadata>> getMallsWithinRadius(
     GeodeticCoords userCoords, {
     double radiusMeters = 500.0,
@@ -275,7 +277,7 @@ class MallDatabaseService {
     if (userCoords.latitude == 0.0 && userCoords.longitude == 0.0) {
       return const <MallMetadata>[];
     }
-    return allMalls.where((mall) {
+    final within = allMalls.where((mall) {
       if (activeOnly && !mall.isActive) return false;
       final dist = haversineDistance(
         userCoords,
@@ -287,6 +289,29 @@ class MallDatabaseService {
       );
       return dist <= radiusMeters;
     }).toList();
+
+    // Sort strictly in ascending order of distance so the minimum distance mall is at index 0
+    within.sort((a, b) {
+      final distA = haversineDistance(
+        userCoords,
+        GeodeticCoords(
+          latitude: a.latitude,
+          longitude: a.longitude,
+          height: userCoords.height,
+        ),
+      );
+      final distB = haversineDistance(
+        userCoords,
+        GeodeticCoords(
+          latitude: b.latitude,
+          longitude: b.longitude,
+          height: userCoords.height,
+        ),
+      );
+      return distA.compareTo(distB);
+    });
+
+    return within;
   }
 
   /// Calculates dynamic distance in meters from user's current GPS location to a given mall.
@@ -366,6 +391,7 @@ class MallDatabaseService {
     Function(double progress)? onProgress,
     double maxRadiusMeters = 500.0,
     bool isAdmin = false,
+    String? preferredMallId,
   }) async {
     await getMallsList(isAdmin: isAdmin);
     if (_catalog.isEmpty) {
@@ -416,13 +442,24 @@ class MallDatabaseService {
     }
 
     if (mallsWithin500m.isNotEmpty) {
-      // Sort by distance to find the closest mall within 500m
+      // Sort in ascending order of distance to find the mall with minimum distance
       mallsWithin500m.sort((a, b) {
         final distA = calculateDistanceToMall(userCoords, a);
         final distB = calculateDistanceToMall(userCoords, b);
         return distA.compareTo(distB);
       });
-      final targetMall = mallsWithin500m.first;
+
+      MallMetadata targetMall = mallsWithin500m.first;
+      if (preferredMallId != null && preferredMallId.isNotEmpty) {
+        final preferred = mallsWithin500m.firstWhere(
+          (m) =>
+              m.id.toLowerCase() == preferredMallId.toLowerCase() ||
+              m.id.replaceAll(RegExp(r'^0+'), '') ==
+                  preferredMallId.replaceAll(RegExp(r'^0+'), ''),
+          orElse: () => targetMall,
+        );
+        targetMall = preferred;
+      }
 
       final prefs = await SharedPreferences.getInstance();
       final downloaded = prefs.getStringList(_downloadedMallsKey) ?? const [];

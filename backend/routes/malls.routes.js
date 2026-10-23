@@ -2,6 +2,10 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db/dataStore');
 const { requireAdmin } = require('../middleware/auth');
+const {
+  resolveTerrainAltitude,
+  resolveDynamicFloorGap,
+} = require('../services/geodesicService');
 
 /**
  * GET /api/malls
@@ -109,40 +113,49 @@ router.post('/', requireAdmin, (req, res) => {
     return res.status(409).json({ error: 'Mall with this ID already exists' });
   }
 
+  const lat = Number(body.latitude);
+  const lon = Number(body.longitude);
+  const autoGroundAlt = resolveTerrainAltitude(lat, lon);
+  const autoFloorGap = resolveDynamicFloorGap(lat, lon, body.category, body.name);
+
   const newMall = {
     id: body.id,
     name: body.name,
     city: body.city || 'Local Area',
-    country: body.country || 'Sri Lanka',
-    latitude: Number(body.latitude),
-    longitude: Number(body.longitude),
+    country: body.country || 'Global',
+    latitude: lat,
+    longitude: lon,
     floorCount: Number(body.floorCount) || 5,
     packageSizeBytesMB: Number(body.packageSizeBytesMB) || 4.8,
     category: body.category || 'Indoor Venue',
     rating: body.rating || '4.8 ★',
     isDownloaded: true,
     isActive: true,
-    entranceBaseAnchorHeight: body.entranceBaseAnchorHeight !== undefined ? Number(body.entranceBaseAnchorHeight) : 0.0,
-    floorGapMeters: body.floorGapMeters !== undefined ? Number(body.floorGapMeters) : 4.5,
+    entranceBaseAnchorHeight: (body.entranceBaseAnchorHeight !== undefined && Number(body.entranceBaseAnchorHeight) > 0)
+      ? Number(body.entranceBaseAnchorHeight)
+      : autoGroundAlt,
+    floorGapMeters: (body.floorGapMeters !== undefined && Number(body.floorGapMeters) > 0)
+      ? Number(body.floorGapMeters)
+      : autoFloorGap,
   };
 
   db.insert('malls', newMall);
 
   // Auto-generate floor heights for the newly created venue
   const floorCount = newMall.floorCount || 3;
-  let currentAlt = newMall.entranceBaseAnchorHeight || 15.0;
+  let currentAlt = newMall.entranceBaseAnchorHeight;
   for (let fn = 1; fn <= floorCount; fn++) {
     db.insert('floorHeights', {
       mallId: newMall.id,
       floorNo: fn,
-      heightToNextM: newMall.floorGapMeters || 4.5,
-      baseAltitudeM: currentAlt,
+      heightToNextM: newMall.floorGapMeters,
+      baseAltitudeM: parseFloat(currentAlt.toFixed(2)),
       source: 'admin',
       confidence: 1.0,
       isLocked: false,
       updatedAt: new Date().toISOString(),
     });
-    currentAlt += (newMall.floorGapMeters || 4.5);
+    currentAlt += newMall.floorGapMeters;
   }
 
   return res.status(201).json(newMall);
@@ -168,10 +181,20 @@ router.put('/:id', requireAdmin, (req, res) => {
 
   // Automatically recalculate / sync floor heights for this mall if floor gap, ground alt, or floor count changed
   if (body.floorGapMeters !== undefined || body.entranceBaseAnchorHeight !== undefined || body.floorCount !== undefined) {
-    const gap = Number(updated.floorGapMeters) || 3.8;
-    const baseAlt = (updated.entranceBaseAnchorHeight !== undefined && Number(updated.entranceBaseAnchorHeight) > 0)
+    const lat = Number(updated.latitude || 0);
+    const lon = Number(updated.longitude || 0);
+    const autoGroundAlt = resolveTerrainAltitude(lat, lon);
+    const autoFloorGap = resolveDynamicFloorGap(lat, lon, updated.category, updated.name);
+
+    const isLegacyAnchor = updated.entranceBaseAnchorHeight === 10.0 || updated.entranceBaseAnchorHeight === 8.5;
+    const baseAlt = (updated.entranceBaseAnchorHeight !== undefined && Number(updated.entranceBaseAnchorHeight) > 0 && !isLegacyAnchor)
       ? Number(updated.entranceBaseAnchorHeight)
-      : 8.5;
+      : autoGroundAlt;
+
+    const isLegacyGap = updated.floorGapMeters === 3.8;
+    const gap = (updated.floorGapMeters !== undefined && Number(updated.floorGapMeters) > 0 && !isLegacyGap)
+      ? Number(updated.floorGapMeters)
+      : autoFloorGap;
     const floorCount = Number(updated.floorCount) || 5;
 
     const remaining = db.filter('floorHeights', f => (f.mallId || '').trim().toLowerCase() !== mallId.toLowerCase());

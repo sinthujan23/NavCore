@@ -14,6 +14,7 @@ import '../../data/mall_database_service.dart';
 import '../../data/geocoding_service.dart';
 import '../../engine/ecef_engine.dart';
 import '../../engine/bearing_engine.dart';
+import '../../engine/phone_motion_floor_tracker.dart';
 import 'admin_osm_map_screen.dart';
 
 class AdminVenueManagerScreen extends StatefulWidget {
@@ -933,6 +934,8 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
   StreamSubscription<UserAccelerometerEvent>? _accelStreamSub;
   StreamSubscription<AccelerometerEvent>? _rawAccelStreamSub;
   StreamSubscription<BarometerEvent>? _barometerSub;
+  StreamSubscription<double>? _motionFloorTrackerSub;
+  double? _lastMeasuredMotionGap;
   double? _liveBarometerPressureHpa;
   double? _baseFloorBarometerPressureHpa;
   bool _isBarometerAvailable = false;
@@ -985,47 +988,24 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
       return;
     }
 
-    // 1. Resolve Ground Altitude based on smartphone barometer pressure and continuous geodetic distance model
-    final terrainAlt = GeocodingService.resolveTerrainAltitudeFromCoords(
+    // 1. Resolve Ground Altitude based on geoid-compensated GPS, barometer, and continuous terrain model
+    final resolvedAlt = GeocodingService.resolveTerrainAltitudeFromCoords(
       targetLat,
       targetLon,
       barometerPressureHpa: _liveBarometerPressureHpa,
+      rawGpsAltitude: targetAlt,
+      gpsAccuracy: accuracy,
     );
-    double resolvedAlt;
-    if (_isBarometerAvailable && _liveBarometerPressureHpa != null) {
-      final baroAlt = GeocodingService.calculateAltitudeFromBarometer(
-        _liveBarometerPressureHpa!,
-      );
-      if (targetAlt != null &&
-          targetAlt >= 1.0 &&
-          targetAlt < 9000.0 &&
-          !targetAlt.isNaN) {
-        resolvedAlt = (0.70 * baroAlt) + (0.30 * targetAlt);
-      } else {
-        resolvedAlt = baroAlt;
-      }
-    } else if (targetAlt != null &&
-        targetAlt >= 1.0 &&
-        targetAlt < 9000.0 &&
-        !targetAlt.isNaN) {
-      if (accuracy != null && accuracy > 0 && accuracy < 25.0) {
-        final gpsWeight = (1.0 - (accuracy / 30.0)).clamp(0.60, 0.90);
-        resolvedAlt =
-            (gpsWeight * targetAlt) + ((1.0 - gpsWeight) * terrainAlt);
-      } else {
-        resolvedAlt = targetAlt;
-      }
-    } else {
-      resolvedAlt = terrainAlt;
-    }
 
-    // 2. Resolve Floor Gap based on phone's barometer pressure differences or distance-based continuous model
+    // 2. Resolve Floor Gap based on physical phone movement, building category typology, and micro-pressure
     final resolvedGap = GeocodingService.resolveDynamicFloorGapFromCoords(
       latitude: targetLat,
       longitude: targetLon,
       livePressureHpa: _liveBarometerPressureHpa,
       basePressureHpa: _baseFloorBarometerPressureHpa,
+      measuredMotionGapMeters: _lastMeasuredMotionGap,
       category: _categoryController.text,
+      venueName: _nameController.text,
     );
 
     if (force || _isElevationAutoLocked) {
@@ -1079,22 +1059,20 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
         (widget.userCoords != null && widget.userCoords!.longitude != 0.0
             ? widget.userCoords!.longitude
             : null);
-    final rawInitialAlt = widget.userCoords?.height ?? 0.0;
-    final initialAlt = (rawInitialAlt < 0.0 || rawInitialAlt > 4000.0)
-        ? 0.0
-        : rawInitialAlt;
-
+    final rawInitialAlt = widget.userCoords?.height;
     final effectiveLat = initialLat ?? widget.userCoords?.latitude ?? 8.502418;
     final effectiveLng =
         initialLng ?? widget.userCoords?.longitude ?? 81.181243;
-    final terrainAlt = GeocodingService.resolveTerrainAltitudeFromCoords(
+    final autoGroundAlt = GeocodingService.resolveTerrainAltitudeFromCoords(
       effectiveLat,
       effectiveLng,
+      rawGpsAltitude: rawInitialAlt,
     );
-    final autoGroundAlt = (initialAlt > 0.0) ? initialAlt : terrainAlt;
     final autoFloorGap = GeocodingService.resolveDynamicFloorGapFromCoords(
       latitude: effectiveLat,
       longitude: effectiveLng,
+      category: _categoryController.text,
+      venueName: _nameController.text,
     );
 
     _latController = TextEditingController(
@@ -1103,10 +1081,16 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
     _lngController = TextEditingController(
       text: initialLng != null ? initialLng.toStringAsFixed(6) : '',
     );
-    final venueAlt = (v != null && v.entranceBaseAnchorHeight > 0)
+
+    // If venue still has old default 10.0 or 8.5 ground alt and 3.8 floor gap, auto-calculate from location & typology!
+    final bool isLegacyDefault = v != null &&
+        ((v.entranceBaseAnchorHeight == 10.0 || v.entranceBaseAnchorHeight == 8.5) &&
+         (v.floorGapMeters == 3.8 || v.floorGapMeters <= 0.0));
+
+    final venueAlt = (v != null && v.entranceBaseAnchorHeight > 0 && !isLegacyDefault)
         ? v.entranceBaseAnchorHeight
         : autoGroundAlt;
-    final venueGap = (v != null && v.floorGapMeters > 0)
+    final venueGap = (v != null && v.floorGapMeters > 0 && !isLegacyDefault)
         ? v.floorGapMeters
         : autoFloorGap;
 
@@ -1262,6 +1246,28 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
           }, onError: (_) {});
     } catch (_) {}
 
+    // 1c. Continuous phone movement vertical tracker & stairs cadence estimator
+    PhoneMotionFloorTracker().startTracking(
+      onEstimate: (motionGap) {
+        if (!mounted || !_isMotionSyncActive) return;
+        setState(() {
+          _lastMeasuredMotionGap = motionGap;
+          if (_isElevationAutoLocked) {
+            _floorGapController.text = motionGap.toStringAsFixed(1);
+          }
+        });
+      },
+    );
+    _motionFloorTrackerSub = PhoneMotionFloorTracker().onFloorGapEstimated.listen((motionGap) {
+      if (!mounted || !_isMotionSyncActive) return;
+      setState(() {
+        _lastMeasuredMotionGap = motionGap;
+        if (_isElevationAutoLocked) {
+          _floorGapController.text = motionGap.toStringAsFixed(1);
+        }
+      });
+    });
+
     // 2. Real-time GPS stream listener with motion-based coordinate & calculation updates
     try {
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
@@ -1339,6 +1345,9 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
     _rawAccelStreamSub = null;
     _barometerSub?.cancel();
     _barometerSub = null;
+    _motionFloorTrackerSub?.cancel();
+    _motionFloorTrackerSub = null;
+    PhoneMotionFloorTracker().stopTracking();
     _stationaryDebounceTimer?.cancel();
     _stationaryDebounceTimer = null;
   }
@@ -1689,46 +1698,24 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
       _isStationaryLocked = isStationary;
 
       // 1. Auto-calculate Ground Altitude (m) based on Barometer / GPS & digital terrain model
-      final terrainAlt = GeocodingService.resolveTerrainAltitudeFromCoords(
+      final resolvedGroundAlt = GeocodingService.resolveTerrainAltitudeFromCoords(
         finalCoords.latitude,
         finalCoords.longitude,
         barometerPressureHpa: _liveBarometerPressureHpa,
+        rawGpsAltitude: finalCoords.height,
+        gpsAccuracy: fixData.accuracy,
       );
-      double resolvedGroundAlt;
-      if (_isBarometerAvailable && _liveBarometerPressureHpa != null) {
-        final baroAlt = GeocodingService.calculateAltitudeFromBarometer(
-          _liveBarometerPressureHpa!,
-        );
-        if (finalCoords.height > 0.0 &&
-            finalCoords.height < 9000.0 &&
-            !finalCoords.height.isNaN) {
-          resolvedGroundAlt = (0.70 * baroAlt) + (0.30 * finalCoords.height);
-        } else {
-          resolvedGroundAlt = baroAlt;
-        }
-      } else if (finalCoords.height > 0.0 &&
-          finalCoords.height < 9000.0 &&
-          !finalCoords.height.isNaN) {
-        if (fixData.accuracy > 0 && fixData.accuracy < 25.0) {
-          final gpsWeight = (1.0 - (fixData.accuracy / 30.0)).clamp(0.60, 0.90);
-          resolvedGroundAlt =
-              (gpsWeight * finalCoords.height) +
-              ((1.0 - gpsWeight) * terrainAlt);
-        } else {
-          resolvedGroundAlt = finalCoords.height;
-        }
-      } else {
-        resolvedGroundAlt = terrainAlt;
-      }
 
-      // 2. Auto-calculate Floor Gap (m) based on smartphone barometer pressure delta & coordinates
+      // 2. Auto-calculate Floor Gap (m) based on phone movement, category typology & coordinates
       final resolvedFloorGap =
           GeocodingService.resolveDynamicFloorGapFromCoords(
             latitude: finalCoords.latitude,
             longitude: finalCoords.longitude,
             livePressureHpa: _liveBarometerPressureHpa,
             basePressureHpa: _baseFloorBarometerPressureHpa,
+            measuredMotionGapMeters: _lastMeasuredMotionGap,
             category: _categoryController.text,
+            venueName: _nameController.text,
           );
 
       // 3. Immediately update all 4 marked fields (Latitude, Longitude, Ground Alt, Floor Gap)
@@ -1966,17 +1953,22 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
               Expanded(
                 child: Text(
                   title,
-                  maxLines: 1,
+                  maxLines: 2,
+                  softWrap: true,
                   overflow: TextOverflow.ellipsis,
                   style: GoogleFonts.plusJakartaSans(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w900,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w800,
                     color: const Color(0xFF0F172A),
-                    letterSpacing: 0.5,
+                    letterSpacing: 0.2,
+                    height: 1.25,
                   ),
                 ),
               ),
-              ?headerTrailing,
+              if (headerTrailing != null) ...[
+                const SizedBox(width: 8),
+                headerTrailing,
+              ],
             ],
           ),
           const SizedBox(height: 16),
@@ -2343,10 +2335,10 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 10.5,
+                                    fontSize: 10,
                                     fontWeight: FontWeight.w800,
                                     color: const Color(0xFF2563EB),
-                                    letterSpacing: 0.2,
+                                    letterSpacing: 0.1,
                                   ),
                                 ),
                               ),
@@ -2403,10 +2395,10 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 10.5,
+                                    fontSize: 9.5,
                                     fontWeight: FontWeight.w800,
                                     color: const Color(0xFF2563EB),
-                                    letterSpacing: 0.2,
+                                    letterSpacing: 0.05,
                                   ),
                                 ),
                               ),

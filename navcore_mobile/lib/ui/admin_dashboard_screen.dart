@@ -780,6 +780,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                           userCoords: _effectiveCoords,
                           destinations: _currentDestinations,
                           mallService: widget.mallService,
+                          malls: widget.mallService.catalog,
+                          onSelectActiveMall: (mallId) async {
+                            widget.onSelectActiveMall(mallId);
+                            await _refreshActiveMallData();
+                          },
                           onImportOsmPoi: (importedPoi) {
                             setState(() {
                               _currentDestinations.insert(0, importedPoi);
@@ -1239,6 +1244,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   userCoords: _effectiveCoords,
                   destinations: _currentDestinations,
                   mallService: widget.mallService,
+                  malls: widget.mallService.catalog,
+                  onSelectActiveMall: (mallId) async {
+                    widget.onSelectActiveMall(mallId);
+                    await _refreshActiveMallData();
+                  },
                   onImportOsmPoi: (importedPoi) {
                     setState(() {
                       _currentDestinations.insert(0, importedPoi);
@@ -1689,6 +1699,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                     userCoords: coords,
                     destinations: _currentDestinations,
                     mallService: widget.mallService,
+                    malls: widget.mallService.catalog,
+                    onSelectActiveMall: (mallId) async {
+                      widget.onSelectActiveMall(mallId);
+                      await _refreshActiveMallData();
+                    },
                     onImportOsmPoi: (importedPoi) {
                       setState(() {
                         _currentDestinations.insert(0, importedPoi);

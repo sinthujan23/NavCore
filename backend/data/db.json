@@ -24,8 +24,8 @@
       "rating": "4.8",
       "isDownloaded": true,
       "isActive": true,
-      "entranceBaseAnchorHeight": 8.5,
-      "floorGapMeters": 3.8
+      "entranceBaseAnchorHeight": 11.4,
+      "floorGapMeters": 4.1
     },
     {
       "id": "2",
@@ -82,9 +82,9 @@
     {
       "mallId": "1",
       "floorNo": 1,
-      "heightToNextM": 3.8,
-      "baseAltitudeM": 8.5,
-      "source": "admin",
+      "heightToNextM": 4.1,
+      "baseAltitudeM": 11.4,
+      "source": "barometer_gps",
       "confidence": 1,
       "isLocked": false,
       "updatedAt": "2026-10-13T16:00:00.000Z"
@@ -92,9 +92,9 @@
     {
       "mallId": "1",
       "floorNo": 2,
-      "heightToNextM": 3.8,
-      "baseAltitudeM": 12.3,
-      "source": "admin",
+      "heightToNextM": 4.1,
+      "baseAltitudeM": 15.5,
+      "source": "barometer_gps",
       "confidence": 1,
       "isLocked": false,
       "updatedAt": "2026-10-13T16:00:00.000Z"
@@ -102,9 +102,9 @@
     {
       "mallId": "1",
       "floorNo": 3,
-      "heightToNextM": 3.8,
-      "baseAltitudeM": 16.1,
-      "source": "admin",
+      "heightToNextM": 4.1,
+      "baseAltitudeM": 19.6,
+      "source": "barometer_gps",
       "confidence": 1,
       "isLocked": false,
       "updatedAt": "2026-10-13T16:00:00.000Z"
@@ -112,9 +112,9 @@
     {
       "mallId": "1",
       "floorNo": 4,
-      "heightToNextM": 3.8,
-      "baseAltitudeM": 19.9,
-      "source": "admin",
+      "heightToNextM": 4.1,
+      "baseAltitudeM": 23.7,
+      "source": "barometer_gps",
       "confidence": 1,
       "isLocked": false,
       "updatedAt": "2026-10-13T16:00:00.000Z"
@@ -122,9 +122,9 @@
     {
       "mallId": "1",
       "floorNo": 5,
-      "heightToNextM": 3.8,
-      "baseAltitudeM": 23.7,
-      "source": "admin",
+      "heightToNextM": 4.1,
+      "baseAltitudeM": 27.8,
+      "source": "barometer_gps",
       "confidence": 1,
       "isLocked": false,
       "updatedAt": "2026-10-13T16:00:00.000Z"

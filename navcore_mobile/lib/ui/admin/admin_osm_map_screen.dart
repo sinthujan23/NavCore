@@ -11,6 +11,7 @@ import '../../engine/bearing_engine.dart';
 import '../../engine/osm_place_discovery_service.dart';
 import '../../data/destinations.dart';
 import '../../data/mall_database_service.dart';
+import '../../data/api_service.dart';
 
 /// Admin & User OpenStreetMap (OSM) Live Explorer Screen
 class AdminOSMMapScreen extends StatefulWidget {
@@ -51,16 +52,33 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
   LatLng? _selectedPickerPoint;
 
   List<DestinationPOI> _osmDiscoveredPOIs = [];
+  List<DestinationPOI> _allMallsDestinations = [];
   bool _isLoadingOSM = false;
   final double _discoveryRadiusMeters = 500.0;
   int _selectedFloorFilter = 0; // 0 = All Floors
   String _selectedCategory = 'ALL';
   String _selectedMallFilter = 'ALL';
 
+  String? _resolveMallName(String? mallId) {
+    if (mallId == null || mallId.trim().isEmpty) return null;
+    final clean = mallId.trim().toLowerCase();
+    final stripped = clean.replaceAll(RegExp(r'^0+'), '');
+    final allMalls = widget.malls ?? widget.mallService?.catalog ?? _mallsWithin500m;
+    for (final m in allMalls) {
+      final mClean = m.id.trim().toLowerCase();
+      final mStripped = mClean.replaceAll(RegExp(r'^0+'), '');
+      if (mClean == clean || (stripped.isNotEmpty && mStripped == stripped)) {
+        return m.name;
+      }
+    }
+    return null;
+  }
+
   @override
   void initState() {
     super.initState();
     _mapController = MapController();
+    _allMallsDestinations = List<DestinationPOI>.from(widget.destinations);
 
     final bool hasValidUserCoords =
         widget.userCoords.latitude != 0.0 && widget.userCoords.longitude != 0.0;
@@ -70,9 +88,11 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
         widget.userCoords.longitude,
       );
       _fetchLiveOSMVenues();
+      _fetchAllMallsDestinations();
     }
 
     _fetchLiveGPSAndCenter();
+    _fetchAllMallsDestinations();
   }
 
   Future<void> _fetchLiveGPSAndCenter() async {
@@ -147,11 +167,48 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
     }
   }
 
+  Future<void> _fetchAllMallsDestinations() async {
+    try {
+      final all = await ApiService.instance.fetchDestinations();
+      final List<DestinationPOI> collected = List<DestinationPOI>.from(all);
+
+      for (final mall in _mallsWithin500m) {
+        final mallClean = mall.id.trim().toLowerCase();
+        final mallStripped = mallClean.replaceAll(RegExp(r'^0+'), '');
+        final hasPois = collected.any((p) {
+          final pm = p.mallId?.trim().toLowerCase();
+          if (pm == null || pm.isEmpty) return false;
+          return pm == mallClean || (mallStripped.isNotEmpty && pm.replaceAll(RegExp(r'^0+'), '') == mallStripped);
+        });
+        if (!hasPois) {
+          try {
+            final mallPois = await ApiService.instance.fetchDestinations(mallId: mall.id);
+            for (final mp in mallPois) {
+              if (!collected.any((c) => c.id == mp.id)) {
+                collected.add(mp);
+              }
+            }
+          } catch (_) {}
+        }
+      }
+
+      if (mounted && collected.isNotEmpty) {
+        setState(() {
+          _allMallsDestinations = collected;
+        });
+      }
+    } catch (e) {
+      debugPrint('[AdminOSMMapScreen] Error fetching all malls destinations: $e');
+    }
+  }
+
   Future<void> _fetchLiveOSMVenues() async {
     if (_currentCenter == null) return;
     setState(() {
       _isLoadingOSM = true;
     });
+
+    _fetchAllMallsDestinations();
 
     try {
       final userGeodetic = GeodeticCoords(
@@ -247,11 +304,35 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
     }).toList();
   }
 
-  List<DestinationPOI> get _effectiveDisplayPOIs {
-    // In 'All Malls' overview mode, indicate only all malls within 500m on the map.
-    // Shops are only displayed once a specific mall is chosen.
+  List<DestinationPOI> get _currentMallPOIs {
+    final combined = <DestinationPOI>[
+      ...widget.destinations,
+      ..._allMallsDestinations,
+      ..._osmDiscoveredPOIs,
+    ];
+    final uniqueMap = <String, DestinationPOI>{};
+    for (final p in combined) {
+      uniqueMap[p.id] = p;
+    }
+
+    final center = _currentCenter;
+    final userGeo = center != null && center.latitude != 0.0
+        ? GeodeticCoords(
+            latitude: center.latitude,
+            longitude: center.longitude,
+            height: widget.userCoords.height,
+          )
+        : null;
+
+    // In 'All Malls' overview mode, show ALL shops from ALL nearby malls + OSM venues within 500m
     if (_selectedMallFilter == 'ALL') {
-      return const <DestinationPOI>[];
+      return uniqueMap.values.where((poi) {
+        if (userGeo != null) {
+          final dist = haversineDistance(userGeo, poi.location);
+          if (dist > 500.0) return false;
+        }
+        return true;
+      }).toList();
     }
 
     final selectedMall = _mallsWithin500m.where((m) {
@@ -270,24 +351,6 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
         selectedMall.name.trim().toLowerCase(),
       ],
     };
-
-    final combined = <DestinationPOI>[
-      ...widget.destinations,
-      ..._osmDiscoveredPOIs,
-    ];
-    final uniqueMap = <String, DestinationPOI>{};
-    for (final p in combined) {
-      uniqueMap[p.id] = p;
-    }
-
-    final center = _currentCenter;
-    final userGeo = center != null && center.latitude != 0.0
-        ? GeodeticCoords(
-            latitude: center.latitude,
-            longitude: center.longitude,
-            height: widget.userCoords.height,
-          )
-        : null;
 
     return uniqueMap.values.where((poi) {
       // 0. Filter by selected mall: POI must belong to the chosen mall
@@ -319,6 +382,12 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
         }
       }
 
+      return true;
+    }).toList();
+  }
+
+  List<DestinationPOI> get _effectiveDisplayPOIs {
+    return _currentMallPOIs.where((poi) {
       final matchesFloor =
           _selectedFloorFilter == 0 || poi.floorNumber == _selectedFloorFilter;
       final matchesCategory =
@@ -367,6 +436,7 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
               setState(() {
                 _selectedMallFilter = mall.id;
                 _selectedFloorFilter = 0;
+                _selectedCategory = 'ALL';
               });
               if (widget.onSelectActiveMall != null) {
                 widget.onSelectActiveMall!(mall.id);
@@ -525,11 +595,14 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
         );
         final color = _getCategoryColor(poi.category);
 
+        final mallName = _resolveMallName(poi.mallId);
+        final bool hasMallBadge = mallName != null && mallName.isNotEmpty;
+
         markers.add(
           Marker(
             point: dispersedLatLng,
-            width: 105,
-            height: 48,
+            width: hasMallBadge ? 115 : 105,
+            height: hasMallBadge ? 54 : 48,
             child: GestureDetector(
               onTap: () => _showPOIDetailsBottomSheet(poi),
               child: Column(
@@ -551,50 +624,78 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
                         ),
                       ],
                       border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.3),
+                        color: Colors.white.withValues(alpha: 0.35),
                         width: 1,
                       ),
                     ),
-                    child: Row(
+                    child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(
-                          _getCategoryIcon(poi.category),
-                          size: 11,
-                          color: Colors.white,
-                        ),
-                        const SizedBox(width: 3),
-                        Flexible(
-                          child: Text(
-                            poi.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: GoogleFonts.plusJakartaSans(
-                              fontSize: 9.5,
-                              fontWeight: FontWeight.bold,
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _getCategoryIcon(poi.category),
+                              size: 11,
                               color: Colors.white,
                             ),
-                          ),
+                            const SizedBox(width: 3),
+                            Flexible(
+                              child: Text(
+                                poi.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: GoogleFonts.plusJakartaSans(
+                                  fontSize: 9.5,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 3),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 3,
+                                vertical: 1,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.35),
+                                borderRadius: BorderRadius.circular(3),
+                              ),
+                              child: Text(
+                                'L${poi.floorNumber}',
+                                style: GoogleFonts.plusJakartaSans(
+                                  fontSize: 8.5,
+                                  fontWeight: FontWeight.w800,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 3),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 3,
-                            vertical: 1,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.35),
-                            borderRadius: BorderRadius.circular(3),
-                          ),
-                          child: Text(
-                            'L${poi.floorNumber}',
-                            style: GoogleFonts.plusJakartaSans(
-                              fontSize: 8.5,
-                              fontWeight: FontWeight.w800,
-                              color: Colors.white,
+                        if (hasMallBadge) ...[
+                          const SizedBox(height: 1.5),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 4,
+                              vertical: 0.5,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.28),
+                              borderRadius: BorderRadius.circular(3),
+                            ),
+                            child: Text(
+                              mallName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.plusJakartaSans(
+                                fontSize: 7.5,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white.withValues(alpha: 0.95),
+                              ),
                             ),
                           ),
-                        ),
+                        ],
                       ],
                     ),
                   ),
@@ -673,9 +774,10 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
           )
         : null;
 
+    final mallPOIs = _currentMallPOIs;
     final displayPOIs = _effectiveDisplayPOIs;
 
-    // Available floors and categories are calculated for the currently selected mall
+    // Available floors and categories are calculated for the current view
     final Set<int> allFloorNums = {};
     if (_selectedMallFilter != 'ALL') {
       final selectedMall = _mallsWithin500m.where((m) {
@@ -690,12 +792,23 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
           allFloorNums.add(i);
         }
       }
-      for (final p in displayPOIs) {
+      for (final p in mallPOIs) {
+        allFloorNums.add(p.floorNumber);
+      }
+    } else {
+      // In ALL malls mode: collect all floors across all nearby malls and discovered shops
+      for (final m in _mallsWithin500m) {
+        final count = m.floorCount > 0 ? m.floorCount : 1;
+        for (int i = 1; i <= count; i++) {
+          allFloorNums.add(i);
+        }
+      }
+      for (final p in mallPOIs) {
         allFloorNums.add(p.floorNumber);
       }
     }
     final availableFloors = allFloorNums.toList()..sort();
-    final availableCategories = displayPOIs
+    final availableCategories = mallPOIs
         .map((p) => p.category.toUpperCase().trim())
         .where((c) => c.isNotEmpty)
         .toSet()
@@ -729,7 +842,7 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
             ),
             Text(
               _selectedMallFilter == 'ALL'
-                  ? '${_mallsWithin500m.length} Malls within 500m • Select a mall to view shops'
+                  ? '${_mallsWithin500m.length} Malls within 500m • ${displayPOIs.length} Shops (${_selectedFloorFilter == 0 ? "All Floors" : "Floor $_selectedFloorFilter"})'
                   : '${_mallsWithin500m.where((m) => m.id == _selectedMallFilter || m.name.toLowerCase() == _selectedMallFilter.toLowerCase()).firstOrNull?.name ?? "Selected Mall"} • ${displayPOIs.length} Shops (${_selectedFloorFilter == 0 ? "All Floors" : "Floor $_selectedFloorFilter"})',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -866,8 +979,10 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
 
           // Top Control Overlay Panel (Malls within 500m, Floor & Category Filters)
           if (_mallsWithin500m.isNotEmpty ||
-              (_selectedMallFilter != 'ALL' && availableFloors.length > 1) ||
-              (_selectedMallFilter != 'ALL' && availableCategories.length > 1))
+              availableFloors.length > 1 ||
+              availableCategories.length > 1 ||
+              _selectedCategory != 'ALL' ||
+              _selectedFloorFilter != 0)
             Positioned(
               top: 12,
               left: 12,
@@ -917,8 +1032,8 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
                     const SizedBox(height: 8),
                   ],
 
-                  // 2. Floor Level Filter Chips (Only shown when a specific mall is selected)
-                  if (_selectedMallFilter != 'ALL' && availableFloors.length > 1) ...[
+                  // 2. Floor Level Filter Chips (Available for selected mall or across all malls)
+                  if (availableFloors.length > 1 || _selectedFloorFilter != 0) ...[
                     SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
                       child: Row(
@@ -939,12 +1054,13 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
                         ],
                       ),
                     ),
-                    if (availableCategories.length > 1)
+                    if (availableCategories.length > 1 || _selectedCategory != 'ALL')
                       const SizedBox(height: 8),
                   ],
 
-                  // 3. Category Filter Bar (Only shown when a specific mall is selected)
-                  if (_selectedMallFilter != 'ALL' && availableCategories.length > 1)
+                  // 3. Category Filter Bar (Available for selected mall or across all malls)
+                  if (availableCategories.length > 1 ||
+                      _selectedCategory != 'ALL')
                     SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
                       child: Row(
@@ -1033,6 +1149,7 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
         setState(() {
           _selectedMallFilter = mallId;
           _selectedFloorFilter = 0; // Reset floor filter when changing mall
+          _selectedCategory = 'ALL'; // Reset category filter when changing mall
         });
         if (mallId != 'ALL' && widget.onSelectActiveMall != null) {
           widget.onSelectActiveMall!(mallId);
@@ -1082,7 +1199,11 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
     return InkWell(
       onTap: () {
         setState(() {
-          _selectedCategory = catName;
+          if (_selectedCategory == catName && catName != 'ALL') {
+            _selectedCategory = 'ALL';
+          } else {
+            _selectedCategory = catName;
+          }
         });
       },
       child: Container(
@@ -1248,7 +1369,7 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
                 const SizedBox(height: 2),
                 Text(
                   _selectedMallFilter == 'ALL'
-                      ? '500m Radius • ${_mallsWithin500m.length} Malls Nearby (Select a mall to view shops)'
+                      ? '500m Radius • ${_mallsWithin500m.length} Malls • $activePoiCount Shops Visible'
                       : '${_mallsWithin500m.where((m) => m.id == _selectedMallFilter || m.name.toLowerCase() == _selectedMallFilter.toLowerCase()).firstOrNull?.name ?? "Selected Mall"} • $activePoiCount Shops Available',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -1300,6 +1421,7 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
       ),
       builder: (context) {
         final isOsm = poi.id.startsWith('osm-');
+        final mallName = _resolveMallName(poi.mallId);
 
         return Padding(
           padding: const EdgeInsets.all(20),
@@ -1335,12 +1457,46 @@ class _AdminOSMMapScreenState extends State<AdminOSMMapScreen> {
                             color: Colors.white,
                           ),
                         ),
-                        Text(
-                          '${poi.category} • Floor ${poi.floorNumber}',
-                          style: GoogleFonts.plusJakartaSans(
-                            fontSize: 12,
-                            color: const Color(0xFF94A3B8),
-                          ),
+                        const SizedBox(height: 2),
+                        Row(
+                          children: [
+                            if (mallName != null && mallName.isNotEmpty) ...[
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 1.5,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF0284C7).withValues(alpha: 0.25),
+                                  borderRadius: BorderRadius.circular(5),
+                                  border: Border.all(
+                                    color: const Color(0xFF38BDF8),
+                                    width: 0.8,
+                                  ),
+                                ),
+                                child: Text(
+                                  mallName,
+                                  style: GoogleFonts.plusJakartaSans(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w800,
+                                    color: const Color(0xFF38BDF8),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                            ],
+                            Flexible(
+                              child: Text(
+                                '${poi.category} • Floor ${poi.floorNumber}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: GoogleFonts.plusJakartaSans(
+                                  fontSize: 12,
+                                  color: const Color(0xFF94A3B8),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),

@@ -74,6 +74,7 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
   final bool _showDpad = false;
   final ParkingService _parkingService = ParkingService();
   bool _isServerOnline = false;
+  String? _cachedActiveMallId;
   Timer? _parkingAutoRefreshTimer;
   StreamSubscription<String>? _parkingSyncSubscription;
 
@@ -108,8 +109,14 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
       return widget.buildingProfile.buildingId;
     }
     if (widget.mallService != null) {
-      final active = widget.mallService!.catalog.where((m) => m.isActive);
+      final active = widget.mallService!.catalog.where((m) => m.isActive || m.isSelected);
       if (active.isNotEmpty) return active.first.id;
+    }
+    if (_cachedActiveMallId != null && _cachedActiveMallId!.isNotEmpty) {
+      return _cachedActiveMallId;
+    }
+    if (_parkingService.activeMallId.isNotEmpty) {
+      return _parkingService.activeMallId;
     }
     return null;
   }
@@ -121,10 +128,14 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
       mallId =
           prefs.getString('NexNav_active_mall_id') ??
           prefs.getString('active_mall_id');
+      if (mallId != null && mallId.isNotEmpty) {
+        _cachedActiveMallId = mallId;
+      }
     }
     if (mallId == null || mallId.trim().isEmpty) {
       return;
     }
+    _cachedActiveMallId = mallId.trim();
     await _parkingService.loadSlotsForMall(mallId.trim());
     if (mounted) {
       setState(() {});
@@ -337,11 +348,6 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
 
     if (matched.isNotEmpty) return matched;
 
-    // Fallback: If viewing a parking floor and slots exist for this venue, show them!
-    if (isParkFloor && allSlots.isNotEmpty) {
-      return allSlots;
-    }
-
     // Zero mock data: return empty if no real slots are generated or loaded
     return const [];
   }
@@ -356,7 +362,7 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
     _parkingService.addListener(_onParkingStateChanged);
     _loadParkingSlots();
     _checkServerHealth();
-    _parkingService.startLiveSync(intervalSeconds: 1);
+    _parkingService.startLiveSync(intervalSeconds: 3);
 
     _parkingSyncSubscription = ApiService.instance.syncStream.listen((event) {
       if (mounted && (event == 'parking' || event == 'destinations')) {
@@ -367,10 +373,15 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
     // Check server health once on screen entry
     _checkServerHealth();
 
-    // Auto-refresh parking slots every 25s instead of 1s to prevent server overload
-    _parkingAutoRefreshTimer = Timer.periodic(const Duration(seconds: 25), (_) {
+    // Auto-refresh parking slots every 3s so admin updates on other devices reflect in real-time
+    _parkingAutoRefreshTimer = Timer.periodic(const Duration(seconds: 3), (_) {
       if (mounted) {
-        _loadParkingSlots();
+        final bId = _resolveActiveMallId() ?? '';
+        if (bId.isNotEmpty) {
+          _parkingService.syncSlotsSilently(bId, force: true);
+        } else {
+          _loadParkingSlots();
+        }
       }
     });
 
@@ -427,6 +438,15 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
 
   void _onParkingStateChanged() {
     if (mounted) {
+      if (_selectedParkingSlot != null) {
+        final currentSlots = _getSlotsForDisplayFloor(displayFloor);
+        final stillExists = currentSlots.any(
+          (s) => ParkingService.isMatchingSlotId(s.id, _selectedParkingSlot!.id),
+        );
+        if (!stillExists) {
+          _selectedParkingSlot = null;
+        }
+      }
       setState(() {});
     }
   }
@@ -1151,11 +1171,15 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                     vertical: 6,
                   ),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF059669),
+                    color: const Color(0xFF0F172A),
                     borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: const Color(0xFF1E293B),
+                      width: 1,
+                    ),
                     boxShadow: const [
                       BoxShadow(
-                        color: Color(0x33059669),
+                        color: Color(0x240F172A),
                         blurRadius: 6,
                         offset: Offset(0, 2),
                       ),
@@ -1167,7 +1191,7 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                       const Icon(
                         LucideIcons.shieldCheck,
                         size: 13,
-                        color: Colors.white,
+                        color: Color(0xFF38BDF8),
                       ),
                       const SizedBox(width: 4),
                       Text(
@@ -3390,6 +3414,78 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                         slotId: slot.id,
                       ),
                     );
+                  },
+                ),
+              ),
+            ],
+            if (widget.isAdmin) ...[
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: OutlinedButton.icon(
+                  icon: const Icon(
+                    LucideIcons.trash2,
+                    color: Color(0xFFEF4444),
+                    size: 18,
+                  ),
+                  label: Text(
+                    'DELETE PARKING BAY',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      color: const Color(0xFFEF4444),
+                    ),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    backgroundColor: const Color(0xFFFEF2F2),
+                    side: const BorderSide(
+                      color: Color(0xFFFCA5A5),
+                      width: 1.2,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  onPressed: () async {
+                    final parkedVehicle =
+                        _parkingService.getParkedVehicleForSlot(slot.id);
+                    final isOccupied =
+                        slot.status == ParkingSlotStatus.occupied ||
+                        parkedVehicle != null;
+                    if (isOccupied) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Cannot delete slot ${slot.id}: A vehicle (${parkedVehicle?.licensePlate ?? "active vehicle"}) is currently parked here. Unpark first.',
+                          ),
+                          backgroundColor: const Color(0xFFDC2626),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                      return;
+                    }
+
+                    final activeMallId = _resolveActiveMallId();
+                    final slotMall = slot.mallId.isNotEmpty
+                        ? slot.mallId
+                        : (activeMallId ??
+                            (slot.id.contains('-')
+                                ? slot.id.split('-').first
+                                : '1'));
+
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Deleted parking stall ${slot.id}'),
+                        backgroundColor: const Color(0xFFEF4444),
+                        behavior: SnackBarBehavior.floating,
+                        duration: const Duration(milliseconds: 1400),
+                      ),
+                    );
+                    _selectedParkingSlot = null;
+                    setState(() {});
+                    await _parkingService.deleteParkingSlot(slotMall, slot.id);
                   },
                 ),
               ),

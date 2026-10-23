@@ -2453,13 +2453,15 @@ class _AddEditPoiScreenState extends State<AddEditPoiScreen> {
               Expanded(
                 child: Text(
                   title,
-                  maxLines: 1,
+                  maxLines: 2,
+                  softWrap: true,
                   overflow: TextOverflow.ellipsis,
                   style: GoogleFonts.plusJakartaSans(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w900,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w800,
                     color: const Color(0xFF0F172A),
-                    letterSpacing: 0.5,
+                    letterSpacing: 0.2,
+                    height: 1.25,
                   ),
                 ),
               ),

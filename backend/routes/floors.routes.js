@@ -2,6 +2,11 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db/dataStore');
 const { requireAdmin } = require('../middleware/auth');
+const {
+  resolveTerrainAltitude,
+  resolveDynamicFloorGap,
+  correctGpsAltitude,
+} = require('../services/geodesicService');
 
 /**
  * GET /api/floors/:mallId
@@ -29,18 +34,14 @@ router.get('/:mallId', (req, res) => {
     });
     if (mall) {
       const floorCount = Number(mall.floorCount) || 3;
-      const gap = Number(mall.floorGapMeters) || 3.8;
       const lat = Number(mall.latitude || 0);
       const lon = Number(mall.longitude || 0);
-      let locAlt = 8.5;
-      if (lat && lon) {
-        if (Math.abs(lat - 8.5) < 0.6 && Math.abs(lon - 81.2) < 0.6) locAlt = 8.5;
-        else if (Math.abs(lat - 6.9) < 0.5 && Math.abs(lon - 79.8) < 0.5) locAlt = 7.2;
-        else if (Math.abs(lat - 7.3) < 0.5 && Math.abs(lon - 80.6) < 0.5) locAlt = 485.0;
-        else if (Math.abs(lat - 6.0) < 0.5 && Math.abs(lon - 80.2) < 0.5) locAlt = 10.0;
-        else if (Math.abs(lat - 9.6) < 0.5 && Math.abs(lon - 80.0) < 0.5) locAlt = 5.5;
-      }
-      let currentAlt = Number(mall.entranceBaseAnchorHeight) || locAlt;
+      const locAlt = resolveTerrainAltitude(lat, lon);
+      const defaultGap = resolveDynamicFloorGap(lat, lon, mall.category, mall.name);
+      const gap = Number(mall.floorGapMeters) > 0 && Number(mall.floorGapMeters) !== 3.8 ? Number(mall.floorGapMeters) : defaultGap;
+      let currentAlt = (Number(mall.entranceBaseAnchorHeight) > 0 && Number(mall.entranceBaseAnchorHeight) !== 10.0 && Number(mall.entranceBaseAnchorHeight) !== 8.5)
+        ? Number(mall.entranceBaseAnchorHeight)
+        : locAlt;
       for (let fn = 1; fn <= floorCount; fn++) {
         const newFloor = {
           mallId: mall.id,
@@ -240,23 +241,27 @@ router.post('/:mallId/calculate', (req, res) => {
 
   let floors = db.filter('floorHeights', f => (f.mallId || '').trim().toLowerCase() === lowerMallId);
   const mall = db.find('malls', m => (m.id || '').trim().toLowerCase() === lowerMallId);
-  const userLocationAltitude = liveAltitudeM || gpsAltitudeM || groundBaselineAlt;
-
   const lat = Number(latitude || (mall && mall.latitude) || 0);
   const lon = Number(longitude || (mall && mall.longitude) || 0);
-  let locationDefaultAltitude = 8.5;
-  if (lat && lon) {
-    if (Math.abs(lat - 8.5) < 0.6 && Math.abs(lon - 81.2) < 0.6) locationDefaultAltitude = 8.5;
-    else if (Math.abs(lat - 6.9) < 0.5 && Math.abs(lon - 79.8) < 0.5) locationDefaultAltitude = 7.2;
-    else if (Math.abs(lat - 7.3) < 0.5 && Math.abs(lon - 80.6) < 0.5) locationDefaultAltitude = 485.0;
-    else if (Math.abs(lat - 6.0) < 0.5 && Math.abs(lon - 80.2) < 0.5) locationDefaultAltitude = 10.0;
-    else if (Math.abs(lat - 9.6) < 0.5 && Math.abs(lon - 80.0) < 0.5) locationDefaultAltitude = 5.5;
-  }
 
+  // Compensate GPS ellipsoidal altitude with global EGM96 geoid undulation model
+  let resolvedLiveAltitude = null;
+  if (gpsAltitudeM !== undefined && gpsAltitudeM !== null) {
+    resolvedLiveAltitude = correctGpsAltitude(Number(gpsAltitudeM), lat, lon);
+  }
+  const userLocationAltitude = resolvedLiveAltitude || liveAltitudeM || groundBaselineAlt;
+
+  // Resolve continuous worldwide terrain elevation (anywhere on Earth)
+  const locationDefaultAltitude = resolveTerrainAltitude(lat, lon);
+
+  const isLegacyAnchor = mall && (Number(mall.entranceBaseAnchorHeight) === 10.0 || Number(mall.entranceBaseAnchorHeight) === 8.5);
   const entranceAnchor = (userLocationAltitude && Number(userLocationAltitude) > 0)
     ? Number(userLocationAltitude)
-    : ((mall && Number(mall.entranceBaseAnchorHeight)) || locationDefaultAltitude);
-  const dynamicGap = Number(floorGapM) || Number(mall?.floorGapMeters) || 3.8;
+    : ((mall && Number(mall.entranceBaseAnchorHeight) > 0 && !isLegacyAnchor) ? Number(mall.entranceBaseAnchorHeight) : locationDefaultAltitude);
+
+  const defaultTypologyGap = resolveDynamicFloorGap(lat, lon, mall && mall.category, mall && mall.name);
+  const isLegacyGap = mall && Number(mall.floorGapMeters) === 3.8;
+  const dynamicGap = Number(floorGapM) || ((mall && Number(mall.floorGapMeters) > 0 && !isLegacyGap) ? Number(mall.floorGapMeters) : defaultTypologyGap);
 
   if (floors.length === 0) {
     const floorCount = Number(mall?.floorCount) || 3;
@@ -266,7 +271,7 @@ router.post('/:mallId/calculate', (req, res) => {
         floorNo: fn,
         heightToNextM: dynamicGap,
         baseAltitudeM: entranceAnchor,
-        source: 'barometer',
+        source: 'barometer_gps',
         confidence: 0.9,
         isLocked: false,
         updatedAt: new Date().toISOString(),
@@ -277,16 +282,16 @@ router.post('/:mallId/calculate', (req, res) => {
   floors.sort((a, b) => a.floorNo - b.floorNo);
 
   // Auto-calculate cumulative base altitudes based on user location & preserved admin floor gaps
-  const firstFloorAdminLocked = floors[0] && (floors[0].isLocked === true || floors[0].source === 'admin');
+  const firstFloorAdminLocked = floors[0] && (floors[0].isLocked === true || floors[0].source === 'admin') && floors[0].baseAltitudeM !== 10.0 && floors[0].baseAltitudeM !== 8.5 && floors[0].baseAltitudeM !== 15.0;
   let currentAlt = firstFloorAdminLocked && floors[0].baseAltitudeM !== undefined && floors[0].baseAltitudeM > 0
     ? Number(floors[0].baseAltitudeM)
     : Number(entranceAnchor);
 
   const updated = floors.map((f, idx) => {
-    // If admin added/locked this floor gap, strictly preserve it!
-    const isExplicitlyLocked = f.isLocked === true;
+    // If admin added/locked this floor gap, strictly preserve it (ignore old default 3.8 / 4.5)
+    const isExplicitlyLocked = f.isLocked === true && Number(f.heightToNextM) !== 3.8 && Number(f.heightToNextM) !== 4.5;
     const gap = isExplicitlyLocked ? (Number(f.heightToNextM) || dynamicGap) : dynamicGap;
-    const source = isExplicitlyLocked ? 'admin' : (userLocationAltitude ? 'gps_baro_fusion' : 'barometer');
+    const source = isExplicitlyLocked ? 'admin' : (userLocationAltitude ? 'gps_baro_fusion' : 'barometer_gps');
     const confidence = isExplicitlyLocked ? 1.0 : (barometerPressureHpa ? 0.95 : 0.85);
 
     if (idx === 0) {
@@ -294,7 +299,7 @@ router.post('/:mallId/calculate', (req, res) => {
         ? Number(f.baseAltitudeM)
         : Number(entranceAnchor);
     } else {
-      const prevLocked = floors[idx - 1].isLocked === true;
+      const prevLocked = floors[idx - 1].isLocked === true && Number(floors[idx - 1].heightToNextM) !== 3.8 && Number(floors[idx - 1].heightToNextM) !== 4.5;
       const prevGap = prevLocked ? (Number(floors[idx - 1].heightToNextM) || dynamicGap) : dynamicGap;
       currentAlt += prevGap;
     }
@@ -305,7 +310,7 @@ router.post('/:mallId/calculate', (req, res) => {
       baseAltitudeM: parseFloat(currentAlt.toFixed(2)),
       source,
       confidence,
-      isLocked: isAdminLocked,
+      isLocked: isExplicitlyLocked,
       updatedAt: new Date().toISOString(),
     };
   });
@@ -327,8 +332,19 @@ router.post('/:mallId/reset', requireAdmin, (req, res) => {
   floors.sort((a, b) => a.floorNo - b.floorNo);
 
   const mall = db.find('malls', m => (m.id || '').trim().toLowerCase() === lowerMallId);
-  const entranceAnchor = (mall && Number(mall.entranceBaseAnchorHeight)) || 8.5;
-  const defaultGap = Number(mall && mall.floorGapMeters) || 3.8;
+  const lat = Number((mall && mall.latitude) || 0);
+  const lon = Number((mall && mall.longitude) || 0);
+  const locAlt = resolveTerrainAltitude(lat, lon);
+  const isLegacyAnchor = mall && (Number(mall.entranceBaseAnchorHeight) === 10.0 || Number(mall.entranceBaseAnchorHeight) === 8.5);
+  const entranceAnchor = (mall && Number(mall.entranceBaseAnchorHeight) > 0 && !isLegacyAnchor)
+    ? Number(mall.entranceBaseAnchorHeight)
+    : locAlt;
+
+  const defaultTypologyGap = resolveDynamicFloorGap(lat, lon, mall && mall.category, mall && mall.name);
+  const isLegacyGap = mall && Number(mall.floorGapMeters) === 3.8;
+  const defaultGap = (mall && Number(mall.floorGapMeters) > 0 && !isLegacyGap)
+    ? Number(mall.floorGapMeters)
+    : defaultTypologyGap;
 
   const updated = floors.map((f, idx) => {
     const baseAlt = entranceAnchor + (idx * defaultGap);
