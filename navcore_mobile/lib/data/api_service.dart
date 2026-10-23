@@ -1359,7 +1359,12 @@ class ApiService {
         'isActive': mall.isActive,
         'entranceBaseAnchorHeight': mall.entranceBaseAnchorHeight,
         'floorGapMeters': mall.floorGapMeters,
+        'parkingFloors': mall.parkingFloors,
       };
+      await prefs.setStringList(
+        'venue_parking_floors_${mall.id}',
+        mall.parkingFloors,
+      );
       final existIdx = catalogList.indexWhere(
         (m) => (m['id']?.toString() ?? '').trim().toLowerCase() == lowerId,
       );
@@ -1388,6 +1393,7 @@ class ApiService {
               'rating': mall.rating,
               'entranceBaseAnchorHeight': mall.entranceBaseAnchorHeight,
               'floorGapMeters': mall.floorGapMeters,
+              'parkingFloors': mall.parkingFloors,
             }),
           )
           .timeout(const Duration(seconds: 8));
@@ -1406,6 +1412,12 @@ class ApiService {
     try {
       final prefs = await SharedPreferences.getInstance();
       final lowerId = mall.id.trim().toLowerCase();
+
+      // Immediately persist venue parking floors
+      await prefs.setStringList(
+        'venue_parking_floors_${mall.id}',
+        mall.parkingFloors,
+      );
 
       // Immediately sync local cache
       final cachedMallsJson = prefs.getString('cache_malls_catalog');
@@ -1429,6 +1441,7 @@ class ApiService {
             'isActive': mall.isActive,
             'entranceBaseAnchorHeight': mall.entranceBaseAnchorHeight,
             'floorGapMeters': mall.floorGapMeters,
+            'parkingFloors': mall.parkingFloors,
           };
           if (existIdx != -1) {
             catalogList[existIdx] = mallMap;
@@ -1458,6 +1471,7 @@ class ApiService {
               'isActive': mall.isActive,
               'entranceBaseAnchorHeight': mall.entranceBaseAnchorHeight,
               'floorGapMeters': mall.floorGapMeters,
+              'parkingFloors': mall.parkingFloors,
             }),
           )
           .timeout(const Duration(seconds: 8));
@@ -2760,7 +2774,7 @@ class ApiService {
                     RegExp(r'^[0-9]+-[A-Z0-9]+-[A-Z]-[0-9]+$').hasMatch(id);
 
                 if (isPark) {
-                  String fId = 'B1';
+                  String fId = 'P';
                   String section = 'A';
                   int slotNum = 1;
                   bool isEv = false;

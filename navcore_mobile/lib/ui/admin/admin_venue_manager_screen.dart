@@ -271,6 +271,13 @@ class _AdminVenueManagerScreenState extends State<AdminVenueManagerScreen> {
               'venue_parking_floors_${newMall.id}',
               newMall.parkingFloors,
             );
+            final cleanId = newMall.id.replaceFirst('mall-', '');
+            if (cleanId != newMall.id) {
+              await prefs.setStringList(
+                'venue_parking_floors_$cleanId',
+                newMall.parkingFloors,
+              );
+            }
             await prefs.setString(
               'cache_floors_${newMall.id}',
               jsonEncode(updatedFloors.map((f) => f.toJson()).toList()),
@@ -279,6 +286,8 @@ class _AdminVenueManagerScreenState extends State<AdminVenueManagerScreen> {
 
             widget.onSelectActiveMall(newMall.id);
             _loadVenuesFromApi();
+            ApiService.instance.notifyDataSynced('malls');
+            ApiService.instance.notifyDataSynced('parking');
           },
         ),
       ),
@@ -1899,6 +1908,13 @@ class _AddEditVenueScreenState extends State<AddEditVenueScreen> {
         'venue_parking_floors_${newMall.id}',
         parkingFloorsList,
       );
+      final cleanId = newMall.id.replaceFirst('mall-', '');
+      if (cleanId != newMall.id) {
+        prefs.setStringList(
+          'venue_parking_floors_$cleanId',
+          parkingFloorsList,
+        );
+      }
     });
 
     widget.onSaveVenue(newMall);

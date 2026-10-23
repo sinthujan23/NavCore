@@ -1485,6 +1485,9 @@ class ParkingService extends ChangeNotifier {
     if (s == 'P' ||
         s == 'P1' ||
         s == 'PARKING' ||
+        s == 'PARKING (P)' ||
+        s == '(P)' ||
+        s.contains('(P)') ||
         s == 'PARKING FLOOR' ||
         s == 'PARKING DECK') {
       return 'P';
@@ -1497,6 +1500,7 @@ class ParkingService extends ChangeNotifier {
         s == 'PARKING B1' ||
         s == 'BASEMENT 1' ||
         s == 'BASEMENT B1' ||
+        s.contains('B1') ||
         s.contains('BASEMENT 1') ||
         s.contains('BASEMENT B1')) {
       return 'B1';
@@ -1510,6 +1514,7 @@ class ParkingService extends ChangeNotifier {
         s == 'PARKING B2' ||
         s == 'BASEMENT 2' ||
         s == 'BASEMENT B2' ||
+        s.contains('B2') ||
         s.contains('BASEMENT 2') ||
         s.contains('BASEMENT B2')) {
       return 'B2';
@@ -1523,6 +1528,7 @@ class ParkingService extends ChangeNotifier {
         s == 'PARKING B3' ||
         s == 'BASEMENT 3' ||
         s == 'BASEMENT B3' ||
+        s.contains('B3') ||
         s.contains('BASEMENT 3') ||
         s.contains('BASEMENT B3')) {
       return 'B3';

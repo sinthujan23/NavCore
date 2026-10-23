@@ -510,34 +510,37 @@ class _AdminParkingManagerScreenState extends State<AdminParkingManagerScreen> {
       }
     }
 
-    // 2. Also check any basement levels (h.floorNo < 0) from floor heights as valid parking floors
-    final targetId = mall.id.trim().toLowerCase();
-    final matchingHeights = heights.where((h) {
-      final hMall = h.mallId.trim().toLowerCase();
-      return (hMall.isEmpty ||
-              hMall == targetId ||
-              hMall.replaceAll(RegExp(r'^0+'), '') ==
-                  targetId.replaceAll(RegExp(r'^0+'), '')) &&
-          h.floorNo < 0;
-    }).toList();
+    // Only if no designated parking floors were configured do we fallback to checking basements/slots
+    if (floors.isEmpty) {
+      // 2. Also check any basement levels (h.floorNo < 0) from floor heights as valid parking floors
+      final targetId = mall.id.trim().toLowerCase();
+      final matchingHeights = heights.where((h) {
+        final hMall = h.mallId.trim().toLowerCase();
+        return (hMall.isEmpty ||
+                hMall == targetId ||
+                hMall.replaceAll(RegExp(r'^0+'), '') ==
+                    targetId.replaceAll(RegExp(r'^0+'), '')) &&
+            h.floorNo < 0;
+      }).toList();
 
-    if (matchingHeights.isNotEmpty) {
-      matchingHeights.sort((a, b) => a.floorNo.compareTo(b.floorNo));
-      for (final h in matchingHeights) {
-        final label = 'B${h.floorNo.abs()}';
-        if (!floors.contains(label)) {
-          floors.add(label);
+      if (matchingHeights.isNotEmpty) {
+        matchingHeights.sort((a, b) => a.floorNo.compareTo(b.floorNo));
+        for (final h in matchingHeights) {
+          final label = 'B${h.floorNo.abs()}';
+          if (!floors.contains(label)) {
+            floors.add(label);
+          }
         }
       }
-    }
 
-    // 3. Include any floor that currently has parking stalls placed in ParkingService (excluding upper retail floors F1, F2...)
-    final slotsMap = _parkingService.getFloorSlotsForMall(mall.id);
-    for (final f in slotsMap.keys) {
-      if (slotsMap[f] != null && slotsMap[f]!.isNotEmpty) {
-        final norm = ParkingService.normalizeFloorId(f);
-        if (isRetailFloor(norm)) continue;
-        if (!floors.contains(norm)) floors.add(norm);
+      // 3. Include any floor that currently has parking stalls placed in ParkingService (excluding upper retail floors F1, F2...)
+      final slotsMap = _parkingService.getFloorSlotsForMall(mall.id);
+      for (final f in slotsMap.keys) {
+        if (slotsMap[f] != null && slotsMap[f]!.isNotEmpty) {
+          final norm = ParkingService.normalizeFloorId(f);
+          if (isRetailFloor(norm)) continue;
+          if (!floors.contains(norm)) floors.add(norm);
+        }
       }
     }
 

@@ -484,7 +484,7 @@ const handleParkVehicle = (req, res) => {
     slotId: body.slotId,
     mallId,
     floorId: body.floorId || 'P',
-    floorName: body.floorName || 'Basement Level B1',
+    floorName: body.floorName || (body.floorId === 'P' || !body.floorId ? 'Parking Level P' : 'Basement Level B1'),
     latitude: Number(body.latitude) || 0.0,
     longitude: Number(body.longitude) || 0.0,
     height: Number(body.height || 0.0),

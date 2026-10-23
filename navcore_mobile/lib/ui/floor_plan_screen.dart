@@ -75,12 +75,68 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
   final ParkingService _parkingService = ParkingService();
   bool _isServerOnline = false;
   String? _cachedActiveMallId;
+  List<String>? _cachedParkingFloors;
   Timer? _parkingAutoRefreshTimer;
   StreamSubscription<String>? _parkingSyncSubscription;
 
   late AnimationController _pulseController;
 
-  FloorLevelConfig get displayFloor => _overrideFloor ?? widget.currentFloor;
+  FloorLevelConfig get displayFloor {
+    final effective = _effectiveFloorLevels;
+    if (effective.isEmpty) return widget.currentFloor;
+
+    if (_overrideFloor != null) {
+      // 1. Direct match on floorId
+      final matchById = effective
+          .where(
+            (f) =>
+                f.floorId.trim().toUpperCase() ==
+                _overrideFloor!.floorId.trim().toUpperCase(),
+          )
+          .firstOrNull;
+      if (matchById != null) return matchById;
+
+      // 2. If _overrideFloor was a parking floor (like 'P' or 'B1')
+      final isOverrideParking =
+          _overrideFloor!.floorId.trim().toUpperCase() == 'P' ||
+          _overrideFloor!.floorNumber < 0 ||
+          _overrideFloor!.name.trim().toUpperCase().contains('PARK');
+      if (isOverrideParking) {
+        // Find the designated effective parking floor (e.g. P or B1)
+        final parkMatch = effective
+            .where(
+              (f) =>
+                  f.floorId.trim().toUpperCase() == 'P' ||
+                  ParkingService.normalizeFloorId(f.floorId) == 'P' ||
+                  f.name.trim().toUpperCase().contains('(P)') ||
+                  f.floorNumber < 0 ||
+                  f.floorId.trim().toUpperCase().startsWith('B') ||
+                  f.name.trim().toUpperCase().contains('PARK'),
+            )
+            .firstOrNull;
+        if (parkMatch != null) return parkMatch;
+      }
+
+      // 3. Match on floorNumber
+      final matchByNum = effective
+          .where((f) => f.floorNumber == _overrideFloor!.floorNumber)
+          .firstOrNull;
+      if (matchByNum != null) return matchByNum;
+    }
+
+    // Default to widget.currentFloor if present in effective list
+    final curMatch = effective
+        .where(
+          (f) =>
+              f.floorId.trim().toUpperCase() ==
+                  widget.currentFloor.floorId.trim().toUpperCase() ||
+              f.floorNumber == widget.currentFloor.floorNumber,
+        )
+        .firstOrNull;
+    if (curMatch != null) return curMatch;
+
+    return effective.first;
+  }
 
   Future<void> _checkServerHealth() async {
     try {
@@ -123,8 +179,8 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
 
   Future<void> _loadParkingSlots() async {
     String? mallId = _resolveActiveMallId();
+    final prefs = await SharedPreferences.getInstance();
     if (mallId == null || mallId.isEmpty) {
-      final prefs = await SharedPreferences.getInstance();
       mallId =
           prefs.getString('NexNav_active_mall_id') ??
           prefs.getString('active_mall_id');
@@ -135,8 +191,35 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
     if (mallId == null || mallId.trim().isEmpty) {
       return;
     }
-    _cachedActiveMallId = mallId.trim();
-    await _parkingService.loadSlotsForMall(mallId.trim());
+    final cleanMallId = mallId.trim();
+    _cachedActiveMallId = cleanMallId;
+
+    List<String>? savedFloors =
+        prefs.getStringList('venue_parking_floors_$cleanMallId') ??
+        prefs.getStringList('venue_parking_floors_${cleanMallId.replaceFirst('mall-', '')}') ??
+        prefs.getStringList('venue_parking_floors_mall-$cleanMallId');
+    if (savedFloors == null && widget.buildingProfile.buildingId.isNotEmpty) {
+      final pId = widget.buildingProfile.buildingId;
+      savedFloors =
+          prefs.getStringList('venue_parking_floors_$pId') ??
+          prefs.getStringList('venue_parking_floors_${pId.replaceFirst('mall-', '')}');
+    }
+    if ((savedFloors == null || savedFloors.isEmpty) && widget.mallService != null) {
+      final matches = widget.mallService!.catalog.where((m) =>
+          ParkingService.normalizeMallId(m.id) == ParkingService.normalizeMallId(cleanMallId) ||
+          m.id.toLowerCase().replaceAll('mall-', '') == cleanMallId.toLowerCase().replaceAll('mall-', '') ||
+          (widget.buildingProfile.name.isNotEmpty && m.name.toLowerCase() == widget.buildingProfile.name.toLowerCase()) ||
+          m.isActive ||
+          m.isSelected);
+      if (matches.isNotEmpty && matches.first.parkingFloors.isNotEmpty) {
+        savedFloors = matches.first.parkingFloors;
+      }
+    }
+    if (savedFloors != null && savedFloors.isNotEmpty) {
+      _cachedParkingFloors = savedFloors;
+    }
+
+    await _parkingService.loadSlotsForMall(cleanMallId);
     if (mounted) {
       setState(() {});
     }
@@ -144,21 +227,21 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
 
   String _getFloorIdString(FloorLevelConfig floor) {
     final norm = ParkingService.normalizeFloorId(floor.floorId);
-    if (norm == 'P' || floor.floorId.toUpperCase() == 'P') {
+    final nameNorm = ParkingService.normalizeFloorId(floor.name);
+    if (norm == 'P' ||
+        floor.floorId.trim().toUpperCase() == 'P' ||
+        nameNorm == 'P' ||
+        floor.name.trim().toUpperCase().contains('(P)')) {
       return 'P';
+    }
+    if (norm.startsWith('B') || norm == 'B1' || norm == 'B2' || norm == 'B3') {
+      return norm;
+    }
+    if (nameNorm.startsWith('B') || nameNorm == 'B1' || nameNorm == 'B2' || nameNorm == 'B3') {
+      return nameNorm;
     }
     if (floor.floorNumber < 0) {
       return 'B${floor.floorNumber.abs()}';
-    }
-    if (norm == 'B1' || norm == 'B2' || norm == 'B3') {
-      return norm;
-    }
-    final nameNorm = ParkingService.normalizeFloorId(floor.name);
-    if (nameNorm == 'P' || floor.name.toUpperCase().contains('PARK')) {
-      return 'P';
-    }
-    if (nameNorm == 'B1' || nameNorm == 'B2' || nameNorm == 'B3') {
-      return nameNorm;
     }
     if (floor.floorNumber == 0 || norm == 'GF') {
       return 'GF';
@@ -170,21 +253,21 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
 
   String _getFloorPillLabel(FloorLevelConfig floor) {
     final norm = ParkingService.normalizeFloorId(floor.floorId);
-    if (norm == 'P' || floor.floorId.toUpperCase() == 'P') {
+    final nameNorm = ParkingService.normalizeFloorId(floor.name);
+    if (norm == 'P' ||
+        floor.floorId.trim().toUpperCase() == 'P' ||
+        nameNorm == 'P' ||
+        floor.name.trim().toUpperCase().contains('(P)')) {
       return 'P';
+    }
+    if (norm.startsWith('B') || norm == 'B1' || norm == 'B2' || norm == 'B3') {
+      return norm;
+    }
+    if (nameNorm.startsWith('B') || nameNorm == 'B1' || nameNorm == 'B2' || nameNorm == 'B3') {
+      return nameNorm;
     }
     if (floor.floorNumber < 0) {
       return 'B${floor.floorNumber.abs()}';
-    }
-    if (norm == 'B1' || norm == 'B2' || norm == 'B3') {
-      return norm;
-    }
-    final nameNorm = ParkingService.normalizeFloorId(floor.name);
-    if (nameNorm == 'P' || floor.name.toUpperCase().contains('PARK')) {
-      return 'P';
-    }
-    if (nameNorm == 'B1' || nameNorm == 'B2' || nameNorm == 'B3') {
-      return nameNorm;
     }
     if (floor.floorNumber == 0 || norm == 'GF') {
       return 'GF';
@@ -214,26 +297,70 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
         ? widget.buildingProfile.floorGapMeters
         : 3.8;
 
-    // Collect all candidate parking floors: ALWAYS include 'P' by default so parking is never missing!
-    final candidateParkingFloors = <String>{'P'};
+    final candidateParkingFloors = <String>{};
 
-    // Check if mall metadata has configured parking floors
-    if (widget.mallService != null && bId.isNotEmpty) {
-      final matches = widget.mallService!.catalog.where(
-        (m) =>
-            ParkingService.normalizeMallId(m.id) ==
-            ParkingService.normalizeMallId(bId),
-      );
-      if (matches.isNotEmpty) {
-        for (final pf in matches.first.parkingFloors) {
-          if (pf.trim().isNotEmpty) candidateParkingFloors.add(pf.trim());
+    bool isRetailFloor(String floorLabel) {
+      final clean = floorLabel.trim();
+      return RegExp(r'^F\d+$', caseSensitive: false).hasMatch(clean) ||
+          RegExp(r'^Floor\s*\d+$', caseSensitive: false).hasMatch(clean);
+    }
+
+    // 1. Check if explicitly saved parking floors exist for this mall (from Edit Venue Package)
+    if (_cachedParkingFloors != null && _cachedParkingFloors!.isNotEmpty) {
+      for (final pf in _cachedParkingFloors!) {
+        final norm = ParkingService.normalizeFloorId(pf);
+        if (norm.isNotEmpty && !isRetailFloor(norm)) {
+          candidateParkingFloors.add(norm);
         }
       }
     }
 
-    // Also include any floors detected in ParkingService
-    final mallSlots = _parkingService.getFloorSlotsForMall(bId);
-    candidateParkingFloors.addAll(mallSlots.keys);
+    // 2. Also check mall catalog metadata if candidateParkingFloors is still empty
+    if (candidateParkingFloors.isEmpty && widget.mallService != null) {
+      final matches = widget.mallService!.catalog.where((m) {
+        final mIdNorm = ParkingService.normalizeMallId(m.id);
+        final bIdNorm = ParkingService.normalizeMallId(bId);
+        final cleanMId = m.id.toLowerCase().replaceAll('mall-', '').trim();
+        final cleanBId = bId.toLowerCase().replaceAll('mall-', '').trim();
+        final nameMatch = widget.buildingProfile.name.isNotEmpty &&
+            m.name.trim().toLowerCase() ==
+                widget.buildingProfile.name.trim().toLowerCase();
+        return mIdNorm == bIdNorm ||
+            cleanMId == cleanBId ||
+            nameMatch ||
+            m.isActive ||
+            m.isSelected;
+      });
+      if (matches.isNotEmpty) {
+        for (final m in matches) {
+          if (m.parkingFloors.isNotEmpty) {
+            for (final pf in m.parkingFloors) {
+              final norm = ParkingService.normalizeFloorId(pf);
+              if (norm.isNotEmpty && !isRetailFloor(norm)) {
+                candidateParkingFloors.add(norm);
+              }
+            }
+            if (candidateParkingFloors.isNotEmpty) break;
+          }
+        }
+      }
+    }
+
+    // 3. Default fallback to 'P' if still completely empty (as designated primary venue parking)
+    if (candidateParkingFloors.isEmpty) {
+      candidateParkingFloors.add('P');
+    }
+
+    // Ensure floors list does NOT contain any parking floor NOT in candidateParkingFloors
+    floors.removeWhere((f) {
+      final fNorm = ParkingService.normalizeFloorId(f.floorId);
+      final isPark = f.floorNumber < 0 ||
+          fNorm == 'P' ||
+          f.floorId.toUpperCase().startsWith('B') ||
+          f.name.toUpperCase().contains('PARK') ||
+          f.name.toUpperCase().contains('BASEMENT');
+      return isPark && !candidateParkingFloors.contains(fNorm);
+    });
 
     for (final pId in candidateParkingFloors) {
       final normKey = ParkingService.normalizeFloorId(pId);
@@ -256,8 +383,10 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
         final nameNorm = ParkingService.normalizeFloorId(f.name);
         return fNorm == normKey ||
             nameNorm == normKey ||
-            (normKey == 'P' &&
-                (fNorm == 'P' || f.floorNumber < 0 || fNorm == 'B1'));
+            (normKey == 'P' && (f.floorId.toUpperCase() == 'P' || fNorm == 'P')) ||
+            (normKey.startsWith('B') &&
+                f.floorNumber < 0 &&
+                'B${f.floorNumber.abs()}' == normKey);
       });
 
       if (!alreadyPresent) {
@@ -267,12 +396,12 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
 
         floors.add(
           FloorLevelConfig(
-            floorId: normKey == 'P' ? 'P' : pId,
+            floorId: normKey,
             floorNumber: fNum,
             name: normKey == 'P'
                 ? 'Parking (P)'
                 : (normKey.startsWith('B')
-                      ? 'Basement $normKey'
+                      ? 'Parking ($normKey)'
                       : (normKey == 'GF' ? 'Ground Floor' : 'Floor F$pId')),
             relativeVectorMeters: (fNum - 1) * gap,
             absoluteHeightMeters: alt,
@@ -284,8 +413,16 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
       }
     }
 
-    // Sort floors by floorNumber ascending (-2, -1, 0, 1, 2...) so P (-1) is first
-    floors.sort((a, b) => a.floorNumber.compareTo(b.floorNumber));
+    // Sort floors: 'P' first, then by floorNumber ascending (-2, -1, 0, 1, 2...)
+    floors.sort((a, b) {
+      final aNorm = ParkingService.normalizeFloorId(a.floorId);
+      final bNorm = ParkingService.normalizeFloorId(b.floorId);
+      if (aNorm == 'P' && bNorm != 'P') return -1;
+      if (bNorm == 'P' && aNorm != 'P') return 1;
+      final cmp = a.floorNumber.compareTo(b.floorNumber);
+      if (cmp != 0) return cmp;
+      return a.floorId.compareTo(b.floorId);
+    });
     return floors;
   }
 
@@ -365,7 +502,7 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
     _parkingService.startLiveSync(intervalSeconds: 3);
 
     _parkingSyncSubscription = ApiService.instance.syncStream.listen((event) {
-      if (mounted && (event == 'parking' || event == 'destinations')) {
+      if (mounted && (event == 'parking' || event == 'destinations' || event == 'malls')) {
         _loadParkingSlots();
       }
     });
@@ -379,6 +516,21 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
         final bId = _resolveActiveMallId() ?? '';
         if (bId.isNotEmpty) {
           _parkingService.syncSlotsSilently(bId, force: true);
+          SharedPreferences.getInstance().then((prefs) {
+            final savedFloors =
+                prefs.getStringList('venue_parking_floors_$bId') ??
+                prefs.getStringList('venue_parking_floors_${bId.replaceFirst('mall-', '')}') ??
+                prefs.getStringList('venue_parking_floors_mall-$bId');
+            if (savedFloors != null &&
+                (savedFloors.length != (_cachedParkingFloors?.length ?? 0) ||
+                    !savedFloors.every((f) => _cachedParkingFloors?.contains(f) ?? false))) {
+              if (mounted) {
+                setState(() {
+                  _cachedParkingFloors = savedFloors;
+                });
+              }
+            }
+          });
         } else {
           _loadParkingSlots();
         }
@@ -390,10 +542,9 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
       duration: const Duration(milliseconds: 1400),
     )..repeat(reverse: true);
 
-    if (widget.targetDestination != null &&
-        widget.buildingProfile.floors.isNotEmpty) {
+    if (widget.targetDestination != null) {
       _selectedPOI = widget.targetDestination;
-      final matchingFloor = widget.buildingProfile.floors.firstWhere(
+      final matchingFloor = _effectiveFloorLevels.firstWhere(
         (f) => f.floorNumber == widget.targetDestination!.floorNumber,
         orElse: () => widget.currentFloor,
       );
@@ -405,15 +556,17 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
   void didUpdateWidget(FloorPlanScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.buildingProfile.buildingId !=
-            oldWidget.buildingProfile.buildingId ||
-        widget.currentFloor != oldWidget.currentFloor) {
+        oldWidget.buildingProfile.buildingId) {
+      _overrideFloor = null;
+      _cachedParkingFloors = null;
+      _loadParkingSlots();
+    } else if (widget.currentFloor != oldWidget.currentFloor) {
       _loadParkingSlots();
     }
     if (widget.targetDestination != oldWidget.targetDestination) {
       _selectedPOI = widget.targetDestination;
-      if (widget.targetDestination != null &&
-          widget.buildingProfile.floors.isNotEmpty) {
-        final matchingFloor = widget.buildingProfile.floors.firstWhere(
+      if (widget.targetDestination != null) {
+        final matchingFloor = _effectiveFloorLevels.firstWhere(
           (f) => f.floorNumber == widget.targetDestination!.floorNumber,
           orElse: () => widget.currentFloor,
         );
@@ -1088,11 +1241,15 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0.5,
-        titleSpacing: widget.onBackClicked != null ? 0 : 16,
+        leadingWidth: widget.onBackClicked != null ? 38 : 0,
+        titleSpacing: widget.onBackClicked != null ? 4 : 14,
         leading: widget.onBackClicked != null
             ? IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                 icon: const Icon(
                   LucideIcons.arrowLeft,
+                  size: 20,
                   color: Color(0xFF0F172A),
                 ),
                 onPressed: () {
@@ -1103,17 +1260,25 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
             : null,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              displayFloor.name,
-              overflow: TextOverflow.ellipsis,
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 15,
-                fontWeight: FontWeight.w800,
-                color: const Color(0xFF0F172A),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(
+                displayFloor.name,
+                maxLines: 1,
+                softWrap: false,
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
+                  color: const Color(0xFF0F172A),
+                  letterSpacing: -0.2,
+                ),
               ),
             ),
+            const SizedBox(height: 1),
             Builder(
               builder: (context) {
                 double? distM;
@@ -1129,12 +1294,12 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                     );
                   }
                 }
-                final distStr = distM != null
-                    ? (distM < 1000
-                          ? ' • ${distM.toInt()}m away'
-                          : ' • ${(distM / 1000).toStringAsFixed(1)}km away')
-                    : '';
                 final isRemote = distM != null && distM > 500.0;
+                final distStr = isRemote
+                    ? (distM < 1000
+                          ? ' • ${distM.toInt()}m'
+                          : ' • ${(distM / 1000).toStringAsFixed(1)}km')
+                    : '';
                 final venueName =
                     widget.buildingProfile.name.isNotEmpty &&
                         widget.buildingProfile.name != 'Venue'
@@ -1142,15 +1307,20 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                     : 'Indoor Navigation Floor Plan';
                 return GestureDetector(
                   onLongPress: _showServerConfigDialog,
-                  child: Text(
-                    '$venueName$distStr',
-                    overflow: TextOverflow.ellipsis,
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: isRemote
-                          ? const Color(0xFF2563EB)
-                          : const Color(0xFF64748B),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      '$venueName$distStr',
+                      maxLines: 1,
+                      softWrap: false,
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: isRemote
+                            ? const Color(0xFF2563EB)
+                            : const Color(0xFF64748B),
+                      ),
                     ),
                   ),
                 );
@@ -1161,18 +1331,18 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
         actions: [
           if (widget.isAdmin && widget.onOpenAdminDashboard != null)
             Padding(
-              padding: const EdgeInsets.only(right: 8),
+              padding: const EdgeInsets.only(right: 6),
               child: GestureDetector(
                 onTap: widget.onOpenAdminDashboard,
                 child: Container(
-                  height: 36,
+                  height: 32,
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 6,
+                    horizontal: 8,
+                    vertical: 4,
                   ),
                   decoration: BoxDecoration(
                     color: const Color(0xFF0F172A),
-                    borderRadius: BorderRadius.circular(20),
+                    borderRadius: BorderRadius.circular(16),
                     border: Border.all(
                       color: const Color(0xFF1E293B),
                       width: 1,
@@ -1197,10 +1367,10 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                       Text(
                         'ADMIN PORTAL',
                         style: GoogleFonts.plusJakartaSans(
-                          fontSize: 10.5,
+                          fontSize: 9.5,
                           fontWeight: FontWeight.w800,
                           color: Colors.white,
-                          letterSpacing: 0.3,
+                          letterSpacing: 0.2,
                         ),
                       ),
                     ],
@@ -1210,15 +1380,15 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
             ),
           if (widget.onLogout != null)
             Padding(
-              padding: const EdgeInsets.only(right: 12),
+              padding: const EdgeInsets.only(right: 10),
               child: Material(
                 color: Colors.transparent,
                 child: InkWell(
                   onTap: widget.onLogout,
                   borderRadius: BorderRadius.circular(20),
                   child: Container(
-                    height: 36,
-                    padding: const EdgeInsets.fromLTRB(4, 4, 8, 4),
+                    height: 32,
+                    padding: const EdgeInsets.fromLTRB(3, 3, 6, 3),
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(20),
@@ -1229,8 +1399,8 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                       boxShadow: const [
                         BoxShadow(
                           color: Color(0x0F000000),
-                          blurRadius: 8,
-                          offset: Offset(0, 2),
+                          blurRadius: 6,
+                          offset: Offset(0, 1),
                         ),
                       ],
                     ),
@@ -1238,8 +1408,8 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Container(
-                          width: 28,
-                          height: 28,
+                          width: 26,
+                          height: 26,
                           decoration: const BoxDecoration(
                             gradient: LinearGradient(
                               colors: [Color(0xFF2563EB), Color(0xFF1D4ED8)],
@@ -1255,35 +1425,37 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                                       : 'U')
                                   .toUpperCase(),
                               style: GoogleFonts.plusJakartaSans(
-                                fontSize: 12,
+                                fontSize: 11.5,
                                 fontWeight: FontWeight.w800,
                                 color: Colors.white,
                               ),
                             ),
                           ),
                         ),
-                        const SizedBox(width: 7),
-                        ConstrainedBox(
-                          constraints: BoxConstraints(
-                            maxWidth: widget.isAdmin ? 65 : 85,
-                          ),
-                          child: Text(
-                            widget.userEmail.isNotEmpty
-                                ? '${widget.userEmail.split('@').first[0].toUpperCase()}${widget.userEmail.split('@').first.substring(1)}'
-                                : 'User',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: GoogleFonts.plusJakartaSans(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              color: const Color(0xFF0F172A),
+                        if (!widget.isAdmin) ...[
+                          const SizedBox(width: 6),
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(
+                              maxWidth: 70,
+                            ),
+                            child: Text(
+                              widget.userEmail.isNotEmpty
+                                  ? '${widget.userEmail.split('@').first[0].toUpperCase()}${widget.userEmail.split('@').first.substring(1)}'
+                                  : 'User',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.plusJakartaSans(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w700,
+                                color: const Color(0xFF0F172A),
+                              ),
                             ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
+                        ],
+                        const SizedBox(width: 5),
                         Container(
-                          width: 22,
-                          height: 22,
+                          width: 20,
+                          height: 20,
                           decoration: BoxDecoration(
                             color: const Color(0xFFFEF2F2),
                             shape: BoxShape.circle,
@@ -1292,7 +1464,7 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                           child: const Center(
                             child: Icon(
                               LucideIcons.logOut,
-                              size: 11,
+                              size: 10,
                               color: Color(0xFFEF4444),
                             ),
                           ),
@@ -2116,11 +2288,12 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                                   final parkingFloor = _effectiveFloorLevels
                                       .firstWhere(
                                         (f) =>
-                                            ParkingService.normalizeFloorId(
-                                                  f.floorId,
-                                                ) ==
-                                                'P' ||
-                                            f.floorNumber < 0,
+                                            ParkingService.normalizeFloorId(f.floorId) == 'P' ||
+                                            f.floorId.trim().toUpperCase() == 'P' ||
+                                            f.name.trim().toUpperCase().contains('(P)') ||
+                                            f.floorNumber < 0 ||
+                                            f.floorId.trim().toUpperCase().startsWith('B') ||
+                                            f.name.trim().toUpperCase().contains('PARK'),
                                         orElse: () =>
                                             _effectiveFloorLevels.first,
                                       );
@@ -2218,11 +2391,12 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                                   final parkingFloor = _effectiveFloorLevels
                                       .firstWhere(
                                         (f) =>
-                                            ParkingService.normalizeFloorId(
-                                                  f.floorId,
-                                                ) ==
-                                                'P' ||
-                                            f.floorNumber < 0,
+                                            ParkingService.normalizeFloorId(f.floorId) == 'P' ||
+                                            f.floorId.trim().toUpperCase() == 'P' ||
+                                            f.name.trim().toUpperCase().contains('(P)') ||
+                                            f.floorNumber < 0 ||
+                                            f.floorId.trim().toUpperCase().startsWith('B') ||
+                                            f.name.trim().toUpperCase().contains('PARK'),
                                         orElse: () =>
                                             _effectiveFloorLevels.first,
                                       );
@@ -2264,13 +2438,31 @@ class FloorPlanScreenState extends State<FloorPlanScreen>
                                         color: Colors.white,
                                       ),
                                       const SizedBox(width: 5),
-                                      Text(
-                                        'View Parking (P)',
-                                        style: GoogleFonts.plusJakartaSans(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w800,
-                                          color: Colors.white,
-                                        ),
+                                      Builder(
+                                        builder: (context) {
+                                          final pkFloor = _effectiveFloorLevels
+                                              .where(
+                                                (f) =>
+                                                    ParkingService.normalizeFloorId(f.floorId) == 'P' ||
+                                                    f.floorId.trim().toUpperCase() == 'P' ||
+                                                    f.name.trim().toUpperCase().contains('(P)') ||
+                                                    f.floorNumber < 0 ||
+                                                    f.floorId.trim().toUpperCase().startsWith('B') ||
+                                                    f.name.trim().toUpperCase().contains('PARK'),
+                                              )
+                                              .firstOrNull;
+                                          final pill = pkFloor != null
+                                              ? _getFloorPillLabel(pkFloor)
+                                              : 'P';
+                                          return Text(
+                                            'View Parking ($pill)',
+                                            style: GoogleFonts.plusJakartaSans(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w800,
+                                              color: Colors.white,
+                                            ),
+                                          );
+                                        },
                                       ),
                                       const SizedBox(width: 4),
                                       const Icon(
